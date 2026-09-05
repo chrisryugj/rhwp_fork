@@ -8,6 +8,7 @@ mod fill_shader;
 mod font_lookup;
 mod glyph_replay;
 mod image_conv;
+mod line_replay;
 mod renderer;
 mod text_replay;
 

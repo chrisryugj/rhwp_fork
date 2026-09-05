@@ -97,3 +97,98 @@ fn native_shapes_render_each_hatch_pattern_instead_of_only_background() {
         );
     }
 }
+
+#[test]
+fn native_shapes_render_each_line_head_and_parallel_line_variant() {
+    use rhwp::renderer::render_tree::LineNode;
+    use rhwp::renderer::{ArrowStyle, LineRenderType, LineStyle};
+    let line = |style| {
+        tree(PaintOp::line(
+            BoundingBox::new(10.0, 20.0, 55.0, 20.0),
+            LineNode::new(10.0, 30.0, 65.0, 30.0, style),
+        ))
+    };
+    for arrow in [
+        ArrowStyle::Arrow,
+        ArrowStyle::ConcaveArrow,
+        ArrowStyle::Diamond,
+        ArrowStyle::OpenDiamond,
+        ArrowStyle::Circle,
+        ArrowStyle::OpenCircle,
+        ArrowStyle::Square,
+        ArrowStyle::OpenSquare,
+    ] {
+        let image = pixels(&line(LineStyle {
+            width: 2.0,
+            start_arrow: arrow,
+            end_arrow: arrow,
+            start_arrow_size: 8,
+            end_arrow_size: 8,
+            ..Default::default()
+        }));
+        assert!(
+            image
+                .enumerate_pixels()
+                .any(|(_, y, pixel)| !(29..=30).contains(&y) && pixel[3] > 64),
+            "{arrow:?}"
+        );
+    }
+    for line_type in [
+        LineRenderType::Double,
+        LineRenderType::ThickThinDouble,
+        LineRenderType::ThinThickDouble,
+        LineRenderType::ThinThickThinTriple,
+    ] {
+        let image = pixels(&line(LineStyle {
+            width: 8.0,
+            line_type,
+            ..Default::default()
+        }));
+        let segments = (20..40)
+            .fold((0, false), |(count, previous), y| {
+                let ink = image.get_pixel(40, y)[3] > 100;
+                (count + usize::from(ink && !previous), ink)
+            })
+            .0;
+        assert_eq!(
+            segments,
+            if line_type == LineRenderType::ThinThickThinTriple {
+                3
+            } else {
+                2
+            }
+        );
+    }
+}
+
+#[test]
+fn native_shapes_replay_connector_heads_along_curve_tangents() {
+    use rhwp::renderer::render_tree::PathNode;
+    use rhwp::renderer::{ArrowStyle, LineStyle, PathCommand};
+    let mut path = PathNode::new(
+        vec![
+            PathCommand::MoveTo(10.0, 45.0),
+            PathCommand::CurveTo(15.0, 45.0, 65.0, 45.0, 65.0, 15.0),
+        ],
+        ShapeStyle {
+            stroke_color: Some(0),
+            stroke_width: 2.0,
+            ..Default::default()
+        },
+        None,
+    );
+    let bbox = BoundingBox::new(5.0, 10.0, 70.0, 40.0);
+    let plain = pixels(&tree(PaintOp::path(bbox, path.clone())));
+    path.connector_endpoints = Some((10.0, 45.0, 65.0, 15.0));
+    path.line_style = Some(LineStyle {
+        width: 2.0,
+        start_arrow: ArrowStyle::Arrow,
+        end_arrow: ArrowStyle::Arrow,
+        start_arrow_size: 8,
+        end_arrow_size: 8,
+        ..Default::default()
+    });
+    let image = pixels(&tree(PaintOp::path(bbox, path)));
+    assert!(plain != image);
+    assert!(image.get_pixel(62, 26)[3] > plain.get_pixel(62, 26)[3]);
+}

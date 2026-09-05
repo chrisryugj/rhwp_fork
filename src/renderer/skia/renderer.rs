@@ -40,6 +40,7 @@ use super::glyph_replay::{
     GlyphPreparationBudget, PreparedGlyph,
 };
 use super::image_conv::{draw_image_bytes, draw_svg_fragment, ImageResourceCache, ImageSampling};
+use super::line_replay::draw_line;
 use super::text_replay::SkiaTextReplay;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1446,11 +1447,7 @@ impl SkiaLayerRenderer {
                             if line.transform.has_transform() {
                                 open_shape_transform(line.transform, bbox);
                             }
-                            canvas.draw_line(
-                                (line.x1 as f32, line.y1 as f32),
-                                (line.x2 as f32, line.y2 as f32),
-                                &make_line_paint(&line.style),
-                            );
+                            draw_line(canvas, line, &make_line_paint(&line.style), true);
                             draw_arrow_heads(
                                 canvas,
                                 &crate::renderer::arrow::line_heads(
