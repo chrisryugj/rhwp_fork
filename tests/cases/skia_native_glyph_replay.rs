@@ -991,6 +991,154 @@ fn native_diagnostics_report_per_call_timing_work_and_cached_selection() {
 }
 
 #[test]
+fn native_diagnostics_preserve_many_group_order_across_picture_hits_and_new_pages() {
+    let mut base = fallback_tree();
+    let PaintOp::TextRun { run, .. } = ops_mut(&mut base).remove(0) else {
+        unreachable!()
+    };
+    let bounds = BoundingBox::new(0.0, 0.0, 180.0, 80.0);
+    let ops = (0..256)
+        .map(|_| PaintOp::text_run(bounds, (*run).clone()))
+        .collect();
+    let tree = static_tree(PageLayerTree::new(
+        180.0,
+        80.0,
+        LayerNode::leaf(bounds, None, ops),
+    ));
+    let renderer = SkiaLayerRenderer::new();
+    let cold = renderer
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap();
+    let warm = renderer
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap();
+    let expected = (0..256).map(|id| format!("text-{id}")).collect::<Vec<_>>();
+    let groups = |output: &rhwp::renderer::layer_renderer::RasterRenderOutput| {
+        output
+            .diagnostics
+            .variant_selections
+            .iter()
+            .map(|report| report.equivalence_group.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(groups(&cold), expected);
+    assert_eq!(
+        cold.diagnostics.variant_selections,
+        warm.diagnostics.variant_selections
+    );
+    assert_eq!(cold.bytes, warm.bytes);
+    assert!(warm.diagnostics.static_picture_cache_hits > 0);
+    assert_eq!(warm.diagnostics.paint_ops_replayed, 0);
+
+    // Retain canonical source bindings but change first-observed order. A new
+    // render must rebuild its index, not reuse stale positions or HashMap order.
+    let mut reversed = tree.clone();
+    let LayerNodeKind::Group { children, .. } = &mut reversed.root.kind else {
+        unreachable!()
+    };
+    let LayerNodeKind::Leaf { ops } = &mut children[0].kind else {
+        unreachable!()
+    };
+    ops.reverse();
+    let changed = renderer
+        .render_raster_with_options(&reversed, Default::default())
+        .unwrap();
+    assert_eq!(
+        groups(&changed),
+        expected.iter().rev().cloned().collect::<Vec<_>>()
+    );
+    assert!(changed.diagnostics.static_picture_cache_misses > 0);
+    let restored = renderer
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap();
+    assert_eq!(groups(&restored), expected);
+    assert_eq!(
+        cold.diagnostics.variant_selections,
+        restored.diagnostics.variant_selections
+    );
+    assert!(restored.diagnostics.static_picture_cache_hits > 0);
+}
+
+#[test]
+fn native_diagnostics_match_exact_rejected_and_plain_sources_in_one_leaf() {
+    let mut template = glyph_tree(TTF, 0, 'A');
+    let template_ops = ops_mut(&mut template).clone();
+    let mut ops = Vec::new();
+    for id in 0..96_u32 {
+        let mut fallback = template_ops[0].clone();
+        let PaintOp::TextRun {
+            source: Some(source),
+            ..
+        } = &mut fallback
+        else {
+            unreachable!()
+        };
+        source.id = TextSourceId(id);
+        ops.push(fallback);
+        if id % 3 == 2 {
+            continue;
+        }
+        let mut glyph = template_ops[1].clone();
+        let PaintOp::GlyphRun { run, .. } = &mut glyph else {
+            unreachable!()
+        };
+        run.source.id = TextSourceId(id);
+        run.variant.equivalence_group = format!("text-{id}");
+        run.variant.anchor_op_id = Some(run.variant.equivalence_group.clone());
+        if id % 3 == 1 {
+            run.glyph_ids[0] = u32::from(u16::MAX);
+        }
+        let mut second_rejection = (id % 3 == 1).then(|| glyph.clone());
+        ops.push(glyph);
+        if let Some(PaintOp::GlyphRun { run, .. }) = &mut second_rejection {
+            run.variant.variant_id = "second-invalid-glyph-run".into();
+        }
+        ops.extend(second_rejection);
+    }
+    let mut tree = PageLayerTree::new(
+        180.0,
+        80.0,
+        LayerNode::leaf(template.root.bounds, None, ops),
+    );
+    tree.resources = template.resources;
+    let tree = static_tree(tree);
+    let renderer = SkiaLayerRenderer::new();
+    let cold = renderer
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap();
+    let warm = renderer
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap();
+    assert_eq!(cold.bytes, warm.bytes);
+    assert_eq!(
+        cold.diagnostics.variant_selections,
+        warm.diagnostics.variant_selections
+    );
+    assert!(warm.diagnostics.static_picture_cache_hits > 0);
+    let reports = &warm.diagnostics.variant_selections;
+    assert_eq!(reports.len(), 96);
+    // Sidecar choices are observed during preparation; plain fallbacks follow
+    // during replay. Membership indexing must preserve this established order.
+    let expected = (0..96_u32)
+        .filter(|id| id % 3 != 2)
+        .chain((0..96_u32).filter(|id| id % 3 == 2));
+    for (report, id) in reports.iter().zip(expected) {
+        assert_eq!(report.equivalence_group, format!("text-{id}"));
+        let exact = id % 3 == 0;
+        assert_eq!(
+            report.selected_variant_kind,
+            Some(if exact {
+                TextVariantKind::GlyphRun
+            } else {
+                TextVariantKind::TextRun
+            })
+        );
+        assert_eq!(report.fallback_required, !exact);
+        assert_eq!(report.rejected_variants.len(), 2 * usize::from(id % 3 == 1));
+    }
+}
+
+#[test]
 fn native_diagnostics_keep_actual_resource_failure_selection_on_picture_hits() {
     let renderer = SkiaLayerRenderer::new();
     let tree = static_tree(svg_tree("<path d=\"M 1 1 L\"/>"));

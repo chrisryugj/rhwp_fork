@@ -1,5 +1,7 @@
 //! Per-render observations, kept separate from selection and cache authority.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::paint::{PageLayerTree, RenderProfile, TextVariantKind};
 use crate::renderer::layer_renderer::{
     LayerRenderDiagnostics, TextVariantRejectReport, TextVariantSelectionReport,
@@ -12,6 +14,9 @@ use super::image_cache::ImageReplayCounters;
 pub(super) struct ReplayDiagnostics {
     pub output: LayerRenderDiagnostics,
     pub selection_updates: Vec<TextVariantSelectionReport>,
+    // Keep first-observed output order without searching every prior text run.
+    // The index is local to one render, including restored picture selections.
+    selection_indices: HashMap<String, usize>,
 }
 
 impl ReplayDiagnostics {
@@ -31,18 +36,18 @@ impl ReplayDiagnostics {
                 ..Default::default()
             },
             selection_updates: Vec::new(),
+            selection_indices: HashMap::new(),
         }
     }
 
     pub fn apply_selection(&mut self, report: TextVariantSelectionReport) {
-        if let Some(existing) = self
-            .output
-            .variant_selections
-            .iter_mut()
-            .find(|existing| existing.equivalence_group == report.equivalence_group)
-        {
-            *existing = report.clone();
+        if let Some(&index) = self.selection_indices.get(&report.equivalence_group) {
+            self.output.variant_selections[index] = report.clone();
         } else {
+            self.selection_indices.insert(
+                report.equivalence_group.clone(),
+                self.output.variant_selections.len(),
+            );
             self.output.variant_selections.push(report.clone());
         }
         self.selection_updates.push(report);
@@ -56,11 +61,9 @@ impl ReplayDiagnostics {
         rejected: &[(String, TextVariantKind)],
     ) {
         let mut report = self
-            .output
-            .variant_selections
-            .iter()
-            .find(|report| report.equivalence_group == group)
-            .cloned()
+            .selection_indices
+            .get(group)
+            .map(|&index| self.output.variant_selections[index].clone())
             .unwrap_or_else(|| TextVariantSelectionReport {
                 backend: VariantSelectionBackend::NativeSkia,
                 equivalence_group: group.into(),
@@ -87,12 +90,13 @@ impl ReplayDiagnostics {
         report
             .rejected_variants
             .retain(|candidate| Some(candidate.variant_id.as_str()) != selected.map(|(id, _)| id));
+        let mut rejected_ids = report
+            .rejected_variants
+            .iter()
+            .map(|candidate| candidate.variant_id.clone())
+            .collect::<HashSet<_>>();
         for (id, kind) in rejected {
-            if !report
-                .rejected_variants
-                .iter()
-                .any(|candidate| candidate.variant_id == *id)
-            {
+            if rejected_ids.insert(id.clone()) {
                 // Actual native preparation includes shared contract checks,
                 // resource construction and budget checks. Do not report a
                 // rejected resource as selected based on contract checks alone.
