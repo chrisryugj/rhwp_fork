@@ -944,3 +944,194 @@ fn native_cache_picture_budget_includes_oversized_font_svg_viewport() {
     cached_render(&unlimited, &static_tree(glyph_tree(TTF, 0, 'A')), 1.0);
     assert!(unlimited.cache_stats().pictures.evictions > 0);
 }
+
+#[test]
+fn native_diagnostics_report_per_call_timing_work_and_cached_selection() {
+    let renderer = SkiaLayerRenderer::new();
+    let tree = static_tree(glyph_tree(TTF, 0, 'A'));
+    let first = renderer
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap();
+    let second = renderer
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap();
+    assert_eq!(first.bytes, second.bytes);
+    let first = first.diagnostics;
+    let second = second.diagnostics;
+    assert_eq!(
+        first.backend,
+        Some(rhwp::renderer::layer_renderer::VariantSelectionBackend::NativeSkia)
+    );
+    assert_eq!(first.render_profile.as_deref(), Some("screen"));
+    for diagnostics in [&first, &second] {
+        assert!(diagnostics.raster_setup_time_ns > 0);
+        assert!(diagnostics.raster_replay_time_ns > 0);
+        assert!(diagnostics.raster_encode_time_ns > 0);
+        assert!(
+            diagnostics.raster_total_time_ns
+                >= diagnostics.raster_setup_time_ns
+                    + diagnostics.raster_replay_time_ns
+                    + diagnostics.raster_encode_time_ns
+        );
+        assert!(diagnostics.shaped_measurements.is_empty());
+    }
+    assert!(first.static_picture_cache_misses > 0);
+    assert!(first.static_picture_cache_recordings > 0);
+    assert!(first.paint_ops_replayed > 0);
+    assert!(second.static_picture_cache_hits > 0);
+    assert_eq!(second.static_picture_cache_recordings, 0);
+    assert_eq!(second.paint_ops_replayed, 0);
+    assert!(second.layer_nodes_replayed < first.layer_nodes_replayed);
+    assert_eq!(first.variant_selections, second.variant_selections);
+    assert_eq!(
+        first.variant_selections[0].selected_variant_kind,
+        Some(TextVariantKind::GlyphRun)
+    );
+    assert!(second.static_picture_cache_approx_bytes > 0);
+}
+
+#[test]
+fn native_diagnostics_keep_actual_resource_failure_selection_on_picture_hits() {
+    let renderer = SkiaLayerRenderer::new();
+    let tree = static_tree(svg_tree("<path d=\"M 1 1 L\"/>"));
+    let first = renderer
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap();
+    let second = renderer
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap();
+    assert_eq!(first.bytes, second.bytes);
+    assert_eq!(
+        first.diagnostics.variant_selections,
+        second.diagnostics.variant_selections
+    );
+    let report = &second.diagnostics.variant_selections[0];
+    assert_eq!(report.selected_variant_kind, Some(TextVariantKind::TextRun));
+    assert!(report.fallback_required);
+    assert!(!report.rejected_variants.is_empty());
+    assert!(second.diagnostics.static_picture_cache_hits > 0);
+}
+
+#[test]
+fn native_diagnostics_distinguish_binary_effect_cache_events_from_other_images() {
+    use rhwp::model::image::ImageEffect;
+    let encode = |width, gray| {
+        let mut png = Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(width, 1, image::Rgba([gray, gray, gray, 255]))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        png.into_inner()
+    };
+    let renderer = SkiaLayerRenderer::new();
+    let bytes = encode(8, 126);
+    let tree = image_cache_tree(bytes.clone(), ImageEffect::Pattern8x8);
+    let first = renderer
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap()
+        .diagnostics;
+    let second = renderer
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap()
+        .diagnostics;
+    assert_eq!(first.image_effect_cache_misses, 1);
+    assert_eq!(first.image_effect_cache_hits, 0);
+    assert_eq!(first.image_effect_preprocessed_bytes, 32);
+    assert_eq!(first.image_effect_preprocess_failures, 0);
+    assert_eq!(second.image_effect_cache_hits, 1);
+    assert_eq!(second.image_effect_cache_misses, 0);
+    assert_eq!(second.image_effect_preprocessed_bytes, 0);
+    assert!(second.image_effect_cache_approx_bytes >= 32);
+    let plain = image_cache_tree(bytes, ImageEffect::RealPic);
+    let plain = renderer
+        .render_raster_with_options(&plain, Default::default())
+        .unwrap()
+        .diagnostics;
+    assert_eq!(plain.image_effect_cache_hits, 0);
+    assert_eq!(plain.image_effect_cache_misses, 0);
+    let tiny = SkiaLayerRenderer::new().with_cache_limits(2, 1);
+    let tiny = tiny
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap()
+        .diagnostics;
+    assert_eq!(tiny.image_effect_cache_skipped_oversized, 1);
+    assert_eq!(tiny.image_effect_cache_approx_bytes, 0);
+    let limited = SkiaLayerRenderer::new().with_cache_limits(2, 64 * 1024);
+    limited
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap();
+    let changed = image_cache_tree(encode(8, 200), ImageEffect::Pattern8x8);
+    let evicted = limited
+        .render_raster_with_options(&changed, Default::default())
+        .unwrap()
+        .diagnostics;
+    assert_eq!(evicted.image_effect_cache_evictions, 1);
+    // The decoded image remains supported, but binary preprocessing has a
+    // stricter 4096-pixel per-dimension budget. Its filter fallback is observed.
+    let large = image_cache_tree(encode(4097, 100), ImageEffect::BlackWhite);
+    let failed = renderer
+        .render_raster_with_options(&large, Default::default())
+        .unwrap()
+        .diagnostics;
+    assert_eq!(failed.image_effect_preprocess_failures, 1);
+    assert_eq!(failed.image_effect_fallback_to_filter, 1);
+    let negative_hit = renderer
+        .render_raster_with_options(&large, Default::default())
+        .unwrap()
+        .diagnostics;
+    assert_eq!(negative_hit.image_effect_cache_hits, 1);
+    assert_eq!(negative_hit.image_effect_preprocess_failures, 0);
+    assert_eq!(negative_hit.image_effect_fallback_to_filter, 1);
+}
+
+#[test]
+fn native_diagnostics_report_bounded_manual_tile_fallback() {
+    use rhwp::model::style::ImageFillMode;
+    let mut png = Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(2, 1, image::Rgba([0, 0, 0, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let mut tree = image_cache_tree(png.into_inner(), rhwp::model::image::ImageEffect::RealPic);
+    let PaintOp::Image { bbox, image, .. } = &mut ops_mut(&mut tree)[0] else {
+        unreachable!()
+    };
+    *bbox = BoundingBox::new(0.0, 0.0, 5000.0, 1.0);
+    image.fill_mode = Some(ImageFillMode::TileAll);
+    // Dividing the smallest positive f32 tile width by a two-pixel source
+    // underflows the shader matrix. This exercises the real fallback without
+    // a source-side test hook or an unbounded surface allocation.
+    image.original_size = Some((f64::from(f32::from_bits(1)), 1.0));
+    let output = SkiaLayerRenderer::new()
+        .render_raster_with_options(&tree, Default::default())
+        .unwrap();
+    assert_eq!(output.diagnostics.tile_fallback_cap_hits, 1);
+    assert_eq!((output.width, output.height), (80, 60));
+}
+
+#[test]
+fn native_picture_cull_retains_ink_outside_logical_node_bounds() {
+    let mut tree = glyph_tree(TTF, 0, 'A');
+    glyph_mut(&mut tree).paint_style.shadow_type = 1;
+    glyph_mut(&mut tree).paint_style.shadow_offset_x = -8.0;
+    glyph_mut(&mut tree).paint_style.shadow_offset_y = -6.0;
+    ops_mut(&mut tree).push(PaintOp::rectangle(
+        BoundingBox::new(20.0, 20.0, 20.0, 20.0),
+        rhwp::renderer::render_tree::RectangleNode::new(
+            0.0,
+            rhwp::renderer::ShapeStyle {
+                stroke_color: Some(0x0000ff),
+                stroke_width: 20.0,
+                ..Default::default()
+            },
+            None,
+        ),
+    ));
+    tree.root.bounds = BoundingBox::new(24.0, 24.0, 1.0, 1.0);
+    let tree = static_tree(tree);
+    let direct = SkiaLayerRenderer::new().with_cache_limits(0, 0);
+    let renderer = SkiaLayerRenderer::new();
+    let expected = cached_render(&direct, &tree, 1.0);
+    assert!(expected.get_pixel(12, 25)[3] > 200);
+    assert_same_pixels(cached_render(&renderer, &tree, 1.0), expected.clone());
+    assert_same_pixels(cached_render(&renderer, &tree, 1.0), expected);
+    assert!(renderer.cache_stats().pictures.hits > 0);
+}

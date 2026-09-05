@@ -1,8 +1,10 @@
 //! Renderer-local, bounded replay resources. Keys never outlive this process.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Debug, Write};
 
+use super::diagnostics::ReplayDiagnostics;
 use super::replay_policy::ReplayPolicy;
 use crate::paint::{
     LayerNode, LayerNodeKind, PageLayerTree, PaintOp, ResourceArena, LAYER_TREE_SCHEMA,
@@ -65,10 +67,20 @@ impl<V: Clone> BoundedCache<V> {
     }
 
     pub fn insert(&mut self, key: CacheKey, value: V, bytes: usize) {
+        self.insert_observed(key, value, bytes, |_, _| {});
+    }
+
+    pub fn insert_observed(
+        &mut self,
+        key: CacheKey,
+        value: V,
+        bytes: usize,
+        mut on_eviction: impl FnMut(&V, usize),
+    ) -> bool {
         let bytes = bytes.saturating_add(std::mem::size_of::<(CacheKey, V, usize)>());
         if self.max_entries == 0 || bytes > self.max_bytes {
             self.usage.skipped_oversized = self.usage.skipped_oversized.saturating_add(1);
-            return;
+            return false;
         }
         if let Some((_, old_bytes)) = self.entries.remove(&key) {
             self.usage.approximate_bytes -= old_bytes;
@@ -84,7 +96,8 @@ impl<V: Clone> BoundedCache<V> {
             let Some(oldest) = self.order.pop_front() else {
                 break;
             };
-            if let Some((_, old_bytes)) = self.entries.remove(&oldest) {
+            if let Some((old_value, old_bytes)) = self.entries.remove(&oldest) {
+                on_eviction(&old_value, old_bytes);
                 self.usage.approximate_bytes -= old_bytes;
                 self.usage.evictions = self.usage.evictions.saturating_add(1);
             }
@@ -93,6 +106,16 @@ impl<V: Clone> BoundedCache<V> {
         self.order.push_back(key);
         self.usage.approximate_bytes += bytes;
         self.usage.entries = self.entries.len();
+        true
+    }
+
+    pub fn matching_usage(&self, predicate: impl Fn(&V) -> bool) -> (usize, usize) {
+        self.entries
+            .values()
+            .filter(|(value, _)| predicate(value))
+            .fold((0usize, 0usize), |(entries, bytes), (_, cost)| {
+                (entries.saturating_add(1), bytes.saturating_add(*cost))
+            })
     }
 
     pub fn usage(&self) -> NativeSkiaCacheUsage {
@@ -128,12 +151,23 @@ impl Write for KeyWriter {
 }
 
 pub(super) fn debug_key(value: &impl Debug) -> Option<CacheKey> {
+    bounded_debug(value).map(|(key, _)| key)
+}
+
+pub(super) fn debug_size(value: &impl Debug) -> Option<usize> {
+    bounded_debug(value).map(|(_, bytes)| bytes)
+}
+
+fn bounded_debug(value: &impl Debug) -> Option<(CacheKey, usize)> {
     let mut writer = KeyWriter {
         hasher: blake3::Hasher::new(),
         remaining: MAX_KEY_BYTES,
     };
     write!(&mut writer, "{value:?}").ok()?;
-    Some(*writer.hasher.finalize().as_bytes())
+    Some((
+        *writer.hasher.finalize().as_bytes(),
+        MAX_KEY_BYTES - writer.remaining,
+    ))
 }
 
 pub(super) fn byte_key(kind: &[u8], bytes: &[u8], parameters: &impl Debug) -> Option<CacheKey> {
@@ -218,15 +252,21 @@ fn decoded_resource_cost(bytes: &[u8], svg_estimate: usize) -> usize {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct ReplayCacheContext {
+pub(super) struct ReplayCacheContext<'a> {
     pub seed: Option<CacheKey>,
     pub page_bounds: skia_safe::Rect,
     pub retained_resource_estimate: usize,
     pub policy: ReplayPolicy,
+    pub diagnostics: &'a RefCell<ReplayDiagnostics>,
 }
 
-impl ReplayCacheContext {
-    pub fn new(tree: &PageLayerTree, scale: f32, strict: bool) -> Self {
+impl<'a> ReplayCacheContext<'a> {
+    pub fn new(
+        tree: &PageLayerTree,
+        scale: f32,
+        strict: bool,
+        diagnostics: &'a RefCell<ReplayDiagnostics>,
+    ) -> Self {
         let resources = resource_identity(&tree.resources);
         let seed = resources.as_ref().and_then(|(digest, _)| {
             debug_key(&(
@@ -252,6 +292,7 @@ impl ReplayCacheContext {
                 .map_or(usize::MAX, |(_, bytes)| bytes)
                 .saturating_add(svg_estimate),
             policy: ReplayPolicy::new(tree.profile),
+            diagnostics,
         }
     }
 

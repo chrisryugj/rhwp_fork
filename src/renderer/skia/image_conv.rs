@@ -3,10 +3,10 @@ use skia_safe::{
     canvas::SrcRectConstraint, color_filters, image::RequiredProperties, Color, Data, FilterMode,
     IRect, Image, Matrix, MipmapMode, Paint, Rect, SamplingOptions, TileMode,
 };
-use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
 
-use super::cache::{byte_key, BoundedCache};
+use super::cache::byte_key;
+use super::image_cache::{CachedImageResource, ImageResourceCache};
 use super::image_effect::binary_effect_png;
 
 use crate::model::image::ImageEffect;
@@ -15,18 +15,6 @@ use crate::renderer::image_resolver::{detect_image_mime_type, grayscale_jpeg_byt
 
 const MAX_SVG_FRAGMENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SVG_RASTER_PIXELS: u64 = 67_108_864;
-
-#[derive(Clone)]
-pub(super) enum CachedImageResource {
-    Decoded {
-        image: Image,
-        binary_preprocessed: bool,
-    },
-    SvgPng(Arc<Vec<u8>>),
-    Effect(Option<skia_safe::ColorFilter>),
-}
-
-pub(super) type ImageResourceCache = RefCell<BoundedCache<CachedImageResource>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImageSampling {
@@ -81,7 +69,7 @@ pub(super) fn draw_svg_fragment(
         svg_fragment.as_bytes(),
         &(x, y, width, height, raster_scale),
     );
-    let cached = key.and_then(|key| cache.borrow_mut().get(key));
+    let cached = cache.get(key, false);
     let png = if let Some(CachedImageResource::SvgPng(png)) = cached {
         png
     } else {
@@ -92,7 +80,7 @@ pub(super) fn draw_svg_fragment(
         };
         let png = Arc::new(png);
         if let Some(key) = key {
-            cache.borrow_mut().insert(
+            cache.insert(
                 key,
                 CachedImageResource::SvgPng(png.clone()),
                 png.capacity(),
@@ -237,10 +225,11 @@ pub(super) fn draw_image_bytes(
     let binary_effect =
         matches!(effect, ImageEffect::BlackWhite | ImageEffect::Pattern8x8).then_some(effect);
     let key = byte_key(b"decoded-image", bytes, &(svg_size, binary_effect));
-    let cached = key.and_then(|key| cache.borrow_mut().get(key));
+    let cached = cache.get(key, binary_effect.is_some());
     let (image, binary_preprocessed) = if let Some(CachedImageResource::Decoded {
         image,
         binary_preprocessed,
+        ..
     }) = cached
     {
         (image, binary_preprocessed)
@@ -261,18 +250,29 @@ pub(super) fn draw_image_bytes(
         let binary_png = binary_effect.and_then(|effect| binary_effect_png(encoded_bytes, effect));
         let encoded_bytes = binary_png.as_deref().unwrap_or(encoded_bytes);
         let Some(image) = Image::from_encoded(Data::new_copy(encoded_bytes)) else {
+            if binary_effect.is_some() {
+                cache.record_preprocessing(None);
+            }
             draw_missing_image_placeholder(x, y, width, height);
             return false;
         };
+        if binary_effect.is_some() {
+            cache.record_preprocessing(binary_png.as_ref().map(|_| {
+                (image.width().max(0) as usize)
+                    .saturating_mul(image.height().max(0) as usize)
+                    .saturating_mul(4)
+            }));
+        }
         if let Some(key) = key {
             let cost = (image.width().max(0) as usize)
                 .saturating_mul(image.height().max(0) as usize)
                 .saturating_mul(4)
                 .saturating_add(encoded_bytes.len());
-            cache.borrow_mut().insert(
+            cache.insert(
                 key,
                 CachedImageResource::Decoded {
                     image: image.clone(),
+                    binary_requested: binary_effect.is_some(),
                     binary_preprocessed: binary_png.is_some(),
                 },
                 cost,
@@ -287,6 +287,9 @@ pub(super) fn draw_image_bytes(
     let (filter_effect, sampling) = if binary_preprocessed {
         (ImageEffect::RealPic, ImageSampling::nearest())
     } else {
+        if binary_effect.is_some() {
+            cache.record_filter_fallback();
+        }
         (effect, sampling)
     };
 
@@ -294,7 +297,7 @@ pub(super) fn draw_image_bytes(
     let mut paint = Paint::default();
     paint.set_anti_alias(true);
     let effect_key = byte_key(b"image-effect", &[], &(filter_effect, brightness, contrast));
-    let cached_effect = effect_key.and_then(|key| cache.borrow_mut().get(key));
+    let cached_effect = cache.get(effect_key, false);
     let color_filter = if let Some(CachedImageResource::Effect(filter)) = cached_effect {
         filter
     } else {
@@ -308,9 +311,7 @@ pub(super) fn draw_image_bytes(
             (None, None) => None,
         };
         if let Some(key) = effect_key {
-            cache
-                .borrow_mut()
-                .insert(key, CachedImageResource::Effect(filter.clone()), 256);
+            cache.insert(key, CachedImageResource::Effect(filter.clone()), 256);
         }
         filter
     };
@@ -491,8 +492,53 @@ pub(super) fn draw_image_bytes(
                 return true;
             }
         }
+        // A valid decoded image can still lack a usable shader matrix. Retain
+        // the committed bounded draw fallback instead of dropping that image.
+        let step_x = image_width.max(1.0);
+        let step_y = image_height.max(1.0);
+        let horizontal = matches!(
+            mode,
+            ImageFillMode::TileHorzTop | ImageFillMode::TileHorzBottom
+        );
+        let vertical = matches!(
+            mode,
+            ImageFillMode::TileVertLeft | ImageFillMode::TileVertRight
+        );
+        let columns = if vertical {
+            1
+        } else {
+            (width / step_x).ceil() as usize
+        };
+        let rows = if horizontal {
+            1
+        } else {
+            (height / step_y).ceil() as usize
+        };
+        let draws = columns.saturating_mul(rows);
+        let origin_x = if mode == ImageFillMode::TileVertRight {
+            x + width - image_width
+        } else {
+            x
+        };
+        let origin_y = if mode == ImageFillMode::TileHorzBottom {
+            y + height - image_height
+        } else {
+            y
+        };
+        const MAX_TILE_DRAWS: usize = 4096;
+        for index in 0..draws.min(MAX_TILE_DRAWS) {
+            let tile_x = origin_x + (index % columns) as f32 * step_x;
+            let tile_y = origin_y + (index / columns) as f32 * step_y;
+            draw_image_rect(
+                crop_src,
+                Rect::from_xywh(tile_x, tile_y, image_width, image_height),
+            );
+        }
+        if draws > MAX_TILE_DRAWS {
+            cache.record_tile_cap();
+        }
         canvas.restore();
-        return false;
+        return true;
     } else {
         let (image_x, image_y) =
             resolve_image_placement(mode, x, y, width, height, image_width, image_height);
