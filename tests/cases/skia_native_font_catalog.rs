@@ -383,3 +383,98 @@ fn native_legacy_wave_underline_and_strike_keep_distinct_single_double_shapes() 
         assert!(extent(&double) > extent(&single));
     }
 }
+
+#[test]
+fn native_equation_text_uses_the_current_custom_catalog() {
+    let fonts = FontDirectory::new();
+    let math_font = |half_size| {
+        let mut bytes = styled_font(400, 5, false, half_size);
+        let original: Vec<u8> = "RHWP Kerning Boundary"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect();
+        let replacement: Vec<u8> = "Latin Modern Math   "
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect();
+        assert_eq!(original.len(), replacement.len());
+        let offsets: Vec<_> = bytes
+            .windows(original.len())
+            .enumerate()
+            .filter(|(_, window)| *window == original)
+            .map(|(offset, _)| offset)
+            .collect();
+        assert!(!offsets.is_empty());
+        for offset in offsets {
+            bytes[offset..offset + original.len()].copy_from_slice(&replacement);
+        }
+        assert_eq!(
+            skia_safe::FontMgr::default()
+                .new_from_data(&bytes, None)
+                .unwrap()
+                .family_name()
+                .trim(),
+            "Latin Modern Math"
+        );
+        bytes
+    };
+    let original = fonts.write("math-full.ttf", &math_font(false));
+    let small = fonts.write("math-small.ttf", &math_font(true));
+    let layout_box = rhwp::renderer::equation::layout::EqLayout::new(36.0)
+        .layout(&rhwp::renderer::equation::ast::EqNode::Text("A".into()));
+    let bbox = BoundingBox::new(10.0, 10.0, layout_box.width, layout_box.height);
+    let equation = rhwp::renderer::render_tree::EquationNode {
+        script: "A".into(),
+        svg_content: String::new(),
+        layout_box,
+        color_str: "#000000".into(),
+        color: 0,
+        font_size: 36.0,
+        section_index: None,
+        para_index: None,
+        control_index: None,
+        cell_index: None,
+        cell_para_index: None,
+        note_ref: None,
+    };
+    let tree = PageLayerTree::new(
+        100.0,
+        70.0,
+        LayerNode::leaf(
+            BoundingBox::new(0.0, 0.0, 100.0, 70.0),
+            None,
+            vec![PaintOp::equation(bbox, equation)],
+        ),
+    );
+    let original = SkiaLayerRenderer::new().with_font_paths(&[original]);
+    let small = SkiaLayerRenderer::new().with_font_paths(&[small]);
+    let original_pixels = render(&original, &tree);
+    let small_pixels = render(&small, &tree);
+    assert!(
+        original_pixels != small_pixels,
+        "equations must observe the configured custom font instead of system-only lookup"
+    );
+    assert!(small_pixels.pixels().any(|pixel| pixel[3] > 64));
+}
+
+#[test]
+fn native_legacy_vertical_runs_use_only_explicit_rotation_for_text_and_marks() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fonts/RHWPExactKerningSmoke.ttf");
+    let renderer = SkiaLayerRenderer::new().with_font_paths(&[path]);
+    for rotation in [0.0, 90.0] {
+        let mut explicit = text_tree("A ", "RHWP Kerning Boundary", false, false);
+        let run = text_run_mut(&mut explicit);
+        run.rotation = rotation;
+        run.layout_positions = Some(vec![0.0, 25.0, 35.0]);
+        run.style.underline = rhwp::model::style::UnderlineType::Bottom;
+        run.is_para_end = true;
+        explicit.output_options.show_control_codes = true;
+        explicit.output_options.show_paragraph_marks = true;
+        let expected = render(&renderer, &explicit);
+        assert!(expected.pixels().any(|pixel| pixel[3] > 64));
+        let mut vertical = explicit.clone();
+        text_run_mut(&mut vertical).is_vertical = true;
+        assert_same_pixels(&render(&renderer, &vertical), &expected);
+    }
+}

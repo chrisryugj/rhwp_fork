@@ -55,7 +55,7 @@ impl SkiaTextReplay<'_> {
              style: &crate::renderer::TextStyle,
              baseline: f64,
              rotation: f64,
-             is_vertical: bool,
+             _is_vertical: bool,
              char_overlap: Option<&crate::renderer::composer::CharOverlapInfo>| {
                 if text.is_empty() && style.tab_leaders.is_empty() {
                     return;
@@ -128,11 +128,10 @@ impl SkiaTextReplay<'_> {
                 };
                 // [#2771] 첨자 baseline 이동 (위 0.3em / 아래 0.15em). 비첨자는 항등.
                 let (_, y) = style.script_draw_metrics(base_font_size, baseline_y);
-                let effective_rotation = if is_vertical {
-                    rotation + 90.0
-                } else {
-                    rotation
-                };
+                // Vertical layout already emits upright glyph bboxes or an
+                // explicit sideways rotation; applying another 90° rotates
+                // upright glyphs and double-rotates sideways runs.
+                let effective_rotation = rotation;
                 if effective_rotation != 0.0 {
                     canvas.save();
                     canvas.rotate(
@@ -829,7 +828,7 @@ impl SkiaTextReplay<'_> {
                                style: &crate::renderer::TextStyle,
                                baseline: f64,
                                rotation: f64,
-                               is_vertical: bool,
+                               _is_vertical: bool,
                                is_marker: bool,
                                is_para_end: bool,
                                is_line_break_end: bool| {
@@ -867,11 +866,7 @@ impl SkiaTextReplay<'_> {
             } else {
                 bbox.y + bbox.height
             };
-            let effective_rotation = if is_vertical {
-                rotation + 90.0
-            } else {
-                rotation
-            };
+            let effective_rotation = rotation;
             if effective_rotation != 0.0 {
                 canvas.save();
                 canvas.rotate(
