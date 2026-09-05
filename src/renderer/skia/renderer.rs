@@ -1,8 +1,10 @@
 use skia_safe::{
-    paint, png_encoder, surfaces, Canvas, Color, Font, FontMgr, FontStyle, Paint, PathBuilder,
-    PathEffect, RRect, Rect, Typeface,
+    paint, png_encoder, surfaces, Canvas, Color, Font, FontMgr, FontStyle, Matrix, Paint,
+    PathBuilder, PathEffect, Picture, PictureRecorder, RRect, Rect, Typeface,
 };
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::error::HwpError;
 use crate::model::image::ImageEffect;
@@ -11,8 +13,8 @@ use crate::model::ColorRef;
 use crate::paint::replay_order::layer_node_has_replay_plane;
 use crate::paint::{
     paint_op_replay_plane_with_layer, text_visual_replay_role, validate_text_variant_scope,
-    GlyphRunOrientation, GlyphRunReplayEligibility, LayerGlyphRunPaint, LayerNode, LayerNodeKind,
-    LayerOutputOptions, PageLayerTree, PaintOp, PaintReplayPlane, ResourceArena,
+    CacheHint, GlyphRunOrientation, GlyphRunReplayEligibility, LayerGlyphRunPaint, LayerNode,
+    LayerNodeKind, LayerOutputOptions, PageLayerTree, PaintOp, PaintReplayPlane, ResourceArena,
     TextDecorationKind, TextVariantQuality, TextVisualReplayRole,
 };
 use crate::renderer::layer_renderer::{
@@ -23,6 +25,10 @@ use crate::renderer::raster_pixels::{RasterPixelFormat, RasterPixels};
 use crate::renderer::render_tree::RenderLayerInfo;
 use crate::renderer::{svg_arc_to_beziers, LineStyle, PathCommand, ShapeStyle, StrokeDash};
 
+use super::cache::{
+    debug_key, inline_resource_estimate, BoundedCache, NativeSkiaCacheStats, ReplayCacheContext,
+    DEFAULT_CACHE_BYTES, DEFAULT_CACHE_ENTRIES,
+};
 use super::equation_conv::{render_equation, EquationFonts};
 use super::font_lookup::{
     collect_system_families, legacy_typeface_for_style, match_system_family_style,
@@ -32,7 +38,7 @@ use super::glyph_replay::{
     construct_glyph_font, finite_scalar, glyph_run_minimum_byte_cost, prepare_glyph_outline,
     GlyphPreparationBudget, PreparedGlyph,
 };
-use super::image_conv::{draw_image_bytes, draw_svg_fragment, ImageSampling};
+use super::image_conv::{draw_image_bytes, draw_svg_fragment, ImageResourceCache, ImageSampling};
 use super::text_replay::SkiaTextReplay;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -376,6 +382,13 @@ const FORM_CJK_FAMILIES: &[&str] = &[
     "Noto Sans KR",
 ];
 
+#[derive(Clone)]
+struct CachedPicture {
+    picture: Picture,
+    inverse_matrix: Matrix,
+    next_text_source_id: u32,
+}
+
 pub struct SkiaLayerRenderer {
     font_mgr: FontMgr,
     /// 사용자 지정 폰트 디렉토리에서 미리 로드한 폰트 캐시.
@@ -391,6 +404,9 @@ pub struct SkiaLayerRenderer {
     /// headless macOS 에서 missing family 를 CoreText 에 넘기면 downloadable font
     /// lookup IPC가 영구 대기할 수 있어, match_family_style 호출 전 사전 필터로 사용한다.
     system_families: SystemFontFamilies,
+    picture_cache: RefCell<BoundedCache<CachedPicture>>,
+    glyph_cache: RefCell<BoundedCache<Arc<PreparedGlyph>>>,
+    image_cache: ImageResourceCache,
 }
 
 impl SkiaLayerRenderer {
@@ -412,7 +428,43 @@ impl SkiaLayerRenderer {
             custom_typefaces: HashMap::new(),
             bundled_typefaces: HashMap::new(),
             system_families: system_families.clone(),
+            picture_cache: RefCell::new(BoundedCache::new(
+                DEFAULT_CACHE_ENTRIES,
+                DEFAULT_CACHE_BYTES,
+            )),
+            glyph_cache: RefCell::new(BoundedCache::new(
+                DEFAULT_CACHE_ENTRIES,
+                DEFAULT_CACHE_BYTES,
+            )),
+            image_cache: RefCell::new(BoundedCache::new(
+                DEFAULT_CACHE_ENTRIES,
+                DEFAULT_CACHE_BYTES,
+            )),
         })
+    }
+
+    /// Bound each of the picture, glyph and image caches independently. Zero
+    /// disables retention; replay and fallback policy remain unchanged.
+    pub fn with_cache_limits(mut self, max_entries: usize, max_bytes: usize) -> Self {
+        self.picture_cache = RefCell::new(BoundedCache::new(max_entries, max_bytes));
+        self.glyph_cache = RefCell::new(BoundedCache::new(max_entries, max_bytes));
+        self.image_cache = RefCell::new(BoundedCache::new(max_entries, max_bytes));
+        self
+    }
+
+    /// Drop all retained native objects and reset cache diagnostics.
+    pub fn clear_caches(&self) {
+        self.picture_cache.borrow_mut().clear();
+        self.glyph_cache.borrow_mut().clear();
+        self.image_cache.borrow_mut().clear();
+    }
+
+    pub fn cache_stats(&self) -> NativeSkiaCacheStats {
+        NativeSkiaCacheStats {
+            pictures: self.picture_cache.borrow().usage(),
+            glyphs: self.glyph_cache.borrow().usage(),
+            images: self.image_cache.borrow().usage(),
+        }
     }
 
     /// 이미 준비된 native renderer의 font inventory로 decision trace를 보강한다.
@@ -470,6 +522,9 @@ impl SkiaLayerRenderer {
     /// 사용자 지정 폰트 디렉토리 (ttfs 등) 의 폰트를 로드하여 Skia 가 직접 사용 가능하게 한다.
     /// SVG 의 `--font-path` 와 동일한 패턴.
     pub fn with_font_paths(mut self, font_paths: &[std::path::PathBuf]) -> Self {
+        // Static pictures may retain legacy font fallback decisions. A changed
+        // renderer font inventory must never reuse those recorded choices.
+        self.clear_caches();
         // [#2864] 조달 순서는 renderer::font_paths 가 단일 정의한다.
         // [#3300] custom(호출자+환경변수)과 번들 최후-폴백을 분리 적재한다 —
         // 시스템 디렉터리는 어느 쪽에도 넣지 않는다(스타일 매칭은 FontMgr 담당).
@@ -740,6 +795,9 @@ impl SkiaLayerRenderer {
             )));
         }
         let mut next_text_source_id = 0_u32;
+        // Resource bytes are fingerprinted once per page, not once per group.
+        let cache_context =
+            ReplayCacheContext::new(tree, fallback_raster_scale, strict_resource_failures);
         for replay_plane in PaintReplayPlane::ORDERED {
             if !layer_node_has_replay_plane(&tree.root, replay_plane) {
                 continue;
@@ -754,9 +812,39 @@ impl SkiaLayerRenderer {
                 &mut next_text_source_id,
                 fallback_raster_scale,
                 strict_resource_failures,
+                &cache_context,
             )?;
         }
         Ok(())
+    }
+
+    fn prepare_cached_glyph(
+        &self,
+        op: &PaintOp,
+        resources: &ResourceArena,
+        scale: f32,
+        context: &ReplayCacheContext,
+    ) -> Option<Arc<PreparedGlyph>> {
+        let key = context.seed.and_then(|seed| debug_key(&(seed, op)));
+        let cached = key.and_then(|key| self.glyph_cache.borrow_mut().get(key));
+        if let Some(prepared) = cached {
+            return Some(prepared);
+        }
+        let prepared = Arc::new(match op {
+            PaintOp::GlyphRun { run, .. } => {
+                prepare_native_glyph_run(run, resources, &self.font_mgr).1?
+            }
+            PaintOp::GlyphOutline { outline, bbox } => {
+                prepare_glyph_outline(outline, *bbox, resources, scale)?
+            }
+            _ => return None,
+        });
+        if let Some(key) = key {
+            self.glyph_cache
+                .borrow_mut()
+                .insert(key, prepared.clone(), prepared.byte_cost);
+        }
+        Some(prepared)
     }
 
     fn render_node(
@@ -770,6 +858,7 @@ impl SkiaLayerRenderer {
         next_text_source_id: &mut u32,
         fallback_raster_scale: f32,
         strict_resource_failures: bool,
+        cache_context: &ReplayCacheContext,
     ) -> LayerRenderResult<()> {
         let active_layer = node.layer.or(inherited_layer);
         let clip_enabled = output_options.clip_enabled;
@@ -874,6 +963,7 @@ impl SkiaLayerRenderer {
                           contrast| {
             draw_image_bytes(
                 canvas,
+                &self.image_cache,
                 data,
                 bbox.x as f32,
                 bbox.y as f32,
@@ -923,19 +1013,80 @@ impl SkiaLayerRenderer {
             };
 
         match &node.kind {
-            LayerNodeKind::Group { children, .. } => {
-                for child in children {
-                    self.render_node(
-                        canvas,
-                        child,
-                        output_options,
-                        resources,
+            LayerNodeKind::Group {
+                children,
+                cache_hint,
+                ..
+            } => {
+                let render_children = |target: &Canvas, next_id: &mut u32| {
+                    for child in children {
+                        self.render_node(
+                            target,
+                            child,
+                            output_options,
+                            resources,
+                            replay_plane,
+                            active_layer,
+                            next_id,
+                            fallback_raster_scale,
+                            strict_resource_failures,
+                            cache_context,
+                        )?;
+                    }
+                    Ok::<(), HwpError>(())
+                };
+                let current_matrix = canvas.local_to_device_as_3x3();
+                let cache_key = (*cache_hint == CacheHint::StaticSubtree
+                    && self.picture_cache.borrow().enabled())
+                .then_some(cache_context.seed)
+                .flatten()
+                .and_then(|seed| {
+                    debug_key(&(
+                        seed,
+                        node,
                         replay_plane,
                         active_layer,
-                        next_text_source_id,
-                        fallback_raster_scale,
-                        strict_resource_failures,
-                    )?;
+                        *next_text_source_id,
+                        current_matrix,
+                    ))
+                });
+                let cached = cache_key.and_then(|key| self.picture_cache.borrow_mut().get(key));
+                if let Some(cached) = cached {
+                    canvas.draw_picture(&cached.picture, Some(&cached.inverse_matrix), None);
+                    *next_text_source_id = cached.next_text_source_id;
+                    return Ok(());
+                }
+                let recording = cache_key.and_then(|key| {
+                    let inverse = current_matrix.invert()?;
+                    let (bounds, _) = current_matrix.map_rect(cache_context.page_bounds);
+                    (bounds.is_finite() && !bounds.is_empty()).then_some((key, inverse, bounds))
+                });
+                if let Some((key, inverse_matrix, bounds)) = recording {
+                    let mut recorder = PictureRecorder::new();
+                    let recording_canvas = recorder.begin_recording(bounds, true);
+                    // Preserve device-scale-dependent SVG rasterization while
+                    // recording; the inverse cancels this matrix at playback.
+                    recording_canvas.concat(&current_matrix);
+                    render_children(recording_canvas, next_text_source_id)?;
+                    let picture = recorder.finish_recording_as_picture(None).ok_or_else(|| {
+                        HwpError::RenderError("Skia static picture recording failed".into())
+                    })?;
+                    canvas.draw_picture(&picture, Some(&inverse_matrix), None);
+                    let bytes = picture
+                        .approximate_bytes_used()
+                        .saturating_add(cache_context.retained_resource_estimate)
+                        .saturating_add(inline_resource_estimate(node, fallback_raster_scale));
+                    self.picture_cache.borrow_mut().insert(
+                        key,
+                        CachedPicture {
+                            picture,
+                            inverse_matrix,
+                            next_text_source_id: *next_text_source_id,
+                        },
+                        bytes,
+                    );
+                } else {
+                    render_children(canvas, next_text_source_id)?;
                 }
             }
             LayerNodeKind::ClipRect { clip, child, .. } => {
@@ -950,6 +1101,7 @@ impl SkiaLayerRenderer {
                         next_text_source_id,
                         fallback_raster_scale,
                         strict_resource_failures,
+                        cache_context,
                     );
                 }
                 canvas.save();
@@ -973,13 +1125,14 @@ impl SkiaLayerRenderer {
                     next_text_source_id,
                     fallback_raster_scale,
                     strict_resource_failures,
+                    cache_context,
                 );
                 canvas.restore();
                 result?;
             }
             LayerNodeKind::Leaf { ops } => {
                 let mut variant_order = 0usize;
-                let mut prepared_glyphs = HashMap::<usize, PreparedGlyph>::new();
+                let mut prepared_glyphs = HashMap::<usize, Arc<PreparedGlyph>>::new();
                 let mut preparation_budget = GlyphPreparationBudget::new();
                 let mut glyph_variants =
                     HashMap::<String, HashMap<String, (usize, u32, HashSet<u32>, bool)>>::new();
@@ -994,19 +1147,24 @@ impl SkiaLayerRenderer {
                             run.source.id.0,
                             glyph_run_minimum_byte_cost(run, resources).and_then(|minimum_bytes| {
                                 preparation_budget.prepare(minimum_bytes, || {
-                                    prepare_native_glyph_run(run, resources, &self.font_mgr).1
+                                    self.prepare_cached_glyph(
+                                        op,
+                                        resources,
+                                        fallback_raster_scale,
+                                        cache_context,
+                                    )
                                 })
                             }),
                         )),
-                        PaintOp::GlyphOutline { outline, bbox } => Some((
+                        PaintOp::GlyphOutline { outline, .. } => Some((
                             &outline.variant,
                             outline.source.id.0,
                             preparation_budget.prepare(0, || {
-                                prepare_glyph_outline(
-                                    outline,
-                                    *bbox,
+                                self.prepare_cached_glyph(
+                                    op,
                                     resources,
                                     fallback_raster_scale,
+                                    cache_context,
                                 )
                             }),
                         )),
@@ -1611,6 +1769,7 @@ impl SkiaLayerRenderer {
                         PaintOp::RawSvg { bbox, raw } => {
                             if !draw_svg_fragment(
                                 canvas,
+                                &self.image_cache,
                                 raw.svg.as_str(),
                                 bbox.x as f32,
                                 bbox.y as f32,

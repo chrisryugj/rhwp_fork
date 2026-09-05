@@ -625,3 +625,245 @@ fn native_glyph_replay_renders_resolved_colrv0_layers_in_order() {
         .rgba[0] = f32::NAN;
     assert_same_pixels(render(&tree), render(&fallback_tree()));
 }
+
+fn static_tree(mut tree: PageLayerTree) -> PageLayerTree {
+    tree.root = LayerNode::group(
+        tree.root.bounds,
+        None,
+        vec![tree.root],
+        CacheHint::StaticSubtree,
+        GroupKind::Generic,
+    );
+    tree
+}
+
+fn cached_render(
+    renderer: &SkiaLayerRenderer,
+    tree: &PageLayerTree,
+    scale: f64,
+) -> image::RgbaImage {
+    let options = rhwp::renderer::layer_renderer::RasterRenderOptions {
+        scale,
+        ..Default::default()
+    };
+    let png = renderer.render_png_with_options(tree, options).unwrap();
+    image::load_from_memory(&png).unwrap().to_rgba8()
+}
+
+#[test]
+fn native_cache_static_hits_match_direct_replay_and_invalidate_options_and_geometry() {
+    let uncached = SkiaLayerRenderer::new().with_cache_limits(0, 0);
+    let renderer = SkiaLayerRenderer::new();
+    let mut tree = static_tree(glyph_tree(TTF, 0, 'A'));
+    let expected = cached_render(&uncached, &tree, 1.0);
+    assert_same_pixels(cached_render(&renderer, &tree, 1.0), expected.clone());
+    assert_same_pixels(cached_render(&renderer, &tree, 1.0), expected);
+    assert!(renderer.cache_stats().pictures.hits > 0);
+    let mut misses = renderer.cache_stats().pictures.misses;
+    for scale in [1.5, 2.0] {
+        assert_same_pixels(
+            cached_render(&renderer, &tree, scale),
+            cached_render(&uncached, &tree, scale),
+        );
+        assert!(renderer.cache_stats().pictures.misses > misses);
+        misses = renderer.cache_stats().pictures.misses;
+    }
+    tree.profile = RenderProfile::Print;
+    assert_same_pixels(
+        cached_render(&renderer, &tree, 1.0),
+        cached_render(&uncached, &tree, 1.0),
+    );
+    assert!(renderer.cache_stats().pictures.misses > misses);
+    misses = renderer.cache_stats().pictures.misses;
+    tree.output_options.show_paragraph_marks = true;
+    assert_same_pixels(
+        cached_render(&renderer, &tree, 1.0),
+        cached_render(&uncached, &tree, 1.0),
+    );
+    assert!(renderer.cache_stats().pictures.misses > misses);
+    misses = renderer.cache_stats().pictures.misses;
+    let LayerNodeKind::Group { children, .. } = &mut tree.root.kind else {
+        unreachable!()
+    };
+    let LayerNodeKind::Leaf { ops } = &mut children[0].kind else {
+        unreachable!()
+    };
+    let PaintOp::GlyphRun { run, .. } = &mut ops[1] else {
+        unreachable!()
+    };
+    run.placement.run_to_page.e += 0.000_001;
+    assert_same_pixels(
+        cached_render(&renderer, &tree, 1.0),
+        cached_render(&uncached, &tree, 1.0),
+    );
+    assert!(
+        renderer.cache_stats().pictures.misses > misses,
+        "sub-JSON precision changes must invalidate"
+    );
+}
+
+#[test]
+fn native_cache_exact_resource_identity_and_invalid_font_metadata_cannot_reuse_ink() {
+    let renderer = SkiaLayerRenderer::new();
+    let uncached = SkiaLayerRenderer::new().with_cache_limits(0, 0);
+    let tree = glyph_tree(TTF, 0, 'A');
+    assert_same_pixels(
+        cached_render(&renderer, &tree, 1.0),
+        cached_render(&uncached, &tree, 1.0),
+    );
+    cached_render(&renderer, &tree, 1.0);
+    assert!(renderer.cache_stats().glyphs.hits > 0);
+    let mut invalid = tree.clone();
+    invalid.resources.font_resources_mut().faces[0].face_index = 99;
+    assert_same_pixels(
+        cached_render(&renderer, &invalid, 1.0),
+        render(&fallback_tree()),
+    );
+    let png = |rgba| {
+        let mut encoded = Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(2, 2, image::Rgba(rgba))
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        encoded.into_inner()
+    };
+    let blue = static_tree(bitmap_tree(&png([0, 0, 255, 255])));
+    let red = static_tree(bitmap_tree(&png([255, 0, 0, 255])));
+    // Both fresh arenas use image ref 0. The bytes, not the numeric ref or a
+    // previous arena's successful strict proof, must determine replay identity.
+    let blue_pixels = cached_render(&renderer, &blue, 1.0);
+    let red_pixels = cached_render(&renderer, &red, 1.0);
+    assert!(blue_pixels != red_pixels);
+    assert_same_pixels(red_pixels, cached_render(&uncached, &red, 1.0));
+    let before = renderer.cache_stats().pictures.misses;
+    let next_epoch = red.clone().with_bin_data_epoch(1);
+    cached_render(&renderer, &next_epoch, 1.0);
+    assert!(renderer.cache_stats().pictures.misses > before);
+}
+
+fn image_cache_tree(bytes: Vec<u8>, effect: rhwp::model::image::ImageEffect) -> PageLayerTree {
+    let mut image = rhwp::renderer::render_tree::ImageNode::new(1, Some(bytes));
+    image.effect = effect;
+    PageLayerTree::new(
+        80.0,
+        60.0,
+        LayerNode::leaf(
+            BoundingBox::new(0.0, 0.0, 80.0, 60.0),
+            None,
+            vec![PaintOp::image(
+                BoundingBox::new(10.0, 10.0, 30.0, 30.0),
+                image,
+                None,
+            )],
+        ),
+    )
+}
+
+#[test]
+fn native_cache_images_svg_and_effects_preserve_resource_only_and_size_dependent_identity() {
+    use rhwp::model::image::ImageEffect;
+    let renderer = SkiaLayerRenderer::new();
+    let uncached = SkiaLayerRenderer::new().with_cache_limits(0, 0);
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><path fill=\"#0000ff\" d=\"M1 1L9 3L7 9Z\"/></svg>".to_vec();
+    let mut tree = image_cache_tree(svg, ImageEffect::RealPic);
+    assert_same_pixels(
+        cached_render(&renderer, &tree, 1.0),
+        cached_render(&uncached, &tree, 1.0),
+    );
+    cached_render(&renderer, &tree, 1.0);
+    assert!(
+        renderer.cache_stats().images.hits >= 2,
+        "decoded image and effect hit"
+    );
+    for effect in [ImageEffect::GrayScale, ImageEffect::BlackWhite] {
+        let LayerNodeKind::Leaf { ops } = &mut tree.root.kind else {
+            unreachable!()
+        };
+        let PaintOp::Image { image, .. } = &mut ops[0] else {
+            unreachable!()
+        };
+        image.effect = effect;
+        assert_same_pixels(
+            cached_render(&renderer, &tree, 1.0),
+            cached_render(&uncached, &tree, 1.0),
+        );
+    }
+    let before = renderer.cache_stats().images.misses;
+    assert_same_pixels(
+        cached_render(&renderer, &tree, 2.0),
+        cached_render(&uncached, &tree, 2.0),
+    );
+    assert!(
+        renderer.cache_stats().images.misses > before,
+        "embedded SVG resolution changes"
+    );
+    let tree = static_tree(tree);
+    for scale in [1.0, 1.5, 2.0] {
+        assert_same_pixels(
+            cached_render(&renderer, &tree, scale),
+            cached_render(&uncached, &tree, scale),
+        );
+        assert_same_pixels(
+            cached_render(&renderer, &tree, scale),
+            cached_render(&uncached, &tree, scale),
+        );
+    }
+    let raw_tree = PageLayerTree::new(
+        80.0,
+        60.0,
+        LayerNode::leaf(
+            BoundingBox::new(0.0, 0.0, 80.0, 60.0),
+            None,
+            vec![PaintOp::raw_svg(
+                BoundingBox::new(10.0, 10.0, 30.0, 30.0),
+                rhwp::renderer::render_tree::RawSvgNode::new(
+                    "<path fill=\"#0000ff\" d=\"M10 10H40V40H10Z\"/>".into(),
+                ),
+            )],
+        ),
+    );
+    assert_same_pixels(
+        cached_render(&renderer, &raw_tree, 1.0),
+        cached_render(&uncached, &raw_tree, 1.0),
+    );
+    let before = renderer.cache_stats().images.hits;
+    cached_render(&renderer, &raw_tree, 1.0);
+    assert!(renderer.cache_stats().images.hits > before);
+}
+
+#[test]
+fn native_cache_eviction_oversize_clear_and_font_inventory_refresh_are_bounded() {
+    let tree = static_tree(glyph_tree(TTF, 0, 'A'));
+    let mut other = glyph_tree(TTF, 0, 'A');
+    glyph_mut(&mut other)
+        .shape_key
+        .font_instance
+        .synthetic_italic = true;
+    let other = static_tree(other);
+    let renderer = SkiaLayerRenderer::new().with_cache_limits(1, 1024 * 1024);
+    for candidate in [&tree, &other, &tree] {
+        cached_render(&renderer, candidate, 1.0);
+        for usage in [
+            renderer.cache_stats().pictures,
+            renderer.cache_stats().glyphs,
+            renderer.cache_stats().images,
+        ] {
+            assert!(usage.entries <= 1 && usage.approximate_bytes <= 1024 * 1024);
+        }
+    }
+    assert!(renderer.cache_stats().pictures.evictions >= 2);
+    assert!(renderer.cache_stats().glyphs.evictions >= 2);
+    renderer.clear_caches();
+    assert_eq!(renderer.cache_stats(), Default::default());
+    cached_render(&renderer, &tree, 1.0);
+    let renderer = renderer.with_font_paths(&[]);
+    assert_eq!(renderer.cache_stats(), Default::default());
+    let tiny = SkiaLayerRenderer::new().with_cache_limits(8, 1);
+    assert_same_pixels(
+        cached_render(&tiny, &tree, 1.0),
+        cached_render(&renderer, &tree, 1.0),
+    );
+    assert_eq!(tiny.cache_stats().pictures.entries, 0);
+    assert_eq!(tiny.cache_stats().glyphs.entries, 0);
+    assert!(tiny.cache_stats().pictures.skipped_oversized > 0);
+    assert!(tiny.cache_stats().glyphs.skipped_oversized > 0);
+}

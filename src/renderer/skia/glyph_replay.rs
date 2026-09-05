@@ -46,11 +46,11 @@ impl GlyphPreparationBudget {
         }
     }
 
-    pub fn prepare(
+    pub fn prepare<T: std::borrow::Borrow<PreparedGlyph>>(
         &mut self,
         minimum_bytes: usize,
-        prepare: impl FnOnce() -> Option<PreparedGlyph>,
-    ) -> Option<PreparedGlyph> {
+        prepare: impl FnOnce() -> Option<T>,
+    ) -> Option<T> {
         if self.remaining_entries == 0
             || self.remaining_bytes == 0
             || minimum_bytes > self.remaining_bytes
@@ -62,7 +62,7 @@ impl GlyphPreparationBudget {
         self.remaining_entries -= 1;
         self.remaining_bytes -= minimum_bytes;
         let prepared = prepare()?;
-        let additional_bytes = prepared.byte_cost.saturating_sub(minimum_bytes);
+        let additional_bytes = prepared.borrow().byte_cost.saturating_sub(minimum_bytes);
         let Some(remaining) = self.remaining_bytes.checked_sub(additional_bytes) else {
             // Outline costs are known only after preparation. Stop further
             // preparation if this candidate exhausted the remaining allowance.

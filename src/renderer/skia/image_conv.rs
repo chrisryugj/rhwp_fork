@@ -3,7 +3,10 @@ use skia_safe::{
     canvas::SrcRectConstraint, color_filters, image::RequiredProperties, Color, Data, FilterMode,
     IRect, Image, Matrix, MipmapMode, Paint, Rect, SamplingOptions, TileMode,
 };
+use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
+
+use super::cache::{byte_key, BoundedCache};
 
 use crate::model::image::ImageEffect;
 use crate::model::style::ImageFillMode;
@@ -11,6 +14,15 @@ use crate::renderer::image_resolver::{detect_image_mime_type, grayscale_jpeg_byt
 
 const MAX_SVG_FRAGMENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SVG_RASTER_PIXELS: u64 = 67_108_864;
+
+#[derive(Clone)]
+pub(super) enum CachedImageResource {
+    Decoded(Image),
+    SvgPng(Arc<Vec<u8>>),
+    Effect(Option<skia_safe::ColorFilter>),
+}
+
+pub(super) type ImageResourceCache = RefCell<BoundedCache<CachedImageResource>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImageSampling {
@@ -31,8 +43,9 @@ impl ImageSampling {
     }
 }
 
-pub fn draw_svg_fragment(
+pub(super) fn draw_svg_fragment(
     canvas: &skia_safe::Canvas,
+    cache: &ImageResourceCache,
     svg_fragment: &str,
     x: f32,
     y: f32,
@@ -45,12 +58,33 @@ pub fn draw_svg_fragment(
     // 직접 삽입·web_canvas 와 동일 계약). viewBox 원점에 조각의 페이지
     // 위치(x, y)를 넘겨 bbox 창만 래스터한다 — (0,0) 가정 시 창 밖 콘텐츠
     // 전부 클리핑 + bbox 재배치 이중 오프셋으로 차트가 잘렸다.
-    let Some(png) = rasterize_svg_fragment_to_png(svg_fragment, x, y, width, height, raster_scale)
-    else {
-        return false;
+    let key = byte_key(
+        b"raw-svg",
+        svg_fragment.as_bytes(),
+        &(x, y, width, height, raster_scale),
+    );
+    let cached = key.and_then(|key| cache.borrow_mut().get(key));
+    let png = if let Some(CachedImageResource::SvgPng(png)) = cached {
+        png
+    } else {
+        let Some(png) =
+            rasterize_svg_fragment_to_png(svg_fragment, x, y, width, height, raster_scale)
+        else {
+            return false;
+        };
+        let png = Arc::new(png);
+        if let Some(key) = key {
+            cache.borrow_mut().insert(
+                key,
+                CachedImageResource::SvgPng(png.clone()),
+                png.capacity(),
+            );
+        }
+        png
     };
     draw_image_bytes(
         canvas,
+        cache,
         &png,
         x,
         y,
@@ -67,8 +101,9 @@ pub fn draw_svg_fragment(
     )
 }
 
-pub fn draw_image_bytes(
+pub(super) fn draw_image_bytes(
     canvas: &skia_safe::Canvas,
+    cache: &ImageResourceCache,
     bytes: &[u8],
     x: f32,
     y: f32,
@@ -179,36 +214,62 @@ pub fn draw_image_bytes(
     // [#3460] HWPX BinData 는 SVG 를 그대로 담는다(`<hc:img>` → `Format="svg"`). skia 디코더는
     // SVG 를 읽지 못해 종전에는 회색 자리표시자만 남았다. 같은 모듈의 resvg 로 목적지 크기에
     // 맞춰 먼저 래스터화하면 이후 크롭·채움·효과 경로를 그대로 탈 수 있다.
-    let svg_raster = if crate::renderer::svg_fragment::is_svg_prefix(bytes) {
-        rasterize_svg_document_to_png(bytes, width, height, canvas_raster_scale(canvas))
+    let svg_size = crate::renderer::svg_fragment::is_svg_prefix(bytes)
+        .then(|| (width, height, canvas_raster_scale(canvas)));
+    let key = byte_key(b"decoded-image", bytes, &svg_size);
+    let cached = key.and_then(|key| cache.borrow_mut().get(key));
+    let image = if let Some(CachedImageResource::Decoded(image)) = cached {
+        image
     } else {
-        None
-    };
-    let bytes = svg_raster.as_deref().unwrap_or(bytes);
-
-    let normalized_bytes = if detect_image_mime_type(bytes) == "image/jpeg" {
-        grayscale_jpeg_bytes_to_png_bytes(bytes)
-    } else {
-        None
-    };
-    let encoded_bytes = normalized_bytes.as_deref().unwrap_or(bytes);
-
-    let Some(image) = Image::from_encoded(Data::new_copy(encoded_bytes)) else {
-        draw_missing_image_placeholder(x, y, width, height);
-        return false;
+        let svg_raster = svg_size.and_then(|(width, height, scale)| {
+            rasterize_svg_document_to_png(bytes, width, height, scale)
+        });
+        let bytes = svg_raster.as_deref().unwrap_or(bytes);
+        let normalized_bytes = if detect_image_mime_type(bytes) == "image/jpeg" {
+            grayscale_jpeg_bytes_to_png_bytes(bytes)
+        } else {
+            None
+        };
+        let encoded_bytes = normalized_bytes.as_deref().unwrap_or(bytes);
+        let Some(image) = Image::from_encoded(Data::new_copy(encoded_bytes)) else {
+            draw_missing_image_placeholder(x, y, width, height);
+            return false;
+        };
+        if let Some(key) = key {
+            let cost = (image.width().max(0) as usize)
+                .saturating_mul(image.height().max(0) as usize)
+                .saturating_mul(4)
+                .saturating_add(encoded_bytes.len());
+            cache
+                .borrow_mut()
+                .insert(key, CachedImageResource::Decoded(image.clone()), cost);
+        }
+        image
     };
 
     let dst = Rect::from_xywh(x, y, width, height);
     let mut paint = Paint::default();
     paint.set_anti_alias(true);
-    let effect_filter = image_effect_filter(effect);
-    let adjustment_filter = (brightness != 0 || contrast != 0)
-        .then(|| brightness_contrast_filter(brightness, contrast));
-    let color_filter = match (effect_filter, adjustment_filter) {
-        (Some(effect), Some(adjustment)) => color_filters::compose(adjustment, effect),
-        (Some(effect), None) => Some(effect),
-        (None, Some(adjustment)) => Some(adjustment),
-        (None, None) => None,
+    let effect_key = byte_key(b"image-effect", &[], &(effect, brightness, contrast));
+    let cached_effect = effect_key.and_then(|key| cache.borrow_mut().get(key));
+    let color_filter = if let Some(CachedImageResource::Effect(filter)) = cached_effect {
+        filter
+    } else {
+        let effect_filter = image_effect_filter(effect);
+        let adjustment_filter = (brightness != 0 || contrast != 0)
+            .then(|| brightness_contrast_filter(brightness, contrast));
+        let filter = match (effect_filter, adjustment_filter) {
+            (Some(effect), Some(adjustment)) => color_filters::compose(adjustment, effect),
+            (Some(effect), None) => Some(effect),
+            (None, Some(adjustment)) => Some(adjustment),
+            (None, None) => None,
+        };
+        if let Some(key) = effect_key {
+            cache
+                .borrow_mut()
+                .insert(key, CachedImageResource::Effect(filter.clone()), 256);
+        }
+        filter
     };
     if let Some(color_filter) = color_filter {
         paint.set_color_filter(color_filter);
