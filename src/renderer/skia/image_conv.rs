@@ -18,7 +18,10 @@ const MAX_SVG_RASTER_PIXELS: u64 = 67_108_864;
 
 #[derive(Clone)]
 pub(super) enum CachedImageResource {
-    Decoded(Image),
+    Decoded {
+        image: Image,
+        binary_preprocessed: bool,
+    },
     SvgPng(Arc<Vec<u8>>),
     Effect(Option<skia_safe::ColorFilter>),
 }
@@ -235,8 +238,12 @@ pub(super) fn draw_image_bytes(
         matches!(effect, ImageEffect::BlackWhite | ImageEffect::Pattern8x8).then_some(effect);
     let key = byte_key(b"decoded-image", bytes, &(svg_size, binary_effect));
     let cached = key.and_then(|key| cache.borrow_mut().get(key));
-    let image = if let Some(CachedImageResource::Decoded(image)) = cached {
-        image
+    let (image, binary_preprocessed) = if let Some(CachedImageResource::Decoded {
+        image,
+        binary_preprocessed,
+    }) = cached
+    {
+        (image, binary_preprocessed)
     } else {
         let svg_raster = svg_size.and_then(|(width, height, scale)| {
             rasterize_svg_document_to_png(bytes, width, height, scale)
@@ -262,22 +269,36 @@ pub(super) fn draw_image_bytes(
                 .saturating_mul(image.height().max(0) as usize)
                 .saturating_mul(4)
                 .saturating_add(encoded_bytes.len());
-            cache
-                .borrow_mut()
-                .insert(key, CachedImageResource::Decoded(image.clone()), cost);
+            cache.borrow_mut().insert(
+                key,
+                CachedImageResource::Decoded {
+                    image: image.clone(),
+                    binary_preprocessed: binary_png.is_some(),
+                },
+                cost,
+            );
         }
-        image
+        (image, binary_png.is_some())
+    };
+
+    // Interpolation after source-pixel thresholding would reintroduce gray
+    // pixels and shift ordered-dither phase. Failed preprocessing retains the
+    // old filter/sampling fallback, including on a decoded-image cache hit.
+    let (filter_effect, sampling) = if binary_preprocessed {
+        (ImageEffect::RealPic, ImageSampling::nearest())
+    } else {
+        (effect, sampling)
     };
 
     let dst = Rect::from_xywh(x, y, width, height);
     let mut paint = Paint::default();
     paint.set_anti_alias(true);
-    let effect_key = byte_key(b"image-effect", &[], &(effect, brightness, contrast));
+    let effect_key = byte_key(b"image-effect", &[], &(filter_effect, brightness, contrast));
     let cached_effect = effect_key.and_then(|key| cache.borrow_mut().get(key));
     let color_filter = if let Some(CachedImageResource::Effect(filter)) = cached_effect {
         filter
     } else {
-        let effect_filter = image_effect_filter(effect);
+        let effect_filter = image_effect_filter(filter_effect);
         let adjustment_filter = (brightness != 0 || contrast != 0)
             .then(|| brightness_contrast_filter(brightness, contrast));
         let filter = match (effect_filter, adjustment_filter) {

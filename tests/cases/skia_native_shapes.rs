@@ -277,3 +277,53 @@ fn native_images_binary_effects_use_source_thresholds_and_preserve_alpha() {
     }
     assert!(renderer.cache_stats().images.hits >= 2);
 }
+
+#[test]
+fn native_images_binary_effects_preserve_nearest_phase_when_scaled_and_cached() {
+    use rhwp::model::image::ImageEffect;
+    use rhwp::renderer::render_tree::ImageNode;
+    let renderer = SkiaLayerRenderer::new();
+    for effect in [ImageEffect::BlackWhite, ImageEffect::Pattern8x8] {
+        let source = if effect == ImageEffect::BlackWhite {
+            image::RgbaImage::from_fn(8, 8, |x, _| image::Rgba([if x < 4 { 0 } else { 255 }; 4]))
+        } else {
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([126, 126, 126, 173]))
+        };
+        let source = image::RgbaImage::from_fn(8, 8, |x, y| {
+            let mut pixel = *source.get_pixel(x, y);
+            pixel[3] = 173;
+            pixel
+        });
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        source
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let mut node = ImageNode::new(1, Some(encoded.into_inner()));
+        node.effect = effect;
+        let mut tree = tree(PaintOp::image(
+            BoundingBox::new(10.0, 10.0, 32.0, 32.0),
+            node,
+            None,
+        ));
+        tree.profile = rhwp::paint::RenderProfile::HighQuality;
+        for _ in 0..2 {
+            let png = renderer.render_png(&tree).unwrap();
+            let output = image::load_from_memory(&png).unwrap().to_rgba8();
+            for y in 0..32 {
+                for x in 0..32 {
+                    let white = if effect == ImageEffect::BlackWhite {
+                        x >= 16
+                    } else {
+                        (x / 4 + y / 4) % 2 == 0
+                    };
+                    let value = if white { 255 } else { 0 };
+                    assert_eq!(
+                        output.get_pixel(x + 10, y + 10).0,
+                        [value, value, value, 173]
+                    );
+                }
+            }
+        }
+    }
+    assert!(renderer.cache_stats().images.hits >= 2);
+}
