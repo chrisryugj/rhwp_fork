@@ -229,3 +229,51 @@ fn native_shapes_fast_raster_hint_disables_only_its_subtree_antialiasing() {
     tree.profile = RenderProfile::Screen;
     assert_eq!(pixels(&tree).as_raw(), smooth.as_raw());
 }
+
+#[test]
+fn native_images_binary_effects_use_source_thresholds_and_preserve_alpha() {
+    use rhwp::model::image::ImageEffect;
+    use rhwp::renderer::render_tree::ImageNode;
+    let image_tree = |image: image::RgbaImage, effect| {
+        let (width, height) = image.dimensions();
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let mut node = ImageNode::new(1, Some(encoded.into_inner()));
+        node.effect = effect;
+        tree(PaintOp::image(
+            BoundingBox::new(10.0, 10.0, f64::from(width), f64::from(height)),
+            node,
+            None,
+        ))
+    };
+    let input = image::RgbaImage::from_fn(2, 1, |x, _| {
+        if x == 0 {
+            image::Rgba([127, 127, 127, 37])
+        } else {
+            image::Rgba([128, 128, 128, 191])
+        }
+    });
+    let output = pixels(&image_tree(input, ImageEffect::BlackWhite));
+    assert_eq!(output.get_pixel(10, 10).0, [0, 0, 0, 37]);
+    assert_eq!(output.get_pixel(11, 10).0, [255, 255, 255, 191]);
+    let input = image::RgbaImage::from_pixel(8, 8, image::Rgba([126, 126, 126, 173]));
+    let tree = image_tree(input, ImageEffect::Pattern8x8);
+    let renderer = SkiaLayerRenderer::new();
+    for _ in 0..2 {
+        let bytes = renderer.render_png(&tree).unwrap();
+        let output = image::load_from_memory(&bytes).unwrap().to_rgba8();
+        for y in 0..8 {
+            for x in 0..8 {
+                let value = if (x + y) % 2 == 0 { 255 } else { 0 };
+                assert_eq!(
+                    output.get_pixel(x + 10, y + 10).0,
+                    [value, value, value, 173],
+                    "({x},{y})"
+                );
+            }
+        }
+    }
+    assert!(renderer.cache_stats().images.hits >= 2);
+}
