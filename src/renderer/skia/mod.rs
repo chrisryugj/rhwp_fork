@@ -4,6 +4,7 @@
 
 mod cache;
 mod equation_conv;
+mod fill_shader;
 mod font_lookup;
 mod glyph_replay;
 mod image_conv;
