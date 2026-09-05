@@ -14,8 +14,8 @@ use crate::renderer::{boxed_pua_char_overlap_semantics, clamp_tab_leader_end_x, 
 
 use super::font_catalog::TypefaceCatalog;
 use super::font_lookup::{
-    legacy_typeface_for_style, match_system_family_style, select_typeface_for_character,
-    text_typeface_candidates, SystemFontFamilies,
+    font_style_for_text, legacy_typeface_for_style, match_system_family_style,
+    select_typeface_for_character, text_typeface_candidates, SystemFontFamilies,
 };
 use super::renderer::colorref_to_skia;
 
@@ -70,12 +70,7 @@ impl SkiaTextReplay<'_> {
                 // baseline 이동은 아래 `y` 계산에서 함께 적용한다.
                 let (draw_font_size, _) = style.script_draw_metrics(base_font_size, 0.0);
                 let font_size = draw_font_size as f32;
-                let font_style = match (style.bold, style.italic) {
-                    (true, true) => FontStyle::bold_italic(),
-                    (true, false) => FontStyle::bold(),
-                    (false, true) => FontStyle::italic(),
-                    (false, false) => FontStyle::normal(),
-                };
+                let font_style = font_style_for_text(style);
                 // 1) 사용자 지정 폰트 (--font-path) 우선 검색
                 // 2) 시스템 FontMgr 검색 (한글 fallback chain 포함)
                 // 3) 마지막 fallback (legacy_make_typeface)
@@ -98,7 +93,7 @@ impl SkiaTextReplay<'_> {
                 // PDF 실측: 굵은 헤더가 정규 휴먼명조 임베드로 방출). custom
                 // catalog 또는 시스템 매칭이 진짜 bold 페이스를 반환한 경우는
                 // weight 조건에서 제외돼 이중 굵게가 없다.
-                let want_synthetic_bold = style.bold;
+                let want_synthetic_bold = style.is_visually_bold();
                 let finish_font = |tf: Typeface, size: f32| -> Font {
                     let is_bold_face = *tf.font_style().weight() >= 600;
                     let mut font = Font::new(tf, size);

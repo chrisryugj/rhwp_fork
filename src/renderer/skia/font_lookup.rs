@@ -8,6 +8,24 @@ use crate::renderer::base_family_without_weight_suffix;
 
 pub(super) type SystemFontFamilies = HashSet<String>;
 
+pub(super) fn font_style_for_text(style: &crate::renderer::TextStyle) -> FontStyle {
+    let weight = match style.css_font_weight() {
+        Some("bold") => 700,
+        Some("300") => 300,
+        Some("500") => 500,
+        _ => 400,
+    };
+    FontStyle::new(
+        skia_safe::font_style::Weight::from(weight),
+        skia_safe::font_style::Width::NORMAL,
+        if style.italic {
+            skia_safe::font_style::Slant::Italic
+        } else {
+            skia_safe::font_style::Slant::Upright
+        },
+    )
+}
+
 const TEXT_FALLBACK_FAMILIES: &[&str] = &[
     "Noto Sans KR",
     "Noto Serif KR",

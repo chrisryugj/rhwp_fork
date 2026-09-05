@@ -33,8 +33,8 @@ use super::equation_conv::{render_equation, EquationFonts};
 use super::fill_shader::shape_fill;
 use super::font_catalog::TypefaceCatalog;
 use super::font_lookup::{
-    collect_system_families, legacy_typeface_for_style, match_system_family_style,
-    SystemFontFamilies,
+    collect_system_families, font_style_for_text, legacy_typeface_for_style,
+    match_system_family_style, SystemFontFamilies,
 };
 use super::glyph_replay::{
     construct_glyph_font, finite_scalar, glyph_run_minimum_byte_cost, prepare_glyph_outline,
@@ -517,12 +517,12 @@ impl SkiaLayerRenderer {
     ) -> crate::renderer::font_decision::BackendDecision {
         use super::font_lookup::{select_typeface_for_character, text_typeface_candidates};
 
-        let style = match (bold, italic) {
-            (true, true) => FontStyle::bold_italic(),
-            (true, false) => FontStyle::bold(),
-            (false, true) => FontStyle::italic(),
-            (false, false) => FontStyle::normal(),
-        };
+        let style = font_style_for_text(&crate::renderer::TextStyle {
+            font_family: requested.into(),
+            bold,
+            italic,
+            ..Default::default()
+        });
         let (candidates, typefaces) = text_typeface_candidates(
             &self.font_mgr,
             &self.system_families,

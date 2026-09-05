@@ -182,6 +182,7 @@ fn native_legacy_text_catalog_loads_nonzero_ttc_faces_from_file_paths() {
 }
 
 fn assert_style_choice(
+    family: &str,
     first_style: (u16, u16, bool),
     preferred_style: (u16, u16, bool),
     bold: bool,
@@ -201,7 +202,7 @@ fn assert_style_choice(
             true,
         ),
     );
-    let tree = text_tree("A", "RHWP Kerning Boundary", bold, italic);
+    let tree = text_tree("A", family, bold, italic);
     let only_preferred = SkiaLayerRenderer::new().with_font_paths(&[preferred]);
     let both = SkiaLayerRenderer::new().with_font_paths(&[fonts.0.clone()]);
     let only_first = SkiaLayerRenderer::new().with_font_paths(&[first]);
@@ -212,17 +213,53 @@ fn assert_style_choice(
 
 #[test]
 fn native_legacy_text_catalog_matches_weight_without_double_synthetic_bold() {
-    assert_style_choice((400, 5, false), (700, 5, false), true, false);
+    assert_style_choice(
+        "RHWP Kerning Boundary",
+        (400, 5, false),
+        (700, 5, false),
+        true,
+        false,
+    );
 }
 
 #[test]
 fn native_legacy_text_catalog_matches_width() {
-    assert_style_choice((400, 3, false), (400, 5, false), false, false);
+    assert_style_choice(
+        "RHWP Kerning Boundary",
+        (400, 3, false),
+        (400, 5, false),
+        false,
+        false,
+    );
 }
 
 #[test]
 fn native_legacy_text_catalog_matches_slant() {
-    assert_style_choice((400, 5, false), (400, 5, true), false, true);
+    assert_style_choice(
+        "RHWP Kerning Boundary",
+        (400, 5, false),
+        (400, 5, true),
+        false,
+        true,
+    );
+}
+
+#[test]
+fn native_legacy_text_catalog_uses_shared_named_weight_hints() {
+    assert_style_choice(
+        "RHWP Kerning Boundary Light",
+        (400, 5, false),
+        (300, 5, false),
+        false,
+        false,
+    );
+    assert_style_choice(
+        "RHWP Kerning Boundary Bold",
+        (400, 5, false),
+        (700, 5, false),
+        false,
+        false,
+    );
 }
 
 #[test]
