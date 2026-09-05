@@ -327,3 +327,51 @@ fn native_images_binary_effects_preserve_nearest_phase_when_scaled_and_cached() 
     }
     assert!(renderer.cache_stats().images.hits >= 2);
 }
+
+#[test]
+fn native_image_tile_shader_preserves_source_scale_and_destination_origin() {
+    use rhwp::model::style::ImageFillMode;
+    use rhwp::renderer::render_tree::ImageNode;
+    let source = image::RgbaImage::from_fn(2, 1, |x, _| {
+        if x == 0 {
+            image::Rgba([255, 0, 0, 255])
+        } else {
+            image::Rgba([0, 0, 255, 255])
+        }
+    });
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    source
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .unwrap();
+    for fill in [
+        ImageFillMode::TileAll,
+        ImageFillMode::TileHorzTop,
+        ImageFillMode::TileHorzBottom,
+    ] {
+        let mut node = ImageNode::new(1, Some(encoded.get_ref().clone()));
+        node.fill_mode = Some(fill);
+        node.original_size = Some((4.0, 2.0));
+        let mut tree = tree(PaintOp::image(
+            BoundingBox::new(2.0, 4.0, 8.0, 4.0),
+            node,
+            None,
+        ));
+        tree.profile = rhwp::paint::RenderProfile::FastPreview;
+        let output = pixels(&tree);
+        let y = if fill == ImageFillMode::TileHorzBottom {
+            6
+        } else {
+            4
+        };
+        for x in 2..10 {
+            let expected = if (x - 2) % 4 < 2 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            };
+            assert_eq!(output.get_pixel(x, y).0, expected, "fill {fill:?}, x {x}");
+        }
+        assert_eq!(output.get_pixel(1, y)[3], 0);
+        assert_eq!(output.get_pixel(10, y)[3], 0);
+    }
+}

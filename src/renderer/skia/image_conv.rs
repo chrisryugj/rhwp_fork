@@ -436,15 +436,14 @@ pub(super) fn draw_image_bytes(
             if shader_source_width <= 0.0 || shader_source_height <= 0.0 {
                 return false;
             }
-            let scale_x = shader_source_width / image_width;
-            let scale_y = shader_source_height / image_height;
+            let scale_x = image_width / shader_source_width;
+            let scale_y = image_height / shader_source_height;
             if !scale_x.is_finite() || !scale_y.is_finite() || scale_x <= 0.0 || scale_y <= 0.0 {
                 return false;
             }
-            let local_matrix = Matrix::scale_translate(
-                (scale_x, scale_y),
-                (-origin_x * scale_x, -origin_y * scale_y),
-            );
+            // Skia's local matrix maps source pixels into logical canvas
+            // coordinates; shader lookup performs the inverse internally.
+            let local_matrix = Matrix::scale_translate((scale_x, scale_y), (origin_x, origin_y));
             let Some(shader) = shader_image.to_shader(
                 Some((TileMode::Repeat, TileMode::Repeat)),
                 sampling.options(),
