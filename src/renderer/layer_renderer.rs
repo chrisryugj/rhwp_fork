@@ -3,9 +3,11 @@ use crate::model::ColorRef;
 use crate::paint::paint_op::{portable_glyph_scalar, text_placement_is_finite};
 use crate::paint::{
     GlyphOutlinePayloadKind, GlyphRunOrientation, GlyphRunReplayEligibility,
-    LayerGlyphOutlinePaint, LayerGlyphRunPaint, LayerNode, LayerNodeKind, PageLayerTree, PaintOp,
-    ResourceArena, TextDirection, TextVariantKind, TextVariantQuality, WritingMode,
-    MAX_PORTABLE_FONT_BLOB_BYTES, MAX_PORTABLE_GLYPHS_PER_RUN,
+    LayerGlyphOutlinePaint, LayerGlyphRunPaint, LayerNode, LayerNodeKind, LineBreakShadowReport,
+    PageLayerTree, PaintOp, ResourceArena, ShapedMeasurementLineReport,
+    ShapedMeasurementPageSummary, ShapedMeasurementParagraphSummary, ShapedMeasurementRunReport,
+    TextDirection, TextVariantKind, TextVariantQuality, WritingMode, MAX_PORTABLE_FONT_BLOB_BYTES,
+    MAX_PORTABLE_GLYPHS_PER_RUN,
 };
 use crate::renderer::static_svg::static_svg_fragment_has_path_layer;
 use image::{ImageReader, Limits};
@@ -70,6 +72,54 @@ pub struct RasterRenderOutput {
     pub height: i32,
     pub dpi: Option<f64>,
     pub color_space: RasterColorSpace,
+    pub diagnostics: LayerRenderDiagnostics,
+}
+
+/// Diagnostic snapshot for one layer replay, not layout or cache authority.
+///
+/// Timings and event counters describe this render call; retained-byte gauges
+/// describe cache state after the call. Counters use saturating accounting.
+/// An unmeasured/default snapshot leaves backend/profile absent and reports no
+/// events. Empty measurement vectors must not be interpreted as layout proof.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LayerRenderDiagnostics {
+    pub backend: Option<VariantSelectionBackend>,
+    pub render_profile: Option<String>,
+    pub variant_selections: Vec<TextVariantSelectionReport>,
+    pub shaped_measurements: Vec<ShapedMeasurementRunReport>,
+    pub shaped_measurement_lines: Vec<ShapedMeasurementLineReport>,
+    pub line_break_shadows: Vec<LineBreakShadowReport>,
+    pub shaped_measurement_paragraphs: Vec<ShapedMeasurementParagraphSummary>,
+    pub shaped_measurement_pages: Vec<ShapedMeasurementPageSummary>,
+    pub layer_nodes_replayed: usize,
+    pub paint_ops_replayed: usize,
+    pub tile_fallback_cap_hits: usize,
+    pub image_effect_preprocess_failures: usize,
+    pub image_effect_fallback_to_filter: usize,
+    pub image_effect_cache_hits: usize,
+    pub image_effect_cache_misses: usize,
+    pub image_effect_cache_evictions: usize,
+    pub image_effect_cache_skipped_oversized: usize,
+    pub static_picture_cache_hits: usize,
+    pub static_picture_cache_misses: usize,
+    pub static_picture_cache_evictions: usize,
+    pub static_picture_cache_skipped_oversized: usize,
+    pub static_picture_cache_fingerprint_mismatches: usize,
+    pub static_picture_cache_recordings: usize,
+    /// Dimension validation, surface creation, clear/scale and replay setup.
+    pub raster_setup_time_ns: u64,
+    /// Layer replay, excluding surface setup and output encoding.
+    pub raster_replay_time_ns: u64,
+    /// Image snapshot, output encoding and byte copy.
+    pub raster_encode_time_ns: u64,
+    /// Total monotonic wall-clock time for the raster render call.
+    pub raster_total_time_ns: u64,
+    /// Approximate RGBA bytes processed for image-effect intermediates.
+    pub image_effect_preprocessed_bytes: usize,
+    /// Approximate RGBA bytes retained by image-effect caches after rendering.
+    pub image_effect_cache_approx_bytes: usize,
+    /// Approximate retained picture/resource bytes, not allocator telemetry.
+    pub static_picture_cache_approx_bytes: usize,
 }
 
 /// visual layer tree를 raster 결과로 직접 내보내는 backend 계약.
