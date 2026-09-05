@@ -348,3 +348,38 @@ fn native_legacy_combining_shaping_preserves_layout_anchors_and_condensed_ratio(
         assert_same_pixels(&render(&renderer, &tree), &expected);
     }
 }
+
+#[test]
+fn native_legacy_wave_underline_and_strike_keep_distinct_single_double_shapes() {
+    let renderer = SkiaLayerRenderer::new();
+    let mut base = text_tree("    ", "sans-serif", false, false);
+    text_run_mut(&mut base).layout_positions = Some(vec![0.0, 15.0, 30.0, 45.0, 60.0]);
+    let extent = |image: &image::RgbaImage| {
+        let rows: Vec<_> = image
+            .enumerate_pixels()
+            .filter(|(_, _, pixel)| pixel[3] > 20)
+            .map(|(_, y, _)| y)
+            .collect();
+        rows.iter().max().unwrap() - rows.iter().min().unwrap()
+    };
+    for strike in [false, true] {
+        let variant = |shape| {
+            let mut tree = base.clone();
+            let style = &mut text_run_mut(&mut tree).style;
+            if strike {
+                style.strikethrough = true;
+                style.strike_shape = shape;
+            } else {
+                style.underline = rhwp::model::style::UnderlineType::Bottom;
+                style.underline_shape = shape;
+            }
+            render(&renderer, &tree)
+        };
+        let straight = variant(0);
+        let single = variant(11);
+        let double = variant(12);
+        assert!(single != straight && double != single);
+        assert!(extent(&single) > extent(&straight));
+        assert!(extent(&double) > extent(&single));
+    }
+}

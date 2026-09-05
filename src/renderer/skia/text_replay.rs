@@ -379,6 +379,37 @@ impl SkiaTextReplay<'_> {
                             draw_styled_line(x1, y, x2, color, 0.5, &[], false);
                             draw_styled_line(x1, y + 1.5, x2, color, 0.5, &[], false);
                         }
+                        11 | 12 => {
+                            if ![x1, y, x2].iter().all(|value| value.is_finite()) || x2 <= x1 {
+                                return;
+                            }
+                            if x2 - x1 > 6.0 * 4096.0 {
+                                draw_styled_line(x1, y, x2, color, 1.0, &[], false);
+                                return;
+                            }
+                            let offsets: &[f32] = if shape == 12 { &[-1.0, 1.0] } else { &[0.0] };
+                            for offset in offsets {
+                                let mut path = skia_safe::PathBuilder::new();
+                                path.move_to((x1, y + offset));
+                                let segments = ((x2 - x1) / 6.0).ceil() as usize;
+                                for index in 0..segments {
+                                    let left = x1 + index as f32 * 6.0;
+                                    let right = (left + 6.0).min(x2);
+                                    let control_y =
+                                        y + offset + if index % 2 == 0 { -1.5 } else { 1.5 };
+                                    path.quad_to(
+                                        ((left + right) / 2.0, control_y),
+                                        (right, y + offset),
+                                    );
+                                }
+                                let mut wave = Paint::default();
+                                wave.set_anti_alias(true);
+                                wave.set_style(paint::Style::Stroke);
+                                wave.set_stroke_width(if shape == 12 { 0.5 } else { 0.7 });
+                                wave.set_color(color);
+                                canvas.draw_path(&path.detach(), &wave);
+                            }
+                        }
                         1 => draw_styled_line(x1, y, x2, color, 1.0, &[3.0, 3.0], false),
                         2 => draw_styled_line(x1, y, x2, color, 1.0, &[1.0, 2.0], false),
                         3 => draw_styled_line(x1, y, x2, color, 1.0, &[6.0, 2.0, 1.0, 2.0], false),
