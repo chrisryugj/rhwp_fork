@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use skia_safe::{
     font, paint, Canvas, Color, Font, FontMgr, FontStyle, Paint, PathEffect, Rect, Typeface,
 };
@@ -14,6 +12,7 @@ use crate::renderer::layout::{forces_halfwidth_cjk_quote, split_into_clusters};
 use crate::renderer::render_tree::BoundingBox;
 use crate::renderer::{boxed_pua_char_overlap_semantics, clamp_tab_leader_end_x, TextStyle};
 
+use super::font_catalog::TypefaceCatalog;
 use super::font_lookup::{
     legacy_typeface_for_style, match_system_family_style, select_typeface_for_character,
     text_typeface_candidates, SystemFontFamilies,
@@ -23,8 +22,8 @@ use super::renderer::colorref_to_skia;
 pub(super) struct SkiaTextReplay<'a> {
     pub(super) canvas: &'a Canvas,
     pub(super) font_mgr: &'a FontMgr,
-    pub(super) custom_typefaces: &'a HashMap<String, Typeface>,
-    pub(super) bundled_typefaces: &'a HashMap<String, Typeface>,
+    pub(super) custom_typefaces: &'a TypefaceCatalog,
+    pub(super) bundled_typefaces: &'a TypefaceCatalog,
     pub(super) system_families: &'a SystemFontFamilies,
     pub(super) output_options: &'a LayerOutputOptions,
 }
@@ -97,8 +96,7 @@ impl SkiaTextReplay<'_> {
                 // 한글은 bold face 가 없는 폰트(휴먼명조 등 단일 400 페이스)에
                 // 동일 정규 페이스 + stroke 로 합성 굵게를 적용한다 (오라클
                 // PDF 실측: 굵은 헤더가 정규 휴먼명조 임베드로 방출). custom
-                // typeface 는 스타일 무시 단일 페이스라 여기서 embolden 으로
-                // 합성한다. 시스템 매칭이 진짜 bold 페이스를 반환한 경우는
+                // catalog 또는 시스템 매칭이 진짜 bold 페이스를 반환한 경우는
                 // weight 조건에서 제외돼 이중 굵게가 없다.
                 let want_synthetic_bold = style.bold;
                 let finish_font = |tf: Typeface, size: f32| -> Font {

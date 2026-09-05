@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use skia_safe::{FontMgr, FontStyle, Typeface};
 
+use super::font_catalog::TypefaceCatalog;
 use crate::renderer::base_family_without_weight_suffix;
 
 pub(super) type SystemFontFamilies = HashSet<String>;
@@ -58,8 +59,8 @@ pub(super) fn text_family_candidates(requested: &str) -> Vec<String> {
 pub(super) fn text_typeface_candidates(
     font_mgr: &FontMgr,
     system_families: &SystemFontFamilies,
-    custom_typefaces: &HashMap<String, Typeface>,
-    bundled_typefaces: &HashMap<String, Typeface>,
+    custom_typefaces: &TypefaceCatalog,
+    bundled_typefaces: &TypefaceCatalog,
     requested: &str,
     style: FontStyle,
 ) -> (Vec<String>, Vec<TypefaceCandidate>) {
@@ -79,21 +80,21 @@ pub(super) fn text_typeface_candidates(
 pub(super) fn typeface_candidates_for_families(
     font_mgr: &FontMgr,
     system_families: &SystemFontFamilies,
-    custom_typefaces: &HashMap<String, Typeface>,
-    bundled_typefaces: &HashMap<String, Typeface>,
+    custom_typefaces: &TypefaceCatalog,
+    bundled_typefaces: &TypefaceCatalog,
     families: &[String],
     style: FontStyle,
 ) -> Vec<TypefaceCandidate> {
     let mut chain = Vec::new();
     let mut seen = HashSet::new();
     let mut push = |typeface: Typeface, source: &'static str| {
-        let key = typeface.family_name();
+        let key = typeface.unique_id();
         if seen.insert(key) {
             chain.push(TypefaceCandidate { typeface, source });
         }
     };
     for family in families {
-        if let Some(typeface) = custom_typefaces.get(family).cloned() {
+        for typeface in custom_typefaces.candidates(family, style) {
             push(typeface, "custom");
         }
         // 원 face의 system 프로그램보다 뒤 face의 custom 프로그램을 먼저
@@ -102,7 +103,7 @@ pub(super) fn typeface_candidates_for_families(
         {
             push(typeface, "system");
         }
-        if let Some(typeface) = bundled_typefaces.get(family).cloned() {
+        for typeface in bundled_typefaces.candidates(family, style) {
             push(typeface, "bundled");
         }
     }

@@ -1,9 +1,6 @@
-use std::collections::HashMap;
+use skia_safe::{font, paint, Canvas, Color, Font, FontMgr, FontStyle, Paint, PathBuilder};
 
-use skia_safe::{
-    font, paint, Canvas, Color, Font, FontMgr, FontStyle, Paint, PathBuilder, Typeface,
-};
-
+use super::font_catalog::TypefaceCatalog;
 use super::font_lookup::{
     select_typeface_for_character, text_family_candidates, typeface_candidates_for_families,
     SystemFontFamilies,
@@ -23,8 +20,8 @@ const EQ_FONT_FAMILY: &str =
 pub(super) struct EquationFonts<'a> {
     pub(super) font_mgr: &'a FontMgr,
     pub(super) system_families: &'a SystemFontFamilies,
-    pub(super) custom_typefaces: &'a HashMap<String, Typeface>,
-    pub(super) bundled_typefaces: &'a HashMap<String, Typeface>,
+    pub(super) custom_typefaces: &'a TypefaceCatalog,
+    pub(super) bundled_typefaces: &'a TypefaceCatalog,
 }
 
 pub(super) fn render_equation(
