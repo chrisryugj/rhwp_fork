@@ -1,4 +1,4 @@
-use std::fmt::Write as _;
+use std::{collections::HashMap, fmt::Write as _};
 
 use crate::document_core::helpers::{
     color_ref_to_css, json_escape as raw_json_escape, write_json_base64,
@@ -6,6 +6,9 @@ use crate::document_core::helpers::{
 use crate::model::control::FormType;
 use crate::model::image::ImageEffect;
 use crate::model::style::{ImageFillMode, UnderlineType};
+use crate::paint::paint_bounds::{
+    bounded_display_text_for_run, bounded_text_prefix, effective_text_font_size_and_baseline,
+};
 use crate::paint::ResourceArena;
 use crate::paint::{
     BitmapGlyphPayload, CacheHint, ClipKind, ColorLayerNode, ColorLayersPayload,
@@ -73,6 +76,7 @@ const KNOWN_TEXT_FEATURES: &[&str] = &[
     "paint.pageBackground.imageEffects",
     "text.displayText",
     "text.vertical.mixedPerGlyph",
+    "layer.visualBounds",
 ];
 
 /// 레이어 트리 JSON 직렬화 옵션 (Task #3315).
@@ -104,9 +108,10 @@ pub struct LayerJsonOptions {
 /// 직렬화 도중 트리 아래로 흘려야 하는 값. 그림 op 하나를 쓰려면 문서 세대(키 발급)와
 /// 생략 여부가 함께 필요해 한 덩이로 옮겼다.
 #[derive(Debug, Clone, Copy)]
-struct JsonWriteContext {
+struct JsonWriteContext<'a> {
     bin_data_epoch: u32,
     options: LayerJsonOptions,
+    visual_bounds: &'a HashMap<*const LayerNode, BoundingBox>,
 }
 
 impl PageLayerTree {
@@ -117,6 +122,7 @@ impl PageLayerTree {
     /// [Task #3315/#4969] 그림·font base64 생략을 각각 켤 수 있는 직렬화.
     /// `to_json()`은 두 payload를 모두 inline하는 기본 옵션 위임이다.
     pub fn to_json_with_options(&self, options: LayerJsonOptions) -> String {
+        let visual_bounds = self.visual_bounds_index();
         let mut buf = String::with_capacity(32_768);
         buf.push('{');
         let _ = write!(
@@ -163,6 +169,7 @@ impl PageLayerTree {
             JsonWriteContext {
                 bin_data_epoch: self.resources.source_image_epoch(),
                 options,
+                visual_bounds: &visual_bounds,
             },
         );
         buf.push_str(",\"textSources\":");
@@ -208,7 +215,7 @@ fn write_text_export_metadata(buf: &mut String, root: &LayerNode, resources: &Re
     let has_glyph_outline_payload_resource_digest_keys =
         text_variant_features.has_glyph_outline_payload_resource_digest_keys;
     let has_display_text = text_variant_features.has_display_text;
-    buf.push_str(",\"usedFeatures\":[\"text.paintStyle\",\"text.sourceTable\",\"text.sourceSpan\",\"text.v2.placement\",\"text.v2.clusters\",\"text.v2.diagnostics\",\"text.projectionKind\",\"text.legacyVisuals\",\"layer.optionMetadata\"");
+    buf.push_str(",\"usedFeatures\":[\"text.paintStyle\",\"text.sourceTable\",\"text.sourceSpan\",\"text.v2.placement\",\"text.v2.clusters\",\"text.v2.diagnostics\",\"text.projectionKind\",\"text.legacyVisuals\",\"layer.optionMetadata\",\"layer.visualBounds\"");
     if has_display_text {
         buf.push_str(",\"text.displayText\"");
     }
@@ -532,11 +539,15 @@ impl LayerNode {
         buf: &mut String,
         text_sources: &mut TextSourceExportState,
         resources: &ResourceArena,
-        ctx: JsonWriteContext,
+        ctx: JsonWriteContext<'_>,
     ) {
         buf.push('{');
         buf.push_str("\"bounds\":");
         write_bbox(buf, self.bounds);
+        if let Some(bounds) = ctx.visual_bounds.get(&(self as *const LayerNode)) {
+            buf.push_str(",\"visualBounds\":");
+            write_bbox(buf, *bounds);
+        }
         if let Some(source_node_id) = self.source_node_id {
             let _ = write!(buf, ",\"sourceNodeId\":{}", source_node_id);
         }
@@ -604,7 +615,7 @@ impl PaintOp {
         text_sources: &mut TextSourceExportState,
         leaf_visuals: &LeafTextVisualOps,
         resources: &ResourceArena,
-        ctx: JsonWriteContext,
+        ctx: JsonWriteContext<'_>,
     ) {
         match self {
             PaintOp::PageBackground { bbox, background } => {
@@ -1736,22 +1747,6 @@ fn write_position_values(buf: &mut String, positions: &[f64]) {
     buf.push(']');
 }
 
-fn bounded_text_prefix(text: &str) -> (String, bool) {
-    let mut chars = text.chars();
-    let prefix = chars
-        .by_ref()
-        .take(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN)
-        .collect();
-    (prefix, chars.next().is_none())
-}
-
-fn bounded_display_text_for_run(run: &TextRunNode) -> (String, bool) {
-    let (source_prefix, source_complete) = bounded_text_prefix(run.display_or_text());
-    let display_text = expand_pua_display_text(&source_prefix);
-    let (display_prefix, display_complete) = bounded_text_prefix(&display_text);
-    (display_prefix, source_complete && display_complete)
-}
-
 fn write_bounded_text_positions(buf: &mut String, text: &str, style: &TextStyle) -> bool {
     let (prefix, complete) = bounded_text_prefix(text);
     let positions = compute_char_positions(&prefix, style);
@@ -1762,15 +1757,6 @@ fn write_bounded_text_positions(buf: &mut String, text: &str, style: &TextStyle)
 fn display_text_for_text_run(run: &TextRunNode) -> Option<String> {
     let display_text = expand_pua_display_text(run.display_or_text());
     (display_text != run.text.as_str()).then_some(display_text)
-}
-
-fn effective_text_font_size_and_baseline(run: &TextRunNode) -> (f64, f64) {
-    let base_font_size = if run.style.font_size > 0.0 {
-        run.style.font_size
-    } else {
-        12.0
-    };
-    run.style.script_draw_metrics(base_font_size, run.baseline)
 }
 
 fn write_tab_leaders(buf: &mut String, leaders: &[TabLeaderInfo]) {

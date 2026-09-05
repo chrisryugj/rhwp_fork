@@ -41,6 +41,17 @@ pub struct ResolvedImagePayload {
     pub suppress_effects: bool,
 }
 
+/// Page-space layout bounds and a separate estimate of the painted extent.
+///
+/// `logical` remains the layout/editing contract. `visual` includes known
+/// strokes, shadows and explicit text visuals, but is not a font ink proof.
+/// Picture recorders must retain a page-wide safety extent for unmeasured ink.
+#[derive(Debug, Clone, Copy)]
+pub struct PaintBounds {
+    pub logical: BoundingBox,
+    pub visual: BoundingBox,
+}
+
 /// backend가 재생하는 leaf paint operation.
 ///
 /// 1차 전환에서는 기존 leaf payload를 최대한 그대로 유지해

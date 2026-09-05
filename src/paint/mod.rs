@@ -13,6 +13,7 @@ pub mod font;
 pub mod font_glyph;
 mod json;
 pub mod layer_tree;
+mod paint_bounds;
 pub mod paint_op;
 pub mod profile;
 pub mod replay_order;
@@ -61,9 +62,10 @@ pub use paint_op::{
     GlyphOutlineFillRule, GlyphOutlinePaintOrder, GlyphOutlinePayloadKind, GlyphOutlineStrokeCap,
     GlyphOutlineStrokeJoin, GlyphOutlineStrokeStyle, GlyphRange, GlyphRunDiagnostics,
     GlyphRunOrientation, GlyphTransform, LayerAffineTransform, LayerGlyphOutlinePaint,
-    LayerGlyphOutlinePath, LayerGlyphRunPaint, LayerPoint, LayerVector, PaintOp, PaintTextStyle,
-    PaintVariantMeta, PaletteRef, ResolvedColor, ResolvedImageKind, ResolvedImagePayload,
-    SvgGlyphPayload, TextDecorationKind, TextRunPlacement, TextVariantKind, TextVariantQuality,
+    LayerGlyphOutlinePath, LayerGlyphRunPaint, LayerPoint, LayerVector, PaintBounds, PaintOp,
+    PaintTextStyle, PaintVariantMeta, PaletteRef, ResolvedColor, ResolvedImageKind,
+    ResolvedImagePayload, SvgGlyphPayload, TextDecorationKind, TextRunPlacement, TextVariantKind,
+    TextVariantQuality,
 };
 pub use profile::RenderProfile;
 pub use replay_order::{
