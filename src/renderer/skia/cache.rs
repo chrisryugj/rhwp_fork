@@ -166,8 +166,7 @@ pub(super) fn inline_resource_estimate(node: &LayerNode, scale: f32) -> usize {
                         PaintOp::PageBackground { bbox, background } => background
                             .image
                             .as_ref()
-                            .and_then(|image| image.data.as_deref())
-                            .map(|data| (*bbox, data)),
+                            .map(|image| (*bbox, image.data.as_slice())),
                         PaintOp::RawSvg { bbox, raw } => Some((*bbox, raw.svg.as_bytes())),
                         _ => None,
                     };
