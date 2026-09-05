@@ -155,6 +155,19 @@ pub(super) fn inline_resource_estimate(node: &LayerNode, scale: f32) -> usize {
             LayerNodeKind::Leaf { ops } => {
                 for op in ops {
                     let payload = match op {
+                        PaintOp::GlyphOutline { bbox, outline } => {
+                            if let Some(svg) = &outline.svg_glyph {
+                                let viewport = svg.font_em_box.unwrap_or(*bbox);
+                                let width = (viewport.width * f64::from(scale)).ceil();
+                                let height = (viewport.height * f64::from(scale)).ceil();
+                                let raster = (width * height * 4.0) as usize;
+                                // A font em-box can exceed the page. A Picture
+                                // retains its prepared raster even if the glyph
+                                // cache rejects that same oversized object.
+                                bytes = bytes.saturating_add(raster);
+                            }
+                            None
+                        }
                         PaintOp::Image {
                             bbox,
                             image,

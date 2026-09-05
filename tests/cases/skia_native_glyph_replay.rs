@@ -911,3 +911,20 @@ fn native_cache_inherited_replay_hints_change_sampling_without_stale_pictures() 
     fast.profile = RenderProfile::FastPreview;
     assert_eq!(grays(&cached_render(&renderer, &fast, 1.0)), 0);
 }
+
+#[test]
+fn native_cache_picture_budget_includes_oversized_font_svg_viewport() {
+    let mut tree = svg_tree("<svg><path fill=\"#0000ff\" d=\"M10 20H40V50H10Z\"/></svg>");
+    outline_mut(&mut tree)
+        .svg_glyph
+        .as_mut()
+        .unwrap()
+        .font_em_box = Some(BoundingBox::new(10.0, 10.0, 512.0, 512.0));
+    let tree = static_tree(tree);
+    let renderer = SkiaLayerRenderer::new().with_cache_limits(16, 1024 * 1024);
+    cached_render(&renderer, &tree, 1.0);
+    let stats = renderer.cache_stats();
+    assert_eq!(stats.glyphs.entries, 0);
+    assert_eq!(stats.pictures.entries, 0);
+    assert!(stats.glyphs.skipped_oversized > 0 && stats.pictures.skipped_oversized > 0);
+}
