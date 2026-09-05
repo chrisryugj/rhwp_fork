@@ -10,6 +10,7 @@ mod glyph_replay;
 mod image_conv;
 mod line_replay;
 mod renderer;
+mod replay_policy;
 mod text_replay;
 
 pub use cache::{NativeSkiaCacheStats, NativeSkiaCacheUsage};

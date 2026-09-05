@@ -867,3 +867,47 @@ fn native_cache_eviction_oversize_clear_and_font_inventory_refresh_are_bounded()
     assert!(tiny.cache_stats().pictures.skipped_oversized > 0);
     assert!(tiny.cache_stats().glyphs.skipped_oversized > 0);
 }
+
+#[test]
+fn native_cache_inherited_replay_hints_change_sampling_without_stale_pictures() {
+    use rhwp::model::image::ImageEffect;
+    let mut encoded = Cursor::new(Vec::new());
+    image::RgbaImage::from_fn(2, 2, |x, _| {
+        let value = if x == 0 { 0 } else { 255 };
+        image::Rgba([value, value, value, 255])
+    })
+    .write_to(&mut encoded, image::ImageFormat::Png)
+    .unwrap();
+    let base = static_tree(image_cache_tree(encoded.into_inner(), ImageEffect::RealPic));
+    let renderer = SkiaLayerRenderer::new();
+    let screen = cached_render(&renderer, &base, 1.0);
+    let grays = |image: &image::RgbaImage| {
+        image
+            .enumerate_pixels()
+            .filter(|(x, y, pixel)| {
+                (11..39).contains(x) && (11..39).contains(y) && pixel[0] > 0 && pixel[0] < 255
+            })
+            .count()
+    };
+    assert!(grays(&screen) > 0);
+    let mut nearest = base.clone();
+    nearest.root = LayerNode::group(
+        nearest.root.bounds,
+        None,
+        vec![nearest.root],
+        CacheHint::PreferRaster,
+        GroupKind::Generic,
+    );
+    let before = renderer.cache_stats().pictures.misses;
+    let nearest_pixels = cached_render(&renderer, &nearest, 1.0);
+    assert_eq!(grays(&nearest_pixels), 0);
+    assert!(
+        renderer.cache_stats().pictures.misses > before,
+        "ancestor hint enters the static key"
+    );
+    assert_same_pixels(cached_render(&renderer, &nearest, 1.0), nearest_pixels);
+    assert_same_pixels(cached_render(&renderer, &base, 1.0), screen);
+    let mut fast = base;
+    fast.profile = RenderProfile::FastPreview;
+    assert_eq!(grays(&cached_render(&renderer, &fast, 1.0)), 0);
+}

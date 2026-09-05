@@ -115,11 +115,12 @@ enum DrawContent {
         image: Image,
         destination: Rect,
         sampling: SamplingOptions,
+        respect_profile_sampling: bool,
     },
 }
 
 impl PreparedGlyph {
-    pub fn draw(&self, canvas: &Canvas) {
+    pub fn draw(&self, canvas: &Canvas, antialias: bool, sampling: SamplingOptions) {
         for draw in &self.draws {
             canvas.save();
             for clip in &draw.clips {
@@ -128,34 +129,35 @@ impl PreparedGlyph {
             for transform in &draw.transforms {
                 canvas.concat(transform);
             }
+            let mut paint = draw.paint.clone();
+            paint.set_anti_alias(antialias);
             match &draw.content {
                 DrawContent::Glyphs {
                     font,
                     glyphs,
                     positions,
                 } => {
-                    canvas.draw_glyphs_at(
-                        glyphs,
-                        positions.as_slice(),
-                        (0.0, 0.0),
-                        font,
-                        &draw.paint,
-                    );
+                    canvas.draw_glyphs_at(glyphs, positions.as_slice(), (0.0, 0.0), font, &paint);
                 }
                 DrawContent::Path(path) => {
-                    canvas.draw_path(path, &draw.paint);
+                    canvas.draw_path(path, &paint);
                 }
                 DrawContent::Image {
                     image,
                     destination,
-                    sampling,
+                    sampling: explicit_sampling,
+                    respect_profile_sampling,
                 } => {
                     canvas.draw_image_rect_with_sampling_options(
                         image,
                         None,
                         destination,
-                        *sampling,
-                        &draw.paint,
+                        if *respect_profile_sampling {
+                            sampling
+                        } else {
+                            *explicit_sampling
+                        },
+                        &paint,
                     );
                 }
             }
@@ -878,6 +880,7 @@ pub(super) fn prepare_glyph_outline(
                         },
                         MipmapMode::None,
                     ),
+                    respect_profile_sampling: payload.filtering == BitmapGlyphFiltering::Linear,
                 },
             });
         }
@@ -900,6 +903,7 @@ pub(super) fn prepare_glyph_outline(
                     image,
                     destination: drawable_rect(viewport)?,
                     sampling: SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
+                    respect_profile_sampling: true,
                 },
             });
         }

@@ -39,7 +39,7 @@ use super::glyph_replay::{
     construct_glyph_font, finite_scalar, glyph_run_minimum_byte_cost, prepare_glyph_outline,
     GlyphPreparationBudget, PreparedGlyph,
 };
-use super::image_conv::{draw_image_bytes, draw_svg_fragment, ImageResourceCache, ImageSampling};
+use super::image_conv::{draw_image_bytes, draw_svg_fragment, ImageResourceCache};
 use super::line_replay::draw_line;
 use super::text_replay::SkiaTextReplay;
 
@@ -864,6 +864,7 @@ impl SkiaLayerRenderer {
     ) -> LayerRenderResult<()> {
         let active_layer = node.layer.or(inherited_layer);
         let clip_enabled = output_options.clip_enabled;
+        let antialias = cache_context.policy.antialias();
         let apply_dash = |paint: &mut Paint, dash: StrokeDash| {
             let base_width = paint.stroke_width().max(1.0);
             let intervals: Option<[f32; 6]> = match dash {
@@ -886,7 +887,7 @@ impl SkiaLayerRenderer {
         };
         let make_stroke_paint = |style: &ShapeStyle| -> Option<Paint> {
             let mut paint = Paint::default();
-            paint.set_anti_alias(true);
+            paint.set_anti_alias(antialias);
             paint.set_style(paint::Style::Stroke);
             paint.set_stroke_width(if style.stroke_width > 0.0 {
                 style.stroke_width as f32
@@ -899,7 +900,7 @@ impl SkiaLayerRenderer {
         };
         let make_line_paint = |style: &LineStyle| {
             let mut paint = Paint::default();
-            paint.set_anti_alias(true);
+            paint.set_anti_alias(antialias);
             paint.set_style(paint::Style::Stroke);
             paint.set_stroke_width(if style.width > 0.0 {
                 style.width as f32
@@ -967,7 +968,7 @@ impl SkiaLayerRenderer {
                 effect,
                 brightness,
                 contrast,
-                ImageSampling::linear(),
+                cache_context.policy.image_sampling(),
             )
         };
         let equation_fonts = EquationFonts {
@@ -1009,6 +1010,7 @@ impl SkiaLayerRenderer {
                 cache_hint,
                 ..
             } => {
+                let child_context = cache_context.with_hint(*cache_hint);
                 let render_children = |target: &Canvas, next_id: &mut u32| {
                     for child in children {
                         self.render_node(
@@ -1021,7 +1023,7 @@ impl SkiaLayerRenderer {
                             next_id,
                             fallback_raster_scale,
                             strict_resource_failures,
-                            cache_context,
+                            &child_context,
                         )?;
                     }
                     Ok::<(), HwpError>(())
@@ -1039,6 +1041,7 @@ impl SkiaLayerRenderer {
                         active_layer,
                         *next_text_source_id,
                         current_matrix,
+                        child_context.policy,
                     ))
                 });
                 let cached = cache_key.and_then(|key| self.picture_cache.borrow_mut().get(key));
@@ -1104,7 +1107,7 @@ impl SkiaLayerRenderer {
                         clip.height as f32,
                     ),
                     None,
-                    Some(true),
+                    Some(antialias),
                 );
                 let result = self.render_node(
                     canvas,
@@ -1247,7 +1250,7 @@ impl SkiaLayerRenderer {
                                     ..Default::default()
                                 },
                                 background.gradient.as_deref(),
-                                true,
+                                antialias,
                             ) {
                                 canvas.draw_rect(rect, &paint);
                             }
@@ -1405,7 +1408,11 @@ impl SkiaLayerRenderer {
                             // fallback was suppressed. Drawing cannot re-resolve
                             // a different face or re-decode a failed resource.
                             if let Some(prepared) = prepared_glyphs.get(&op_index) {
-                                prepared.draw(canvas);
+                                prepared.draw(
+                                    canvas,
+                                    !matches!(op, PaintOp::GlyphOutline { .. }) || antialias,
+                                    cache_context.policy.image_sampling().options(),
+                                );
                             }
                         }
                         PaintOp::FootnoteMarker { bbox, marker } => {
@@ -1447,7 +1454,7 @@ impl SkiaLayerRenderer {
                             if line.transform.has_transform() {
                                 open_shape_transform(line.transform, bbox);
                             }
-                            draw_line(canvas, line, &make_line_paint(&line.style), true);
+                            draw_line(canvas, line, &make_line_paint(&line.style), antialias);
                             draw_arrow_heads(
                                 canvas,
                                 &crate::renderer::arrow::line_heads(
@@ -1455,6 +1462,7 @@ impl SkiaLayerRenderer {
                                     &line.style,
                                 ),
                                 &line.style,
+                                antialias,
                             );
                             if line.transform.has_transform() {
                                 canvas.restore();
@@ -1470,9 +1478,12 @@ impl SkiaLayerRenderer {
                                 bbox.width as f32,
                                 bbox.height as f32,
                             );
-                            if let Some(fill) =
-                                shape_fill(sk_rect, &rect.style, rect.gradient.as_deref(), true)
-                            {
+                            if let Some(fill) = shape_fill(
+                                sk_rect,
+                                &rect.style,
+                                rect.gradient.as_deref(),
+                                antialias,
+                            ) {
                                 if rect.corner_radius > 0.0 {
                                     canvas.draw_round_rect(
                                         sk_rect,
@@ -1510,9 +1521,12 @@ impl SkiaLayerRenderer {
                                 bbox.width as f32,
                                 bbox.height as f32,
                             );
-                            if let Some(fill) =
-                                shape_fill(oval, &ellipse.style, ellipse.gradient.as_deref(), true)
-                            {
+                            if let Some(fill) = shape_fill(
+                                oval,
+                                &ellipse.style,
+                                ellipse.gradient.as_deref(),
+                                antialias,
+                            ) {
                                 canvas.draw_oval(oval, &fill);
                             }
                             if let Some(stroke) = make_stroke_paint(&ellipse.style) {
@@ -1586,7 +1600,7 @@ impl SkiaLayerRenderer {
                                 ),
                                 &path.style,
                                 path.gradient.as_deref(),
-                                true,
+                                antialias,
                             ) {
                                 canvas.draw_path(&sk_path, &fill);
                             }
@@ -1598,6 +1612,7 @@ impl SkiaLayerRenderer {
                                     canvas,
                                     &crate::renderer::arrow::connector_heads(path),
                                     style,
+                                    antialias,
                                 );
                             }
                             if path.transform.has_transform() {
@@ -1730,7 +1745,7 @@ impl SkiaLayerRenderer {
                                 bbox.y as f32,
                                 bbox.width as f32,
                                 bbox.height as f32,
-                                ImageSampling::linear(),
+                                cache_context.policy.image_sampling(),
                                 fallback_raster_scale,
                             ) {
                                 if strict_resource_failures {
@@ -1905,6 +1920,7 @@ fn draw_arrow_heads(
     canvas: &Canvas,
     heads: &[crate::renderer::arrow::ArrowHead],
     style: &LineStyle,
+    antialias: bool,
 ) {
     for head in heads {
         let mut builder = PathBuilder::new();
@@ -1931,7 +1947,7 @@ fn draw_arrow_heads(
         }
         let path = builder.detach();
         let mut fill = Paint::default();
-        fill.set_anti_alias(true);
+        fill.set_anti_alias(antialias);
         fill.set_color(if head.filled {
             colorref_to_skia(style.color, 1.0)
         } else {
@@ -1940,7 +1956,7 @@ fn draw_arrow_heads(
         canvas.draw_path(&path, &fill);
         if !head.filled {
             let mut outline = Paint::default();
-            outline.set_anti_alias(true);
+            outline.set_anti_alias(antialias);
             outline.set_style(paint::Style::Stroke);
             outline.set_color(colorref_to_skia(style.color, 1.0));
             outline.set_stroke_width((style.width * 0.3).max(0.5) as f32);

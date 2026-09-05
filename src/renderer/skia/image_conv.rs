@@ -31,6 +31,20 @@ pub struct ImageSampling {
 }
 
 impl ImageSampling {
+    pub(super) fn nearest() -> Self {
+        Self {
+            filter_mode: FilterMode::Nearest,
+            mipmap_mode: MipmapMode::None,
+        }
+    }
+
+    pub(super) fn linear_mipmap() -> Self {
+        Self {
+            filter_mode: FilterMode::Linear,
+            mipmap_mode: MipmapMode::Linear,
+        }
+    }
+
     pub fn linear() -> Self {
         Self {
             filter_mode: FilterMode::Linear,
@@ -38,7 +52,7 @@ impl ImageSampling {
         }
     }
 
-    fn options(self) -> SamplingOptions {
+    pub(super) fn options(self) -> SamplingOptions {
         SamplingOptions::new(self.filter_mode, self.mipmap_mode)
     }
 }

@@ -192,3 +192,40 @@ fn native_shapes_replay_connector_heads_along_curve_tangents() {
     assert!(plain != image);
     assert!(image.get_pixel(62, 26)[3] > plain.get_pixel(62, 26)[3]);
 }
+
+#[test]
+fn native_shapes_fast_raster_hint_disables_only_its_subtree_antialiasing() {
+    use rhwp::paint::{CacheHint, GroupKind, RenderProfile};
+    use rhwp::renderer::render_tree::PathNode;
+    use rhwp::renderer::PathCommand;
+    let mut tree = tree(PaintOp::path(
+        BoundingBox::new(10.0, 10.0, 60.0, 30.0),
+        PathNode::new(
+            vec![
+                PathCommand::MoveTo(10.25, 10.25),
+                PathCommand::LineTo(70.25, 30.25),
+                PathCommand::LineTo(10.25, 40.25),
+                PathCommand::ClosePath,
+            ],
+            ShapeStyle {
+                fill_color: Some(0),
+                ..Default::default()
+            },
+            None,
+        ),
+    ));
+    tree.profile = RenderProfile::FastPreview;
+    let smooth = pixels(&tree);
+    assert!(smooth.pixels().any(|pixel| pixel[3] > 0 && pixel[3] < 255));
+    tree.root = LayerNode::group(
+        tree.root.bounds,
+        None,
+        vec![tree.root],
+        CacheHint::PreferRaster,
+        GroupKind::Generic,
+    );
+    let fast = pixels(&tree);
+    assert!(!fast.pixels().any(|pixel| pixel[3] > 0 && pixel[3] < 255));
+    tree.profile = RenderProfile::Screen;
+    assert_eq!(pixels(&tree).as_raw(), smooth.as_raw());
+}

@@ -3,6 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Debug, Write};
 
+use super::replay_policy::ReplayPolicy;
 use crate::paint::{
     LayerNode, LayerNodeKind, PageLayerTree, PaintOp, ResourceArena, LAYER_TREE_SCHEMA,
 };
@@ -199,10 +200,12 @@ fn decoded_resource_cost(bytes: &[u8], svg_estimate: usize) -> usize {
     bytes.len().saturating_add(raster_bytes)
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct ReplayCacheContext {
     pub seed: Option<CacheKey>,
     pub page_bounds: skia_safe::Rect,
     pub retained_resource_estimate: usize,
+    pub policy: ReplayPolicy,
 }
 
 impl ReplayCacheContext {
@@ -231,7 +234,13 @@ impl ReplayCacheContext {
             retained_resource_estimate: resources
                 .map_or(usize::MAX, |(_, bytes)| bytes)
                 .saturating_add(svg_estimate),
+            policy: ReplayPolicy::new(tree.profile),
         }
+    }
+
+    pub fn with_hint(mut self, hint: crate::paint::CacheHint) -> Self {
+        self.policy = self.policy.with_hint(hint);
+        self
     }
 }
 
