@@ -22,6 +22,7 @@ use super::renderer::colorref_to_skia;
 pub(super) struct SkiaTextReplay<'a> {
     pub(super) canvas: &'a Canvas,
     pub(super) font_mgr: &'a FontMgr,
+    pub(super) text_shaper: &'a std::cell::OnceCell<Option<skia_safe::Shaper>>,
     pub(super) custom_typefaces: &'a TypefaceCatalog,
     pub(super) bundled_typefaces: &'a TypefaceCatalog,
     pub(super) system_families: &'a SystemFontFamilies,
@@ -305,6 +306,16 @@ impl SkiaTextReplay<'_> {
                     (fs as f32, r as f32)
                 };
                 let has_ratio = (ratio - 1.0).abs() > 0.01;
+                let shaped_spans = if suppress_glyphs {
+                    Vec::new()
+                } else {
+                    super::text_shaping::prepare_shaped_spans(
+                        &clusters,
+                        self.text_shaper,
+                        self.font_mgr,
+                        |text| font_for_text(text, font_size),
+                    )
+                };
                 if !suppress_glyphs
                     && crate::model::color::char_shade(style.shade_color).is_some()
                     && text_width > 0.0
@@ -406,8 +417,31 @@ impl SkiaTextReplay<'_> {
                     } else {
                         text_paint.set_style(paint::Style::Fill);
                     }
-                    for (char_idx, cluster) in clusters.iter() {
-                        // 공백의 저장 전진폭·장식은 유지하되 글꼴의 잘못된 NBSP 윤곽선은 그리지 않는다.
+                    let mut spans = shaped_spans.iter().peekable();
+                    for (cluster_index, (char_idx, cluster)) in clusters.iter().enumerate() {
+                        if spans.peek().is_some_and(|span| cluster_index >= span.end) {
+                            spans.next();
+                        }
+                        if let Some(span) = spans.peek().filter(|span| cluster_index >= span.start)
+                        {
+                            if cluster_index == span.start {
+                                // Keep the producer's start position and the next
+                                // cluster's layout anchor, even when GSUB changes
+                                // the number/width/order of glyphs inside this span.
+                                let char_x = bbox.x as f32
+                                    + char_positions.get(*char_idx).copied().unwrap_or(0.0) as f32
+                                    + dx;
+                                canvas.save();
+                                canvas.translate((char_x, y as f32 + dy));
+                                if has_ratio {
+                                    canvas.scale((ratio, 1.0));
+                                }
+                                canvas.draw_text_blob(&span.blob, (0.0, 0.0), &text_paint);
+                                canvas.restore();
+                            }
+                            continue;
+                        }
+                        // Preserve advances and decorations without drawing whitespace glyph outlines.
                         if cluster.chars().all(char::is_whitespace) {
                             continue;
                         }

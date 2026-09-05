@@ -14,6 +14,7 @@ mod line_replay;
 mod renderer;
 mod replay_policy;
 mod text_replay;
+mod text_shaping;
 
 pub use cache::{NativeSkiaCacheStats, NativeSkiaCacheUsage};
 pub use renderer::{

@@ -99,6 +99,19 @@ fn render(renderer: &SkiaLayerRenderer, tree: &PageLayerTree) -> image::RgbaImag
     image::load_from_memory(&png).unwrap().to_rgba8()
 }
 
+fn text_run_mut(tree: &mut PageLayerTree) -> &mut TextRunNode {
+    let rhwp::paint::LayerNodeKind::Group { children, .. } = &mut tree.root.kind else {
+        unreachable!()
+    };
+    let rhwp::paint::LayerNodeKind::Leaf { ops } = &mut children[0].kind else {
+        unreachable!()
+    };
+    let PaintOp::TextRun { run, .. } = &mut ops[0] else {
+        unreachable!()
+    };
+    run
+}
+
 fn assert_same_pixels(actual: &image::RgbaImage, expected: &image::RgbaImage) {
     assert_eq!(actual.dimensions(), expected.dimensions());
     assert!(
@@ -278,4 +291,60 @@ fn native_legacy_font_path_refresh_replaces_catalog_and_recorded_choices() {
     assert!(refreshed != first_pixels);
     let fresh = SkiaLayerRenderer::new().with_font_paths(&[second]);
     assert_same_pixels(&refreshed, &render(&fresh, &tree));
+}
+
+#[test]
+fn native_legacy_combining_shaping_preserves_layout_anchors_and_condensed_ratio() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ttfs/opensource/NotoSansKR-Regular.ttf");
+    let bytes = std::fs::read(&path).unwrap();
+    let manager = skia_safe::FontMgr::default();
+    let face = manager.new_from_data(&bytes, None).unwrap();
+    let shaper = skia_safe::Shaper::new_shape_then_wrap(manager).unwrap();
+    let renderer = SkiaLayerRenderer::new().with_font_paths(&[path]);
+    for (style_ratio, draw_size, draw_ratio) in [(1.0, 40.0, 1.0), (0.64, 32.0, 0.8)] {
+        let mut tree = text_tree("A\u{301} B", "Noto Sans KR", false, false);
+        let run = text_run_mut(&mut tree);
+        run.style.ratio = style_ratio;
+        run.layout_positions = Some(vec![0.0, 30.0, 30.0, 70.0, 95.0]);
+        let mut font = skia_safe::Font::new(face.clone(), draw_size);
+        font.set_edging(skia_safe::font::Edging::AntiAlias);
+        let blob = shaper
+            .shape_text_blob("A\u{301}", &font, true, 1_000_000.0, (0.0, 0.0))
+            .unwrap()
+            .0;
+        let reference = |shaped: bool| {
+            let mut surface = skia_safe::surfaces::raster_n32_premul((100, 70)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::TRANSPARENT);
+            let mut paint = skia_safe::Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_color(skia_safe::Color::BLACK);
+            for (text, x) in [("A\u{301}", 10.0), ("B", 80.0)] {
+                canvas.save();
+                canvas.translate((x, 45.0));
+                canvas.scale((draw_ratio, 1.0));
+                if shaped && text != "B" {
+                    canvas.draw_text_blob(&blob, (0.0, 0.0), &paint);
+                } else {
+                    canvas.draw_str(text, (0.0, 0.0), &font, &paint);
+                }
+                canvas.restore();
+            }
+            let png = skia_safe::png_encoder::encode_image(
+                None::<&mut skia_safe::gpu::DirectContext>,
+                &surface.image_snapshot(),
+                &Default::default(),
+            )
+            .unwrap();
+            image::load_from_memory(png.as_bytes()).unwrap().to_rgba8()
+        };
+        let expected = reference(true);
+        assert!(
+            expected != reference(false),
+            "fixture must distinguish shaped replay"
+        );
+        assert_same_pixels(&render(&renderer, &tree), &expected);
+        assert_same_pixels(&render(&renderer, &tree), &expected);
+    }
 }

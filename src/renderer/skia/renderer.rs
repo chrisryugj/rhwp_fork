@@ -1,8 +1,8 @@
 use skia_safe::{
     paint, png_encoder, surfaces, Canvas, Color, Font, FontMgr, FontStyle, Matrix, Paint,
-    PathBuilder, PathEffect, Picture, PictureRecorder, RRect, Rect,
+    PathBuilder, PathEffect, Picture, PictureRecorder, RRect, Rect, Shaper,
 };
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -394,6 +394,7 @@ struct CachedPicture {
 
 pub struct SkiaLayerRenderer {
     font_mgr: FontMgr,
+    text_shaper: OnceCell<Option<Shaper>>,
     /// 사용자 지정 경로의 family별 TTC face·스타일 catalog.
     /// SVG 의 `--font-path` 와 같은 패턴으로 ttfs 디렉토리의 한컴 전용 폰트 (HY견명조 등) 도 사용 가능.
     custom_typefaces: TypefaceCatalog,
@@ -427,6 +428,7 @@ impl SkiaLayerRenderer {
         }
         SKIA_FONT_BASE.with(|(font_mgr, system_families)| Self {
             font_mgr: font_mgr.clone(),
+            text_shaper: OnceCell::new(),
             custom_typefaces: TypefaceCatalog::default(),
             bundled_typefaces: TypefaceCatalog::default(),
             system_families: system_families.clone(),
@@ -949,6 +951,7 @@ impl SkiaLayerRenderer {
         let text_replay = SkiaTextReplay {
             canvas,
             font_mgr: &self.font_mgr,
+            text_shaper: &self.text_shaper,
             custom_typefaces: &self.custom_typefaces,
             bundled_typefaces: &self.bundled_typefaces,
             system_families: &self.system_families,
