@@ -927,4 +927,20 @@ fn native_cache_picture_budget_includes_oversized_font_svg_viewport() {
     assert_eq!(stats.glyphs.entries, 0);
     assert_eq!(stats.pictures.entries, 0);
     assert!(stats.glyphs.skipped_oversized > 0 && stats.pictures.skipped_oversized > 0);
+
+    let mut unrepresentable = svg_tree("<svg><path d=\"M10 20H40V50H10Z\"/></svg>");
+    outline_mut(&mut unrepresentable)
+        .svg_glyph
+        .as_mut()
+        .unwrap()
+        .font_em_box = Some(BoundingBox::new(10.0, 10.0, f64::MAX, 1.0));
+    let unlimited = SkiaLayerRenderer::new().with_cache_limits(8, usize::MAX);
+    assert_same_pixels(
+        cached_render(&unlimited, &static_tree(unrepresentable), 1.0),
+        render(&fallback_tree()),
+    );
+    // Even a caller-selected usize::MAX limit must evict a saturated estimate
+    // before adding a second entry rather than overflow accounting arithmetic.
+    cached_render(&unlimited, &static_tree(glyph_tree(TTF, 0, 'A')), 1.0);
+    assert!(unlimited.cache_stats().pictures.evictions > 0);
 }

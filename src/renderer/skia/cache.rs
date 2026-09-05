@@ -75,7 +75,11 @@ impl<V: Clone> BoundedCache<V> {
             self.order.retain(|entry| *entry != key);
         }
         while self.entries.len() >= self.max_entries
-            || self.usage.approximate_bytes.saturating_add(bytes) > self.max_bytes
+            || self
+                .usage
+                .approximate_bytes
+                .checked_add(bytes)
+                .is_none_or(|total| total > self.max_bytes)
         {
             let Some(oldest) = self.order.pop_front() else {
                 break;
