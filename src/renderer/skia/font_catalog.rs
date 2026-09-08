@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use skia_safe::{FontMgr, FontStyle, Typeface};
+use skia_safe::{Data, FontMgr, FontStyle, Typeface};
 
 const MAX_FONT_FILES: usize = 256;
 const MAX_FONT_FILE_BYTES: u64 = 32 * 1024 * 1024;
@@ -74,15 +74,17 @@ impl TypefaceCatalog {
                     .unwrap_or(1)
                     .min(MAX_COLLECTION_FACES);
                 for face_index in 0..faces {
-                    // new_from_data owns a copy of the complete collection for
-                    // each face. Account retained copies, not just input files.
+                    // Each face owns a fresh Data copy of the complete collection.
+                    // Account retained copies, not just input files.
                     if retained_bytes.saturating_add(bytes.len() as u64) > MAX_FONT_TOTAL_BYTES {
                         break;
                     }
                     if ttf_parser::Face::parse(&bytes, face_index).is_err() {
                         continue;
                     }
-                    if let Some(face) = font_mgr.new_from_data(&bytes, Some(face_index as usize)) {
+                    if let Some(face) =
+                        font_mgr.new_from_data(Data::new_copy(&bytes), Some(face_index))
+                    {
                         retained_bytes += bytes.len() as u64;
                         catalog
                             .families

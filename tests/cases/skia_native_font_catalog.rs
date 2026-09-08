@@ -158,7 +158,7 @@ fn styled_font(weight: u16, width: u16, italic: bool, half_size: bool) -> Vec<u8
     let angle = if italic { -12i32 * 65536 } else { 0 };
     bytes[post + 4..post + 8].copy_from_slice(&angle.to_be_bytes());
     let face = skia_safe::FontMgr::default()
-        .new_from_data(&bytes, None)
+        .new_from_data(skia_safe::Data::new_copy(&bytes), None)
         .expect("edited fixture must remain a usable typeface");
     let actual = face.font_style();
     assert_eq!(*actual.weight(), i32::from(weight));
@@ -179,11 +179,11 @@ fn native_legacy_text_catalog_loads_nonzero_ttc_faces_from_file_paths() {
     let pixels = render(&renderer, &tree);
     assert!(pixels.pixels().any(|pixel| pixel[3] > 64 && pixel[0] < 128));
     let native = skia_safe::FontMgr::default()
-        .new_from_data(TTC, Some(1))
+        .new_from_data(skia_safe::Data::new_copy(TTC), Some(1))
         .unwrap();
     assert_ne!(native.unichar_to_glyph(0xe104), 0);
     let first = skia_safe::FontMgr::default()
-        .new_from_data(TTC, Some(0))
+        .new_from_data(skia_safe::Data::new_copy(TTC), Some(0))
         .unwrap();
     assert_eq!(first.unichar_to_glyph(0xe104), 0);
     assert!(tree.resources.font_resources().faces.is_empty());
@@ -299,7 +299,9 @@ fn native_legacy_combining_shaping_preserves_layout_anchors_and_condensed_ratio(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ttfs/opensource/NotoSansKR-Regular.ttf");
     let bytes = std::fs::read(&path).unwrap();
     let manager = skia_safe::FontMgr::default();
-    let face = manager.new_from_data(&bytes, None).unwrap();
+    let face = manager
+        .new_from_data(skia_safe::Data::new_copy(&bytes), None)
+        .unwrap();
     let shaper = skia_safe::Shaper::new_shape_then_wrap(manager).unwrap();
     let renderer = SkiaLayerRenderer::new().with_font_paths(&[path]);
     for (style_ratio, draw_size, draw_ratio) in [(1.0, 40.0, 1.0), (0.64, 32.0, 0.8)] {
@@ -410,7 +412,7 @@ fn native_equation_text_uses_the_current_custom_catalog() {
         }
         assert_eq!(
             skia_safe::FontMgr::default()
-                .new_from_data(&bytes, None)
+                .new_from_data(skia_safe::Data::new_copy(&bytes), None)
                 .unwrap()
                 .family_name()
                 .trim(),
