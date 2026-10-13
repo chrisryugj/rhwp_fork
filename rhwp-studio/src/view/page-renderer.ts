@@ -404,6 +404,13 @@ export class PageRenderer {
     for (const element of elements) parent.appendChild(element);
   }
 
+  prepareCanvasKitPageResources(pageIdx: number): Promise<void> | null {
+    if (this.backend !== 'canvaskit' || !this.canvaskitRenderer) return null;
+    return this.canvaskitRenderer.preparePageResources(
+      this.wasm.getPageLayerTreeObject(pageIdx, this.renderProfile),
+    );
+  }
+
   private renderPageCanvasKit(
     pageIdx: number,
     canvas: HTMLCanvasElement,

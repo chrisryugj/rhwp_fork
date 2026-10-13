@@ -1114,6 +1114,16 @@ export interface LayerPageBackgroundOp {
   borderColor?: string;
   borderWidth?: number;
   gradient?: LayerGradientFill;
+  image?: {
+    fillMode?: string;
+    base64?: string;
+    resourceId?: number;
+    effect?: string;
+    brightness?: number;
+    contrast?: number;
+    opacity?: number;
+    watermark?: boolean;
+  };
 }
 
 export interface LayerTextStyle {
@@ -1344,6 +1354,7 @@ export interface LayerEquationOp {
   type: 'equation';
   bbox: LayerBounds;
   svgContent?: string;
+  svgResourceId?: number;
   color?: string;
   fontSize?: number;
   layoutBox?: LayerEquationLayoutBox;
