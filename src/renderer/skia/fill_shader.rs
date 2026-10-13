@@ -87,39 +87,20 @@ fn make_gradient_shader(info: &GradientFillInfo, bounds: Rect) -> Option<skia_sa
 }
 
 fn angle_to_gradient_points(angle: i16, bounds: Rect) -> (Point, Point) {
-    let x = bounds.left;
-    let y = bounds.top;
-    let width = bounds.width();
-    let height = bounds.height();
-    let angle = ((angle % 360 + 360) % 360) as f32;
-
-    match angle as i32 {
-        0 => (Point::new(x, y), Point::new(x, y + height)),
-        45 => (Point::new(x, y), Point::new(x + width, y + height)),
-        90 => (Point::new(x, y), Point::new(x + width, y)),
-        135 => (Point::new(x, y + height), Point::new(x + width, y)),
-        180 => (Point::new(x, y + height), Point::new(x, y)),
-        225 => (Point::new(x + width, y + height), Point::new(x, y)),
-        270 => (Point::new(x + width, y), Point::new(x, y)),
-        315 => (Point::new(x + width, y), Point::new(x, y + height)),
-        _ => {
-            let radians = angle.to_radians();
-            let sin_angle = radians.sin();
-            let cos_angle = radians.cos();
-            let center_x = x + width / 2.0;
-            let center_y = y + height / 2.0;
-            (
-                Point::new(
-                    center_x - sin_angle * width / 2.0,
-                    center_y - cos_angle * height / 2.0,
-                ),
-                Point::new(
-                    center_x + sin_angle * width / 2.0,
-                    center_y + cos_angle * height / 2.0,
-                ),
-            )
-        }
-    }
+    // Keep the physical gradient axis shared with SVG/WebCanvas. Scaling an
+    // angle independently by the box width and height changes non-square
+    // gradients, and the old cardinal lookup reversed the vertical axis.
+    let (x1, y1, x2, y2) = crate::renderer::linear_gradient_axis(
+        angle,
+        f64::from(bounds.left),
+        f64::from(bounds.top),
+        f64::from(bounds.width()),
+        f64::from(bounds.height()),
+    );
+    (
+        Point::new(x1 as f32, y1 as f32),
+        Point::new(x2 as f32, y2 as f32),
+    )
 }
 
 fn make_pattern_shader(pattern: &PatternFillInfo) -> Option<skia_safe::Shader> {
