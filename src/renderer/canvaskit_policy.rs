@@ -1161,6 +1161,7 @@ pub fn analyze_canvaskit_replay_plan(
         TextVariantSelectionOptions {
             backend: VariantSelectionBackend::CanvasKitBrowser,
             prefer_strict_outline: true,
+            allow_colrv0_color_layers: true,
             allow_colrv1_stage1_color_graph: true,
             allow_bitmap_glyph: true,
             allow_svg_glyph: true,
@@ -1514,8 +1515,6 @@ impl CanvasKitReplayPlanBuilder {
                     Some("invalidGeometry")
                 } else if run.is_vertical {
                     Some("verticalText")
-                } else if run.rotation.abs() > f64::EPSILON {
-                    Some("rotatedText")
                 } else {
                     None
                 };
@@ -1544,8 +1543,6 @@ impl CanvasKitReplayPlanBuilder {
                     Some("visualItemLimitExceeded")
                 } else if !text_visual_geometry_is_valid(bbox, run, &display_text) {
                     Some("invalidGeometry")
-                } else if run.rotation.abs() > f64::EPSILON {
-                    Some("rotatedText")
                 } else if run.style.tab_leaders.iter().any(|leader| {
                     !leader.start_x.is_finite()
                         || !leader.end_x.is_finite()
@@ -1575,8 +1572,6 @@ impl CanvasKitReplayPlanBuilder {
                     Some("visualItemLimitExceeded")
                 } else if !text_visual_geometry_is_valid(bbox, run, &display_text) {
                     Some("invalidGeometry")
-                } else if run.rotation.abs() > f64::EPSILON {
-                    Some("rotatedText")
                 } else {
                     None
                 };
@@ -1620,20 +1615,43 @@ impl CanvasKitReplayPlanBuilder {
         path: String,
         background: &PageBackgroundNode,
     ) -> CanvasKitReplayItem {
-        if background.image.is_some() {
-            let mut item = self.transition_overlay_item(
-                path,
-                "pageBackground",
-                CanvasKitReplayFeature::RasterImage,
-            );
+        if let Some(image) = &background.image {
+            let (brightness, contrast) = image.display_brightness_contrast();
+            let supported = canvaskit_encoded_image_is_replayable(&image.data)
+                && (-100..=100).contains(&brightness)
+                && (-100..=100).contains(&contrast);
+            let mut item = if supported {
+                direct_item(path, "pageBackground", CanvasKitReplayFeature::RasterImage)
+            } else {
+                self.transition_overlay_item(
+                    path,
+                    "pageBackground",
+                    CanvasKitReplayFeature::RasterImage,
+                )
+            };
             item.detail = Some("imageFill".to_string());
             item
-        } else if background.gradient.is_some() {
-            let mut item = self.transition_overlay_item(
-                path,
-                "pageBackground",
-                CanvasKitReplayFeature::PageBackground,
-            );
+        } else if let Some(gradient) = &background.gradient {
+            let supported = (1..=4).contains(&gradient.gradient_type)
+                && (2..=4096).contains(&gradient.colors.len())
+                && gradient.positions.len() <= 4096
+                && gradient
+                    .positions
+                    .iter()
+                    .all(|position| position.is_finite());
+            let mut item = if supported {
+                direct_item(
+                    path,
+                    "pageBackground",
+                    CanvasKitReplayFeature::PageBackground,
+                )
+            } else {
+                self.transition_overlay_item(
+                    path,
+                    "pageBackground",
+                    CanvasKitReplayFeature::PageBackground,
+                )
+            };
             item.detail = Some("gradientFill".to_string());
             item
         } else {
@@ -2135,9 +2153,7 @@ fn image_can_replay_directly(image: &ImageNode, resolved: Option<&ResolvedImageP
     let payload_is_supported =
         image_payload_bytes(image, resolved).is_some_and(canvaskit_encoded_image_is_replayable);
     let effects_are_supported = resolved.is_some_and(|payload| payload.suppress_effects)
-        || (matches!(image.effect, ImageEffect::RealPic)
-            && image.brightness == 0
-            && image.contrast == 0);
+        || ((-100..=100).contains(&image.brightness) && (-100..=100).contains(&image.contrast));
     has_replayable_payload && payload_is_supported && effects_are_supported
 }
 
@@ -2533,7 +2549,7 @@ mod tests {
     }
 
     #[test]
-    fn image_replay_plan_reports_unimplemented_image_effects() {
+    fn image_replay_plan_reports_direct_image_effects() {
         let mut image = image_node(1);
         image.effect = ImageEffect::GrayScale;
         image.brightness = 10;
@@ -2543,7 +2559,7 @@ mod tests {
 
         let plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Default);
 
-        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::DirectRequired);
+        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::Direct);
         assert_eq!(
             plan.items[0].detail.as_deref(),
             Some("effect=grayScale;adjustment=brightness:10,contrast:-20")
@@ -2757,7 +2773,7 @@ mod tests {
         ]);
 
         let default_plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Default);
-        assert_eq!(default_plan.summary.direct_required_items, 2);
+        assert_eq!(default_plan.summary.direct_required_items, 1);
         assert_eq!(
             default_plan.items[0].feature,
             CanvasKitReplayFeature::RasterImage
@@ -2775,7 +2791,7 @@ mod tests {
         let compat_plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Compat);
         assert!(!compat_plan.hidden_canvas2d_overlay_allowed);
         assert!(compat_plan.direct_replay_required);
-        assert_eq!(compat_plan.summary.direct_required_items, 2);
+        assert_eq!(compat_plan.summary.direct_required_items, 1);
         assert_eq!(compat_plan.summary.compat_overlay_items, 0);
     }
 
@@ -2987,7 +3003,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_vertical_and_rotated_text_special_visuals_stay_fail_closed() {
+    fn malformed_and_vertical_special_visuals_fail_closed_while_rotation_is_direct() {
         let mut invalid_overlap = text_run("A");
         invalid_overlap.char_overlap = Some(CharOverlapInfo {
             border_type: 9,
@@ -3024,12 +3040,13 @@ mod tests {
         ]);
 
         let plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Default);
-        assert_eq!(plan.summary.direct_required_items, 6);
+        assert_eq!(plan.summary.direct_required_items, 3);
         assert_eq!(plan.items[0].detail.as_deref(), Some("invalidCharOverlap"));
         assert_eq!(plan.items[1].detail.as_deref(), Some("invalidTabLeader"));
         assert_eq!(plan.items[2].detail.as_deref(), Some("verticalText"));
         for item in &plan.items[3..] {
-            assert_eq!(item.detail.as_deref(), Some("rotatedText"));
+            assert_eq!(item.status, CanvasKitReplayStatus::Direct);
+            assert_eq!(item.detail, None);
         }
     }
 
