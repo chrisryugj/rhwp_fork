@@ -534,3 +534,18 @@ bitmap의 페이지 누적 예산을 decode 전에 확인하며, bitmap/SVG 자�
 별도 패치로 보존하고 시각 증거 확보 전에는 활성 회귀에 추가하지 않았다. 현재 확인은 rustfmt,
 신설 필드의 기존 생성자 정합성, 기존 producer JSON 필드·SVG depth·준비 예산 보존까지다.
 실제 빌드·출력 일치·성능 결과는 아직 없다.
+
+## P45/P47 통합 검토: gradient 자원 비용
+
+공유 DAG는 하나의 gradient leaf를 여러 번 준비할 수 있다. path 비용만 합산하면 shader가
+보유하는 색상·offset 배열이 64 MiB 준비 예산과 P47 cache 비용에서 빠진다. 예를 들어 두 leaf와
+`composite(n)=(n-1,n-2)`로 구성한 root16은 3193회 방문에 gradient leaf0를610회 재생한다.
+8192개의 RGBA-f32 색상과 f32 offset은 shader 배열만으로도 이 경우 약95 MiB를 차지한다.
+
+`gradient_stop_byte_cost(stop_count)`는 adapter의 color/offset 배열과 shader가 보유할
+배열을 함께 보수적으로 추정한다. shader에는 암묵적인 양 끝 stop 두 개의 여유를 더한다.
+이 값은 allocator 실측이 아니며, temporary 배열이 해제된 뒤에도 그 비용을 retained estimate에
+포함한다. linear/radial/sweep 모두 배열·shader를 만들기 전에 checked 연산으로 예약하며,
+실패하면 기존 `TextRun` fallback을 유지한다. P47 picture cache도 같은 helper의 expanded
+합계를 보유 추정에 포함해야 한다. 세 allocation 계약 검사는 버퍼 생성 없이 상한·반복 방문·
+overflow 거부를 검증하도록 추가했으며 rustfmt 외 실제 실행은 아직 하지 않았다.

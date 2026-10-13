@@ -502,6 +502,29 @@ fn resolved_color(color: &ResolvedColor, opacity: f64) -> Option<Color> {
     ))
 }
 
+/// Conservative stop-storage estimate shared by preparation and retained caches.
+/// Count both temporary adapter arrays and the shader-owned color/offset arrays;
+/// reserve two additional shader stops for implicit endpoints. This deliberately
+/// keeps the temporary cost in the retained estimate rather than understating it.
+pub(super) fn gradient_stop_byte_cost(stop_count: usize) -> Option<usize> {
+    if !(2..=MAX_PATH_COMMANDS).contains(&stop_count) {
+        return None;
+    }
+    let stop_bytes = std::mem::size_of::<Color4f>().checked_add(std::mem::size_of::<f32>())?;
+    let adapter_bytes = stop_count.checked_mul(stop_bytes)?;
+    let shader_bytes = stop_count.checked_add(2)?.checked_mul(stop_bytes)?;
+    adapter_bytes.checked_add(shader_bytes)
+}
+
+fn reserve_gradient_stop_bytes(byte_cost: &mut usize, stop_count: usize) -> Option<()> {
+    let total = byte_cost.checked_add(gradient_stop_byte_cost(stop_count)?)?;
+    if total > MAX_PREPARED_GLYPH_BYTES {
+        return None;
+    }
+    *byte_cost = total;
+    Some(())
+}
+
 fn gradient_stops(stops: &[crate::paint::ColorGradientStop]) -> Option<(Vec<Color4f>, Vec<f32>)> {
     if stops.len() < 2 || stops.len() > MAX_PATH_COMMANDS {
         return None;
@@ -702,6 +725,10 @@ pub(super) fn prepare_glyph_outline(
                             {
                                 return None;
                             }
+                            reserve_gradient_stop_bytes(
+                                &mut result.byte_cost,
+                                gradient.stops.len(),
+                            )?;
                             let (colors, stops) = gradient_stops(&gradient.stops)?;
                             let specification = Gradient::new(
                                 Colors::new(&colors, Some(&stops), TileMode::Clamp, None),
@@ -729,6 +756,10 @@ pub(super) fn prepare_glyph_outline(
                             {
                                 return None;
                             }
+                            reserve_gradient_stop_bytes(
+                                &mut result.byte_cost,
+                                gradient.stops.len(),
+                            )?;
                             let (colors, stops) = gradient_stops(&gradient.stops)?;
                             let specification = Gradient::new(
                                 Colors::new(&colors, Some(&stops), TileMode::Clamp, None),
@@ -760,6 +791,10 @@ pub(super) fn prepare_glyph_outline(
                             {
                                 return None;
                             }
+                            reserve_gradient_stop_bytes(
+                                &mut result.byte_cost,
+                                gradient.stops.len(),
+                            )?;
                             let (colors, stops) = gradient_stops(&gradient.stops)?;
                             let specification = Gradient::new(
                                 Colors::new(&colors, Some(&stops), TileMode::Clamp, None),
@@ -1005,5 +1040,56 @@ fn optional_matrix(transform: Option<LayerAffineTransform>) -> Option<Option<Mat
     match transform {
         Some(transform) => matrix(transform).map(Some),
         None => Some(None),
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::{gradient_stop_byte_cost, reserve_gradient_stop_bytes, MAX_PREPARED_GLYPH_BYTES};
+
+    #[test]
+    fn gradient_stop_storage_is_reserved_before_the_remaining_budget_is_exceeded() {
+        // 4096 RGBA-f32 colors plus f32 offsets alone occupy 80 KiB, before
+        // accounting for the adapter and implicit endpoints. A 64 KiB
+        // remaining allowance must reject this request without allocating.
+        let before = MAX_PREPARED_GLYPH_BYTES - 64 * 1024;
+        let mut bytes = before;
+        assert!(reserve_gradient_stop_bytes(&mut bytes, 4096).is_none());
+        assert_eq!(bytes, before);
+        assert!(reserve_gradient_stop_bytes(&mut bytes, 256).is_some());
+        assert!(bytes > before && bytes <= MAX_PREPARED_GLYPH_BYTES);
+    }
+
+    #[test]
+    fn shared_gradient_replay_cannot_hide_its_expanded_storage() {
+        // Composite(n) = (n-1, n-2), with two distinct leaves, gives 3193
+        // visits at root 16 and visits gradient leaf 0 610 times. This is
+        // inside the graph visit limit but 610 * 8192 * 20 bytes exceeds
+        // 64 MiB even for shader-owned RGBA colors and offsets alone.
+        let mut bytes = 0;
+        let mut accepted = 0;
+        for _ in 0..610 {
+            let before = bytes;
+            if reserve_gradient_stop_bytes(&mut bytes, 8192).is_none() {
+                assert_eq!(bytes, before);
+                break;
+            }
+            accepted += 1;
+        }
+        assert!(accepted > 0 && accepted < 610);
+        assert!(bytes <= MAX_PREPARED_GLYPH_BYTES);
+    }
+
+    #[test]
+    fn invalid_or_overflowing_gradient_reservations_do_not_change_the_budget() {
+        for stops in [0, 1, usize::MAX] {
+            assert!(gradient_stop_byte_cost(stops).is_none());
+            let mut bytes = 17;
+            assert!(reserve_gradient_stop_bytes(&mut bytes, stops).is_none());
+            assert_eq!(bytes, 17);
+        }
+        let mut bytes = usize::MAX;
+        assert!(reserve_gradient_stop_bytes(&mut bytes, 2).is_none());
+        assert_eq!(bytes, usize::MAX);
     }
 }
