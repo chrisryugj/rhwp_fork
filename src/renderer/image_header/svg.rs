@@ -47,10 +47,15 @@ pub(super) fn parse_header(bytes: &[u8]) -> Option<CanvasKitEncodedImageHeader> 
                     let attribute = attribute.ok()?;
                     let key = attribute.key.as_ref();
                     let local_key = key.rsplit(':').next()?.to_ascii_lowercase();
+                    // The browser's bounded static-image gate rejects XML
+                    // references before decoding; keep preflight equally strict.
+                    if attribute.value.contains('&') {
+                        return None;
+                    }
                     let value = quick_xml::escape::unescape(attribute.value.as_ref()).ok()?;
                     if local_key.starts_with("on")
                         || (local_key == "href" && !value.trim().starts_with('#'))
-                        || (key == "xml:base" && !value.is_empty())
+                        || key == "xml:base"
                         || !static_css_value(&value)
                     {
                         return None;
@@ -125,7 +130,7 @@ pub(super) fn parse_header(bytes: &[u8]) -> Option<CanvasKitEncodedImageHeader> 
 // fragment-local url() references are admitted; no fetches or stylesheet imports.
 fn static_css_value(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    if lower.contains('\\') || lower.contains("/*") || lower.contains('@') {
+    if lower.contains('\\') || lower.contains("/*") || lower.contains('@') || lower.contains('&') {
         return false;
     }
     let mut rest = lower.as_str();
@@ -160,7 +165,7 @@ fn parse_length(value: &str) -> Option<Option<f64>> {
         ("", 1.0),
     ] {
         if let Some(number) = value.strip_suffix(suffix) {
-            let Ok(number) = number.trim().parse::<f64>() else {
+            let Ok(number) = number.parse::<f64>() else {
                 continue;
             };
             if !number.is_finite() || number <= 0.0 {
