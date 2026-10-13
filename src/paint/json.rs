@@ -70,6 +70,7 @@ const KNOWN_TEXT_FEATURES: &[&str] = &[
     "text.visualSourceBinding",
     "text.decorationOp.producerExtent",
     "paint.controlLabel",
+    "paint.pageBackground.imageEffects",
     "text.displayText",
     "text.vertical.mixedPerGlyph",
 ];
@@ -191,6 +192,10 @@ fn write_text_export_metadata(buf: &mut String, root: &LayerNode, resources: &Re
     });
     let has_control_labels =
         layer_tree_has_op(root, |op| matches!(op, PaintOp::ControlLabel { .. }));
+    let has_background_images = layer_tree_has_op(root, |op| {
+        matches!(op,
+        PaintOp::PageBackground { background, .. } if background.image.is_some())
+    });
     let text_variant_features = collect_text_variant_features(root, resources);
     let has_variant_groups = text_variant_features.has_variant_groups();
     let has_glyph_runs = text_variant_features.has_glyph_runs;
@@ -270,7 +275,13 @@ fn write_text_export_metadata(buf: &mut String, root: &LayerNode, resources: &Re
     if has_control_labels {
         buf.push_str(",\"paint.controlLabel\"");
     }
+    if has_background_images {
+        buf.push_str(",\"paint.pageBackground.imageEffects\"");
+    }
     let mut optional_features = Vec::new();
+    if has_background_images {
+        optional_features.push("paint.pageBackground.imageEffects");
+    }
     if has_glyph_runs || has_glyph_outlines {
         optional_features.push("fontResources");
     }
@@ -620,10 +631,30 @@ impl PaintOp {
                     write_gradient(buf, gradient);
                 }
                 if let Some(image) = &background.image {
+                    let preserve_color_watermark = image.is_real_picture_watermark_tone_preset();
+                    let watermark = preserve_color_watermark
+                        || (!matches!(image.effect, ImageEffect::RealPic) && image.is_watermark());
+                    let (brightness, contrast) = if preserve_color_watermark {
+                        (0, 0)
+                    } else {
+                        image.display_brightness_contrast()
+                    };
+                    let opacity = if preserve_color_watermark {
+                        crate::renderer::render_tree::REAL_PICTURE_WATERMARK_PAGE_OPACITY
+                    } else if watermark {
+                        crate::renderer::render_tree::LEGACY_IMAGE_WATERMARK_OPACITY
+                    } else {
+                        1.0
+                    };
                     let _ = write!(
                         buf,
-                        ",\"image\":{{\"fillMode\":{},\"base64\":",
+                        ",\"image\":{{\"fillMode\":{},\"brightness\":{},\"contrast\":{},\"effect\":{},\"opacity\":{},\"watermark\":{},\"base64\":",
                         json_escape(image_fill_mode_str(image.fill_mode)),
+                        brightness,
+                        contrast,
+                        json_escape(image_effect_str(image.effect)),
+                        opacity,
+                        watermark,
                     );
                     write_json_base64(buf, &image.data[..]);
                     buf.push('}');
