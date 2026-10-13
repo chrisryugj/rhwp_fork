@@ -236,12 +236,10 @@ fn transformed_monochrome_bounds_are_exported_without_changing_layout() {
     contains(op.visual_bounds(), 145.0, 208.0);
 }
 
-#[test]
-fn colrv0_applies_layer_transform_before_run_placement() {
+fn colrv0_outline(transform: LayerAffineTransform) -> LayerGlyphOutlinePaint {
     let mut outline = outline();
     outline.payload_kind = GlyphOutlinePayloadKind::ColorLayers;
     outline.paths.clear();
-    outline.placement.run_to_page = affine(2.0, 0.0, 0.0, 3.0, 100.0, 200.0);
     let payload = ColorLayersPayload {
         color_format: ColorGlyphFormat::ColrV0,
         source_font_ref: Some(font_ref(ColorGlyphFormat::ColrV0)),
@@ -258,7 +256,7 @@ fn colrv0_applies_layer_transform_before_run_placement() {
             palette_index: Some(0),
             color: None,
             opacity: Some(1.0),
-            transform_to_run: Some(affine(0.0, 1.0, -1.0, 0.0, 10.0, -20.0)),
+            transform_to_run: Some(transform),
         }],
         paint_graph: None,
         source_range_utf8: Some(TextSourceRange::new(0, 1)),
@@ -266,6 +264,13 @@ fn colrv0_applies_layer_transform_before_run_placement() {
     };
     assert!(payload.has_colrv0_resolved_layer_contract());
     outline.color_layers = Some(payload);
+    outline
+}
+
+#[test]
+fn colrv0_applies_layer_transform_before_run_placement() {
+    let mut outline = colrv0_outline(affine(0.0, 1.0, -1.0, 0.0, 10.0, -20.0));
+    outline.placement.run_to_page = affine(2.0, 0.0, 0.0, 3.0, 100.0, 200.0);
     let bounds = visual(outline);
     contains(bounds, 116.0, 140.0);
     contains(bounds, 120.0, 152.0);
@@ -461,4 +466,63 @@ fn malformed_paths_and_cyclic_graphs_keep_the_logical_fallback_estimate() {
     });
     graph.nodes[0] = node;
     same_bounds(visual(cyclic), expected);
+}
+
+#[test]
+fn f32_path_and_matrix_input_rounding_are_included_before_cancellation() {
+    let mut path = outline();
+    path.paths[0].commands = rectangle(16_777_217.0, 0.0, 4.0, 2.0);
+    let colrv0 = colrv0_outline(affine(1.0, 0.0, 0.0, 1.0, 16_777_217.0, 0.0));
+    let mut transform = graph_node(0, ColorPaintGraphNodeKind::Transform);
+    transform.transform = Some(ColorPaintTransformNode {
+        child_node_id: 1,
+        transform: affine(1.0, 0.0, 0.0, 1.0, 16_777_217.0, 0.0),
+    });
+    let colrv1 = graph_outline(vec![transform, leaf(1, ColorPaintGraphNodeKind::SolidPath)]);
+    for mut outline in [path, colrv0, colrv1] {
+        outline.paint_style.font_size = 12.0;
+        outline.placement.run_to_page.e = -16_777_216.0;
+        let logical = BoundingBox::new(10.0, 10.0, 1.0, 1.0);
+        let op = PaintOp::glyph_outline(logical, outline);
+        same_bounds(op.bounds(), logical);
+        // 2^24+1 rounds to 2^24 at the Native input boundary, before the
+        // translation cancels it. The f64-only estimate starts at x=1.
+        contains(op.visual_bounds(), 0.0, 1.0);
+        contains(op.visual_bounds(), 5.0, 1.0);
+    }
+}
+
+#[test]
+fn f32_matrix_composition_rounding_is_included_before_point_mapping() {
+    let mut outline = colrv0_outline(affine(4097.0, 0.0, 0.0, 1.0, 0.0, 0.0));
+    outline.color_layers.as_mut().unwrap().layers[0].commands =
+        Some(rectangle(1.0, 0.0, 0.25, 2.0));
+    outline.placement.run_to_page = affine(4097.0, 0.0, 0.0, 1.0, -16_785_408.0, 0.0);
+    let op = PaintOp::glyph_outline(BoundingBox::new(10.0, 10.0, 1.0, 1.0), outline);
+    // All inputs are exact f32 values. The composed scale 4097^2 is rounded
+    // from 16_785_409 to 16_785_408 before x=1 is mapped, yielding x=0.
+    contains(op.visual_bounds(), 0.0, 1.0);
+}
+
+#[test]
+fn graph_clip_encloses_separately_rounded_path_transformations() {
+    let mut transform = graph_node(0, ColorPaintGraphNodeKind::Transform);
+    transform.transform = Some(ColorPaintTransformNode {
+        child_node_id: 1,
+        transform: affine(1.0, 0.0, 0.0, 1.0, 16_777_216.0, 0.0),
+    });
+    let mut clip = graph_node(1, ColorPaintGraphNodeKind::Clip);
+    clip.clip = Some(ColorPaintClipNode {
+        child_node_id: 2,
+        clip_commands: rectangle(1.0, 0.0, 2.0, 2.0),
+        fill_rule: GlyphOutlineFillRule::NonZero,
+    });
+    let mut fill = leaf(2, ColorPaintGraphNodeKind::SolidPath);
+    fill.solid_path.as_mut().unwrap().commands = rectangle(-1.0, 0.0, 6.0, 2.0);
+    let mut outline = graph_outline(vec![transform, clip, fill]);
+    outline.placement.run_to_page.e = -16_777_216.0;
+    let op = PaintOp::glyph_outline(BoundingBox::new(10.0, 10.0, 1.0, 1.0), outline);
+    // Native transforms the clip path by +2^24 and then -2^24. Its original
+    // x=1..3 becomes x=0..4; composing the matrices first would miss this.
+    contains(op.visual_bounds(), 0.0, 1.0);
 }

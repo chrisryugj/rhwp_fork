@@ -394,6 +394,125 @@ fn concat_affine(
     }
 }
 
+/// Outward-rounded f32 arithmetic also encloses fused multiply/add and wider
+/// intermediates. Keep ranges through concatenation: rounding only the final
+/// point misses cancellation between large, individually rounded matrices.
+#[derive(Clone, Copy)]
+struct F32Range {
+    min: f64,
+    max: f64,
+}
+
+impl F32Range {
+    fn scalar(value: f64) -> Self {
+        let value = f64::from(value as f32);
+        Self {
+            min: value,
+            max: value,
+        }
+    }
+
+    fn rounded(min: f64, max: f64) -> Self {
+        let mut lower = min as f32;
+        let mut upper = max as f32;
+        if !min.is_finite() || !max.is_finite() || !lower.is_finite() || !upper.is_finite() {
+            return Self {
+                min: f64::NAN,
+                max: f64::NAN,
+            };
+        }
+        if f64::from(lower) > min {
+            lower = lower.next_down();
+        }
+        if f64::from(upper) < max {
+            upper = upper.next_up();
+        }
+        Self {
+            min: f64::from(lower),
+            max: f64::from(upper),
+        }
+    }
+
+    fn add(self, other: Self) -> Self {
+        Self::rounded(self.min + other.min, self.max + other.max)
+    }
+
+    fn mul(self, other: Self) -> Self {
+        let products = [
+            self.min * other.min,
+            self.min * other.max,
+            self.max * other.min,
+            self.max * other.max,
+        ];
+        if products.iter().any(|value| !value.is_finite()) {
+            return Self {
+                min: f64::NAN,
+                max: f64::NAN,
+            };
+        }
+        Self::rounded(
+            products.into_iter().fold(f64::INFINITY, f64::min),
+            products.into_iter().fold(f64::NEG_INFINITY, f64::max),
+        )
+    }
+}
+
+type F32Affine = [[F32Range; 3]; 2];
+
+fn f32_affine(t: LayerAffineTransform) -> F32Affine {
+    [[t.a, t.c, t.e], [t.b, t.d, t.f]].map(|row| row.map(F32Range::scalar))
+}
+
+fn concat_f32_affine(parent: F32Affine, child: F32Affine) -> F32Affine {
+    std::array::from_fn(|row| {
+        std::array::from_fn(|column| {
+            let value = parent[row][0]
+                .mul(child[0][column])
+                .add(parent[row][1].mul(child[1][column]));
+            if column == 2 {
+                value.add(parent[row][2])
+            } else {
+                value
+            }
+        })
+    })
+}
+
+fn f32_affine_bounds(bounds: BoundingBox, transform: F32Affine) -> Option<BoundingBox> {
+    let x = F32Range::rounded(bounds.x, bounds.x + bounds.width);
+    let y = F32Range::rounded(bounds.y, bounds.y + bounds.height);
+    let [x, y] = transform.map(|row| row[0].mul(x).add(row[1].mul(y)).add(row[2]));
+    let result = BoundingBox::new(x.min, y.min, x.max - x.min, y.max - y.min);
+    valid(result).then_some(result)
+}
+
+fn glyph_transformed_bounds(
+    bounds: BoundingBox,
+    transforms: &[LayerAffineTransform],
+    clip_path: bool,
+) -> Option<BoundingBox> {
+    let (&first, rest) = transforms.split_first()?;
+    let exact = rest.iter().copied().fold(first, concat_affine);
+    let native = if clip_path {
+        // PreparedGlyph clips are transformed paths, not a concatenated canvas
+        // matrix. Enclose rounding after each reversed path transformation too.
+        transforms
+            .iter()
+            .rev()
+            .try_fold(bounds, |bounds, &transform| {
+                f32_affine_bounds(bounds, f32_affine(transform))
+            })?
+    } else {
+        let transform = rest
+            .iter()
+            .copied()
+            .map(f32_affine)
+            .fold(f32_affine(first), concat_f32_affine);
+        f32_affine_bounds(bounds, transform)?
+    };
+    Some(union(checked_affine_bounds(bounds, exact)?, native))
+}
+
 fn glyph_outline_bounds(outline: &LayerGlyphOutlinePaint) -> Option<BoundingBox> {
     let placement = outline.placement.run_to_page;
     match outline.payload_kind {
@@ -408,14 +527,19 @@ fn glyph_outline_bounds(outline: &LayerGlyphOutlinePaint) -> Option<BoundingBox>
                         return None;
                     }
                     // Miter length is bounded in path space, before scale/skew.
-                    stroke.width * 0.5 * stroke.miter_limit
+                    (stroke.width * 0.5 * stroke.miter_limit).max(
+                        F32Range::scalar(stroke.width)
+                            .mul(F32Range::scalar(0.5))
+                            .mul(F32Range::scalar(stroke.miter_limit))
+                            .max,
+                    )
                 } else {
                     0.0
                 };
             let mut bounds = None;
             for path in &outline.paths {
                 let local = expand(glyph_path_bounds(&path.commands)?, stroke_padding);
-                let path = checked_affine_bounds(local, placement)?;
+                let path = glyph_transformed_bounds(local, &[placement], false)?;
                 bounds = Some(bounds.map_or(path, |prior| union(prior, path)));
             }
             bounds
@@ -427,12 +551,12 @@ fn glyph_outline_bounds(outline: &LayerGlyphOutlinePaint) -> Option<BoundingBox>
             {
                 let mut bounds = None;
                 for layer in &payload.layers {
-                    let transform = layer
-                        .transform_to_run
-                        .map_or(placement, |transform| concat_affine(placement, transform));
-                    let path = checked_affine_bounds(
+                    let mut transforms = vec![placement];
+                    transforms.extend(layer.transform_to_run);
+                    let path = glyph_transformed_bounds(
                         glyph_path_bounds(layer.commands.as_deref()?)?,
-                        transform,
+                        &transforms,
+                        false,
                     )?;
                     bounds = Some(bounds.map_or(path, |prior| union(prior, path)));
                 }
@@ -454,37 +578,37 @@ fn color_graph_bounds(
 ) -> Option<BoundingBox> {
     // The caller checks the graph's bounded, acyclic replay contract. Do not
     // deduplicate shared leaves: each parent can supply a different transform.
-    let mut pending = vec![(graph.root_node_id, placement, None::<BoundingBox>)];
+    let mut pending = vec![(graph.root_node_id, vec![placement], None::<BoundingBox>)];
     let mut bounds = None;
-    while let Some((id, transform, clip)) = pending.pop() {
+    while let Some((id, mut transforms, clip)) = pending.pop() {
         let node = graph.nodes.iter().find(|node| node.node_id == id)?;
         let commands = match node.kind {
             ColorPaintGraphNodeKind::Transform => {
                 let child = node.transform.as_ref()?;
-                pending.push((
-                    child.child_node_id,
-                    concat_affine(transform, child.transform),
-                    clip,
-                ));
+                transforms.push(child.transform);
+                pending.push((child.child_node_id, transforms, clip));
                 continue;
             }
             ColorPaintGraphNodeKind::Composite => {
                 let composite = node.composite.as_ref()?;
-                pending.push((composite.source_node_id, transform, clip));
-                pending.push((composite.backdrop_node_id, transform, clip));
+                pending.push((composite.source_node_id, transforms.clone(), clip));
+                pending.push((composite.backdrop_node_id, transforms, clip));
                 continue;
             }
             ColorPaintGraphNodeKind::Clip => {
                 let child = node.clip.as_ref()?;
-                let own_clip =
-                    checked_affine_bounds(glyph_path_bounds(&child.clip_commands)?, transform)?;
+                let own_clip = glyph_transformed_bounds(
+                    glyph_path_bounds(&child.clip_commands)?,
+                    &transforms,
+                    true,
+                )?;
                 let clipped = match clip {
                     Some(clip) => intersection(clip, own_clip),
                     None => Some(own_clip),
                 };
                 if let Some(clipped) = clipped {
                     // A later child transform must not move this enclosing clip.
-                    pending.push((child.child_node_id, transform, Some(clipped)));
+                    pending.push((child.child_node_id, transforms, Some(clipped)));
                 }
                 continue;
             }
@@ -499,7 +623,7 @@ fn color_graph_bounds(
                 &node.sweep_gradient_path.as_ref()?.commands
             }
         };
-        let path = checked_affine_bounds(glyph_path_bounds(commands)?, transform)?;
+        let path = glyph_transformed_bounds(glyph_path_bounds(commands)?, &transforms, false)?;
         let path = match clip {
             Some(clip) => intersection(path, clip),
             None => Some(path),
@@ -517,11 +641,15 @@ fn glyph_path_bounds(commands: &[PathCommand]) -> Option<BoundingBox> {
     }
     let mut bounds = None;
     let mut include = |(x, y)| {
-        let point = BoundingBox::new(x, y, 0.0, 0.0);
-        if !valid(point) {
-            return None;
+        // PathBuilder receives f32 endpoints/control points, including the
+        // cubic points produced by the shared f64 arc conversion.
+        for (x, y) in [(x, y), (f64::from(x as f32), f64::from(y as f32))] {
+            let point = BoundingBox::new(x, y, 0.0, 0.0);
+            if !valid(point) {
+                return None;
+            }
+            bounds = Some(bounds.map_or(point, |prior| union(prior, point)));
         }
-        bounds = Some(bounds.map_or(point, |prior| union(prior, point)));
         Some(())
     };
     let mut current = (0.0, 0.0);
