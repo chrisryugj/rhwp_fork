@@ -454,7 +454,7 @@ improvement rather than a Canvas2D compatibility match.
 `TextRun`으로 되돌린다. placement·position·advance는 저장형 `f64`의 유한성뿐 아니라
 소비형 `f32`의 표현 범위를 만족해야 한다. 개별 윤곽선 명령과 윤곽선 수는 각각 4096개로
 제한한다. Native SVG 준비는 파싱 불가능한 path를 부분적으로 생략하지 않고 전체 엄격한
-대안을 거부한다. 중첩 SVG의 viewport와 페이지별 준비 예산은 기존 계약을 유지한다.
+대안을 거부한다. 중첩 SVG의 viewport와 leaf별 글리프 준비 예산은 기존 계약을 유지한다.
 
 기존 selector 단위 검사에 표현 범위 양쪽 경계와 정확한 face 범위 검사를 추가했다.
 현재 이관 단계에서는 개별 파일 rustfmt와 diff 검사만 수행했다. Cargo·Native·fresh WASM 및
@@ -514,7 +514,8 @@ schema v1 minor 24는 `sourceOver` composite와 path clip을 명시한다. 64개
 깊이 64, 공유 subtree를 포함한 최대 4096회 방문을 검증하며 cycle·도달 불가능 node·혼합
 payload·같은 직접 source/backdrop child를 거부한다. Native는 backdrop 뒤 source 순으로
 재생하고 조상 transform으로 계산한 page-space clip을 자식 transform과 분리한다.
-페이지별 사전 준비 예산과 실패 후보의 비용 차감은 유지한다.
+leaf별 사전 준비 예산과 실패 후보의 비용 차감은 유지한다. 현재 Native renderer는
+각 leaf에서 예산을 만들며, 페이지 전체가 하나의 카운터를 공유한다는 의미는 아니다.
 
 기존 public payload 검사도 layer 수와 정규화 RGBA·opacity를 확인한다. 새로운 graph의
 렌더링 회귀 검사는 원래 브랜치의 합성 IR 계약과 독립 한컴 출력 증거가 서로 다르므로 현재
