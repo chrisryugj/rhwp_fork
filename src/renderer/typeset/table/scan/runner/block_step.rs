@@ -24,8 +24,10 @@ impl TypesetEngine {
             whole_row_fit_h,
             rowspan_touched,
             start_cut,
+            straddle_page_bands,
             v,
             table_storage_declares_splits,
+            ..
         } = input;
         let BlockRowScanVars {
             cursor_row,
@@ -43,6 +45,7 @@ impl TypesetEngine {
             source_first_fragment_overflow_allowance,
             source_first_fragment_row_end,
             start_row_height_override,
+            ..
         } = v;
         let ScanProgress {
             mut r,
@@ -50,6 +53,7 @@ impl TypesetEngine {
             mut bleed_absorbed_row_height,
         } = progress;
         let BlockTableRowScan {
+            source_frame_band,
             mut consumed,
             mut end_row,
             mut split_block_start,
@@ -65,6 +69,7 @@ impl TypesetEngine {
             cut_row_h,
             rowspan_touched,
             cs,
+            straddle_page_bands,
         };
         let table::scan::RowBlockCandidate {
             b_start,
@@ -255,6 +260,7 @@ impl TypesetEngine {
             false
         })();
         let scan = BlockTableRowScan {
+            source_frame_band,
             consumed,
             end_row,
             split_block_start,

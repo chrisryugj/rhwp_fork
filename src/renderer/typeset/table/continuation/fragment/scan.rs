@@ -26,8 +26,17 @@ impl TypesetEngine {
         let can_intra_split = input.prepared.can_intra_split;
         let layout_engine = &input.prepared.layout_engine;
         let rowspan_touched = &input.prepared.rowspan_touched;
-        let cut_row_h = &input.prepared.cut_row_heights;
-        let whole_row_fit_h = &input.prepared.whole_row_fit_heights;
+        // [#7531] 쪽을 넘어온 걸침 칸의 끝 행은 앞 쪽 빈 띠를 덜어낸 높이로 잰다.
+        let cut_row_h = input
+            .start
+            .relieved_cut_row_heights
+            .as_ref()
+            .unwrap_or(&input.prepared.cut_row_heights);
+        let whole_row_fit_h = input
+            .start
+            .relieved_whole_row_fit_heights
+            .as_ref()
+            .unwrap_or(&input.prepared.whole_row_fit_heights);
         let total_footnote = input.prepared.total_footnote_height;
         let fn_margin = input.prepared.footnote_margin;
         let strict_following_plain_text_fit = input.prepared.strict_following_plain_text_fit;
@@ -57,6 +66,37 @@ impl TypesetEngine {
         });
         let cut_row_h = source_cut_heights.as_ref().unwrap_or(cut_row_h);
         let whole_row_fit_h = source_fit_heights.as_ref().unwrap_or(whole_row_fit_h);
+        // The original content cut and the two boxes are one accepted result.
+        // A blank band is reserved here, before emit and paint, and never
+        // consumed as an extra content unit on the following page.
+        if let Some(frames) = input.prepared.source_single_cell_row_frames.filter(|_| {
+            input.prepared.table_footnotes.is_empty()
+                && std::ptr::eq(table, row_geometry_table)
+                && cursor_row == 0
+        }) {
+            let opening = !is_continuation && start_cut.is_empty();
+            let closing = is_continuation && start_cut.as_slice() == [frames.opening_end];
+            let height = if opening {
+                frames.opening_height
+            } else {
+                frames.closing_height
+            };
+            if (opening || closing) && height <= avail_for_rows {
+                return BlockTableRowScan {
+                    source_frame_band: 0.0,
+                    consumed: height,
+                    end_row: 1,
+                    split_block_start: None,
+                    split_end_cut: if opening {
+                        vec![frames.opening_end]
+                    } else {
+                        Vec::new()
+                    },
+                    split_end_limit: if opening { height } else { 0.0 },
+                    end_row_height_override: Some(height),
+                };
+            }
+        }
         // 실제 기존 각주 경계 안에 들어오는 것으로 준비 단계에서 확인한 빈
         // 시작 조각은 유닛을 소비하지 않는다. 양수 물리 전진과 0 컷을 함께
         // 반환해 다음 조각이 같은 그림·캡션을 처음부터 소유하게 한다.
@@ -64,12 +104,55 @@ impl TypesetEngine {
             if let Some(frame) = input.prepared.empty_opening_row_frame {
                 if frame.opening_height <= avail_for_rows + 0.5 {
                     return BlockTableRowScan {
+                        source_frame_band: 0.0,
                         consumed: frame.opening_height,
                         end_row: 1,
                         split_block_start: None,
                         split_end_cut: vec![0],
                         split_end_limit: frame.opening_height,
                         end_row_height_override: Some(frame.opening_height),
+                    };
+                }
+            }
+        }
+        // A synchronized source reset closes the first physical row box.
+        // Decide its demand before accepting content; the same source plan is
+        // carried by emission and consumed by the partial-table painter.
+        if !is_continuation && cursor_row == 0 && start_cut.is_empty() && header_overhead == 0.0 {
+            if let Some((cut, opening, _)) = layout_engine.saved_first_row_opening_frame(
+                table,
+                styles,
+                st.layout.body_area.height,
+            ) {
+                if std::env::var_os("RHWP_DIAG_SCAN").is_some() {
+                    eprintln!("DIAG_SCAN SOURCE_FIRST_ROW_FRAME pi={para_idx} cut={cut:?} opening={opening:.3} available={avail_for_rows:.3}");
+                }
+                if opening <= avail_for_rows + 0.1 {
+                    return BlockTableRowScan {
+                        source_frame_band: 0.0,
+                        consumed: opening,
+                        end_row: 1,
+                        split_block_start: None,
+                        split_end_cut: cut,
+                        split_end_limit: opening,
+                        end_row_height_override: Some(opening),
+                    };
+                }
+                // No accepted content or physical space on this page. Keep
+                // the exact source cut for a fresh page rather than forcing a
+                // smaller box now and enlarging it during paint.
+                if !st.current_items.is_empty()
+                    || st.current_height > 0.0
+                    || st.current_footnote_height > 0.0
+                {
+                    return BlockTableRowScan {
+                        source_frame_band: 0.0,
+                        consumed: 0.0,
+                        end_row: cursor_row,
+                        split_block_start: None,
+                        split_end_cut: Vec::new(),
+                        split_end_limit: 0.0,
+                        end_row_height_override: None,
                     };
                 }
             }
@@ -120,6 +203,7 @@ impl TypesetEngine {
             source_first_fragment_overflow_allowance,
             source_first_fragment_row_end,
             start_row_height_override,
+            source_terminal_suffix_start: input.prepared.source_terminal_suffix_start,
         };
         let run_scan = |vars| {
             self.scan_block_table_split_rows(
@@ -132,8 +216,10 @@ impl TypesetEngine {
                 whole_row_fit_h,
                 rowspan_touched,
                 &start_cut,
+                &input.start.straddle_page_bands,
                 vars,
                 BlockTableRowScan {
+                    source_frame_band: 0.0,
                     consumed: 0.0,
                     end_row: cursor_row,
                     split_block_start: None,
@@ -144,6 +230,7 @@ impl TypesetEngine {
             )
         };
         let BlockTableRowScan {
+            mut source_frame_band,
             mut consumed,
             mut end_row,
             mut split_block_start,
@@ -194,6 +281,14 @@ impl TypesetEngine {
                     .sum::<f64>()
                     + cs * end_row.saturating_sub(2) as f64;
                 end_row_height_override = Some((frame_height - before_last).max(0.0));
+                // The accepted source frame replaces the physical height of
+                // this opening fragment. Its content cut does not change,
+                // but the reservation must include the same blank band that
+                // paint receives through the last-row override. Otherwise
+                // emit reserves that band a second time as unused page space.
+                let source_frame_height = before_last + end_row_height_override.unwrap_or(0.0);
+                source_frame_band = (source_frame_height - consumed).max(0.0);
+                consumed = source_frame_height;
                 // 내용이 끝난 일반 행도 같은 저장 물리 프레임을 사용한다.
                 // 내용 예산으로 빈 밴드를 계산하면 다음 쪽이 그 차이만큼
                 // 밀린다. 그리는 쪽 상한 절삭은 별도이며 선언 공간을 줄이지 않는다.
@@ -290,6 +385,7 @@ impl TypesetEngine {
                                 min_anchor
                             );
                         }
+                        source_frame_band = refit.source_frame_band;
                         consumed = refit.consumed;
                         end_row = refit.end_row;
                         split_block_start = refit.split_block_start;
@@ -309,7 +405,14 @@ impl TypesetEngine {
         // 현재 쪽에서 마지막 유닛을 닫을 수 없으면 수용한 앞 조각을 다시 스캔한다.
         // 높이·컷을 확정한 뒤 end_row만 바꾸지 않는다.
         if end_row >= row_count
-            && split_end_limit == 0.0
+            && (split_end_limit == 0.0
+                || input.closes_terminal_content_cut(
+                    end_row,
+                    split_end_limit,
+                    &split_end_cut,
+                    split_block_start,
+                    end_row_height_override,
+                ))
             && (input.prepared.caption_overhead > 0.0
                 || budget.terminal_outer_bottom_overhead > budget.fragment_outer_bottom_overhead)
         {
@@ -331,6 +434,7 @@ impl TypesetEngine {
                     cut_row_h,
                     rowspan_touched,
                     cs,
+                    straddle_page_bands: &input.start.straddle_page_bands,
                 };
                 let last_range = rows.candidate(row_count - 1);
                 let last = rows.candidate(last_range.b_start);
@@ -349,6 +453,7 @@ impl TypesetEngine {
                     // 실제 앞 항목이 점유한 쪽을 비운다. 다른 항목이 없는 프레임의
                     // 양수 저장 앵커 때문에 이월을 무한 반복하지 않아야 한다.
                     return BlockTableRowScan {
+                        source_frame_band: 0.0,
                         consumed: 0.0,
                         end_row: cursor_row,
                         split_block_start: None,
@@ -369,6 +474,7 @@ impl TypesetEngine {
                     }
                 });
                 if refit.end_row > cursor_row && refit.consumed > 0.0 {
+                    source_frame_band = refit.source_frame_band;
                     consumed = refit.consumed;
                     end_row = refit.end_row;
                     split_block_start = refit.split_block_start;
@@ -380,6 +486,7 @@ impl TypesetEngine {
         }
 
         BlockTableRowScan {
+            source_frame_band,
             consumed,
             end_row,
             split_block_start,

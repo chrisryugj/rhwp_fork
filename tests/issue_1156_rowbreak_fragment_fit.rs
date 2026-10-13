@@ -1,9 +1,8 @@
-//! RowBreak 표의 행 내부 조각 때문에 전체 조각이 쪽 경계를 넘으면
-//! 그 조각을 현재 쪽에 남기지 않는다.
+//! RowBreak 표의 내용 순서와 조각의 실제 본문 포함을 검사한다.
 //!
-//! `samples/kps-ai.hwp` 37쪽의 329문단은 32행 2열 RowBreak 표다.
-//! 첫 조각은 0~15행까지 수용하지만 16행 일부까지 남기면 본문을 넘으므로
-//! 16행은 38쪽으로 이월한다.
+//! 독립 Print 37쪽은 성능 요구사항으로 끝나고 38쪽은 데이터 요구사항으로
+//! 이어진다. 기존 rows=0..16 핀은 데이터 행까지 앞 쪽에 수용하도록 강제했다.
+//! 행 번호 핀 대신 두 조각의 원본 행 소유·내용 순서·본문 점유를 검사한다.
 
 use std::fs;
 use std::path::Path;
@@ -21,24 +20,122 @@ fn page_dump(rel_path: &str, page_idx: u32) -> String {
     doc.dump_page_items(Some(page_idx))
 }
 
+fn subtree_text(node: &rhwp::renderer::render_tree::RenderNode) -> String {
+    use rhwp::renderer::render_tree::RenderNodeType;
+    let own = match &node.node_type {
+        RenderNodeType::TextRun(run) => run.display_or_text().to_string(),
+        _ => String::new(),
+    };
+    node.children.iter().fold(own, |mut text, child| {
+        text.push_str(&subtree_text(child));
+        text
+    })
+}
+
+fn table_with_label<'a>(
+    node: &'a rhwp::renderer::render_tree::RenderNode,
+    label: &str,
+) -> Option<&'a rhwp::renderer::render_tree::RenderNode> {
+    use rhwp::renderer::render_tree::RenderNodeType;
+    if matches!(node.node_type, RenderNodeType::Table(_)) && subtree_text(node).contains(label) {
+        return Some(node);
+    }
+    node.children
+        .iter()
+        .find_map(|child| table_with_label(child, label))
+}
+
 #[test]
 fn kps_ai_page37_defers_overflowing_split_row_slice() {
-    let sample = "samples/kps-ai.hwp";
+    use rhwp::document_core::DocumentCore;
+    use rhwp::renderer::render_tree::{RenderNode, RenderNodeType};
+    use std::collections::BTreeSet;
 
-    let page37 = page_dump(sample, 36);
+    fn left_rows(table: &RenderNode) -> BTreeSet<u16> {
+        table
+            .children
+            .iter()
+            .filter_map(|node| match &node.node_type {
+                RenderNodeType::TableCell(cell) if cell.col == 0 => Some(cell.row),
+                _ => None,
+            })
+            .collect()
+    }
+    fn column_contains_table(root: &RenderNode, table: &RenderNode) -> bool {
+        matches!(root.node_type, RenderNodeType::Column(_))
+            && root.children.iter().any(|child| std::ptr::eq(child, table))
+            && table.bbox.y >= root.bbox.y - 0.5
+            && table.bbox.y + table.bbox.height <= root.bbox.y + root.bbox.height + 0.5
+            || root
+                .children
+                .iter()
+                .any(|child| column_contains_table(child, table))
+    }
+
+    let bytes = fs::read("samples/kps-ai.hwp").expect("read sample");
+    let core = DocumentCore::from_bytes(&bytes).expect("parse sample");
+    let pages: Vec<_> = (0..38)
+        .map(|page| core.build_page_render_tree(page).expect("render page"))
+        .collect();
+    let before = &pages[36].root;
+    let after = &pages[37].root;
+    let first = table_with_label(before, "성능 요구사항").expect("performance row on page 37");
+    let next = table_with_label(after, "데이터 요구사항").expect("data row on page 38");
     assert!(
-        page37.contains("PartialTable   pi=329 ci=0  rows=0..16"),
-        "page 37 should end at the last fully fitting row:\n{page37}"
+        !subtree_text(first).contains("데이터 요구사항"),
+        "data row belongs to next page"
     );
     assert!(
-        !page37.contains("end_cut="),
-        "page 37 must not keep an overflowing row slice:\n{page37}"
+        !subtree_text(next).contains("성능 요구사항"),
+        "performance row must not repeat"
     );
-
-    let page38 = page_dump(sample, 37);
     assert!(
-        page38.contains("PartialTable   pi=329 ci=0  rows=16..32  cont=true"),
-        "page 38 should continue from row 16:\n{page38}"
+        column_contains_table(before, first),
+        "opening fragment escapes body"
+    );
+    assert!(
+        column_contains_table(after, next),
+        "continuation fragment escapes body"
+    );
+    let (RenderNodeType::Table(first_info), RenderNodeType::Table(next_info)) =
+        (&first.node_type, &next.node_type)
+    else {
+        unreachable!("table_with_label returns a table");
+    };
+    assert_eq!(
+        first_info.para_index, next_info.para_index,
+        "same source table owner"
+    );
+    assert_eq!(
+        first_info.control_index, next_info.control_index,
+        "same source control owner"
+    );
+    let rows = left_rows(first);
+    let following = left_rows(next);
+    let headers: BTreeSet<_> = first
+        .children
+        .iter()
+        .filter_map(|node| match &node.node_type {
+            RenderNodeType::TableCell(cell)
+                if cell.col == 0
+                    && subtree_text(node).split_whitespace().collect::<String>() == "항목" =>
+            {
+                Some(cell.row)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        rows.intersection(&following)
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        headers,
+        "only the repeated header may share row ownership"
+    );
+    assert_eq!(
+        rows.union(&following).count(),
+        usize::from(first_info.row_count),
+        "two fragments must preserve every original row"
     );
 }
 

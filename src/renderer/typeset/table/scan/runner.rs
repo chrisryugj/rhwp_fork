@@ -14,8 +14,10 @@ struct ScanInput<'a> {
     styles: &'a ResolvedStyleSet,
     cut_row_h: &'a [f64],
     whole_row_fit_h: &'a [f64],
+    opening_source_frames: &'a [f64],
     rowspan_touched: &'a [bool],
     start_cut: &'a [usize],
+    straddle_page_bands: &'a [crate::renderer::pagination::StraddleCellCarry],
     v: BlockRowScanVars,
     table_storage_declares_splits: bool,
 }
@@ -50,10 +52,22 @@ impl TypesetEngine {
         whole_row_fit_h: &[f64],
         rowspan_touched: &[bool],
         start_cut: &[usize],
+        straddle_page_bands: &[crate::renderer::pagination::StraddleCellCarry],
         v: BlockRowScanVars,
         scan: BlockTableRowScan,
     ) -> BlockTableRowScan {
         let table_storage_declares_splits = rowbreak_table_has_internal_saved_vpos_reset(table);
+        // Scan-local facts: compute each unchanged source frame once, rather
+        // than recertifying every cell for each ordinary row.
+        let mut opening_source_frames = vec![0.0_f64; v.row_count];
+        for cell in table.cells.iter().filter(|cell| cell.row_span > 1) {
+            if let (Some(slot), Some(height)) = (
+                opening_source_frames.get_mut(usize::from(cell.row)),
+                layout_engine.stored_initial_plain_text_frame_height(cell, table, styles),
+            ) {
+                *slot = slot.max(height);
+            }
+        }
         let input = ScanInput {
             st,
             layout_engine,
@@ -62,8 +76,10 @@ impl TypesetEngine {
             styles,
             cut_row_h,
             whole_row_fit_h,
+            opening_source_frames: &opening_source_frames,
             rowspan_touched,
             start_cut,
+            straddle_page_bands,
             v,
             table_storage_declares_splits,
         };
@@ -74,13 +90,18 @@ impl TypesetEngine {
         };
         while progress.r < v.row_count {
             let r = progress.r;
+            if v.source_terminal_suffix_start
+                .is_some_and(|start| v.cursor_row < start && r >= start)
+            {
+                break;
+            }
             let cs_before = if r > v.cursor_row { v.cs } else { 0.0 };
             // Consume a carried physical tail before scanning the next row.
             if r == v.cursor_row {
-                if let Some(height) = v
-                    .start_row_height_override
-                    .filter(|_| !layout_engine.row_uses_reflow_physical_frame(table, r))
-                {
+                if let Some(height) = v.start_row_height_override.filter(|_| {
+                    !layout_engine.row_uses_reflow_physical_frame(table, r)
+                        && layout_engine.row_cut_units_exhausted(table, r, start_cut, styles)
+                }) {
                     progress.scan.consumed += height;
                     progress.r += 1;
                     progress.scan.end_row = progress.r;
@@ -95,6 +116,7 @@ impl TypesetEngine {
                 cut_row_h,
                 rowspan_touched,
                 cs: v.cs,
+                straddle_page_bands,
             };
             let block = block_query.candidate(r);
             let step = if (block.protected || block.rowbreak_rowspan_block) && block.b_start == r {

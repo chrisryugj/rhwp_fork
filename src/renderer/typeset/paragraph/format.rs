@@ -91,10 +91,12 @@ pub(in crate::renderer::typeset) fn format_paragraph_for_flow(
     };
     let total_height = spacing_before + lines_total + spacing_after + tac_outer_margin_v_px;
 
-    // 적합성 판단용: trailing line_spacing 제외
+    // Page fit ends at the accepted line/object occupancy. Paragraph-after
+    // spacing advances a successor; it cannot push this paragraph's last line
+    // onto another page by itself.
     let trailing_ls = line_spacings.last().copied().unwrap_or(0.0);
     let height_for_fit = {
-        let metric = (total_height - trailing_ls).max(0.0);
+        let metric = (total_height - trailing_ls - spacing_after).max(0.0);
         let vpos_metric = if para.controls.is_empty() {
             para.line_segs
                 .first()
@@ -124,7 +126,11 @@ pub(in crate::renderer::typeset) fn format_paragraph_for_flow(
         } else {
             None
         };
-        vpos_metric.map(|v| metric.min(v)).unwrap_or(metric)
+        // Stored vpos spans cover line boxes, not the paragraph's outside
+        // spacing. Paint consumes these bands at the accepted flow origin.
+        vpos_metric
+            .map(|v| metric.min(spacing_before + v))
+            .unwrap_or(metric)
     };
 
     // 표 없는 일반 본문에는 배치용 줄 사본을 만들지 않는다.
@@ -367,6 +373,18 @@ fn resolve_line_metrics(
         let mut pairs = Vec::with_capacity(comp.lines.len());
         let mut prev_line_reserved_tac_picture_height: Option<f64> = None;
         for (line_idx, line) in comp.lines.iter().enumerate() {
+            if !ctx.profile().session_edited() && !ctx.profile().hwp3_layout() {
+                if let Some(height) = crate::renderer::stored_picture_guide_line_height_px(
+                    para,
+                    comp,
+                    line_idx,
+                    ctx.dpi(),
+                ) {
+                    pairs.push((height, hwpunit_to_px(line.line_spacing, ctx.dpi())));
+                    prev_line_reserved_tac_picture_height = None;
+                    continue;
+                }
+            }
             if let Some(ref hs) = stacked_tac_picture_heights {
                 let ls_px = hwpunit_to_px(line.line_spacing, ctx.dpi());
                 pairs.push((hs[line_idx], ls_px));

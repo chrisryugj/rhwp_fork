@@ -25,7 +25,12 @@ struct FragmentStart {
     start_cut_is_block: bool,
     start_row_height_override: Option<f64>,
     start_cut: Vec<usize>,
-    fragment_starts_intra_row: bool,
+    /// [#7531] 이 조각에서 쪽을 넘어온 걸침 칸의 끝 행 높이에서 덜 양 `(행, px)`.
+    straddle_row_relief: Vec<(usize, f64)>,
+    straddle_page_bands: Vec<crate::renderer::pagination::StraddleCellCarry>,
+    /// 덜기를 적용한 scan 용 행 높이. 덜기가 없으면 준비 상태의 값을 그대로 쓴다.
+    relieved_cut_row_heights: Option<Vec<f64>>,
+    relieved_whole_row_fit_heights: Option<Vec<f64>>,
 }
 
 #[derive(Clone, Copy)]
@@ -36,12 +41,61 @@ struct FragmentInput<'a> {
     row_cursor_is_nested: bool,
 }
 
+impl FragmentInput<'_> {
+    /// A content cut may finish every unit while retaining its paint cut.
+    /// Scan must reserve the closing band before emit ends that continuation.
+    fn closes_terminal_content_cut(
+        &self,
+        end_row: usize,
+        end_limit: f64,
+        end_cut: &[usize],
+        block_start: Option<usize>,
+        height_override: Option<f64>,
+    ) -> bool {
+        let rows = self.prepared.row_count;
+        end_row >= rows
+            && end_limit > 0.0
+            && !end_cut.is_empty()
+            && block_start.is_none()
+            && !self.start.start_cut_is_block
+            && !self.row_cursor_is_nested
+            && height_override.is_none()
+            && self.source.measured_table.allows_row_break_split()
+            && self.prepared.caption_overhead <= 0.0
+            && !self.prepared.queue_table_footnotes
+            && self.prepared.can_intra_split
+            && self.prepared.layout_engine.row_cut_units_exhausted(
+                self.source.row_geometry_table,
+                rows - 1,
+                end_cut,
+                self.source.styles,
+            )
+            && self
+                .prepared
+                .layout_engine
+                .straddle_continuation_demand(
+                    self.source.row_geometry_table,
+                    rows - 1,
+                    rows - 1,
+                    end_cut,
+                    None,
+                    &self.source.measured_table.row_heights,
+                    &self.start.straddle_page_bands,
+                    self.source.styles,
+                    (rows, true),
+                )
+                .is_none_or(|remaining| remaining <= 0.0)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct FragmentBudget {
     caption_extra: f64,
     host_before_overhead: f64,
     terminal_outer_bottom_overhead: f64,
     fragment_outer_bottom_overhead: f64,
+    fragment_opens_outer_top: bool,
+    physical_content_limit: f64,
     vert_offset_overhead: f64,
     page_avail: f64,
     fragment_placement: Option<crate::renderer::float_placement::ParagraphFloatPlacement>,
@@ -72,13 +126,60 @@ impl TypesetEngine {
         profile: &mut FragmentProfile,
     ) -> TableContinuationIteration {
         profile.iterations += 1;
-        let start_cut = continuation.start_cut.clone();
+        // 소스 컷은 앞 조각의 끝과 연속이어야 한다. 저장 프레임의 꼬리 spacer는
+        // 그 연속 범위 안에서 소비하되, 다음 물리 프레임의 높이/원점에는 싣지 않는다.
+        // 예약·선택은 paint와 같은 helper로 구한 물리 시작점을 소비한다.
+        let start_cut = if continuation.start_cut_is_block {
+            continuation.start_cut.clone()
+        } else {
+            prepared.layout_engine.skip_leading_free_spacers_in_row_cut(
+                source.row_geometry_table,
+                continuation.row,
+                &continuation.start_cut,
+                source.styles,
+            )
+        };
+        let straddle_row_relief = if continuation.start_cut_is_block
+            || !continuation.start_cut.is_empty()
+            || continuation.start_row_height_override.is_some()
+        {
+            Vec::new()
+        } else {
+            prepared.layout_engine.straddle_page_band_relief(
+                source.row_geometry_table,
+                &source.measured_table.row_heights,
+                continuation.row,
+                &continuation.straddle_page_bands,
+                source.styles,
+            )
+        };
+        let relieve = |heights: &Vec<f64>| {
+            let mut heights = heights.clone();
+            for &(row, amount) in &straddle_row_relief {
+                if let Some(height) = heights.get_mut(row) {
+                    *height = (*height - amount).max(0.0);
+                }
+            }
+            heights
+        };
+        let (relieved_cut_row_heights, relieved_whole_row_fit_heights) =
+            if straddle_row_relief.is_empty() {
+                (None, None)
+            } else {
+                (
+                    Some(relieve(&prepared.cut_row_heights)),
+                    Some(relieve(&prepared.whole_row_fit_heights)),
+                )
+            };
         let start = FragmentStart {
+            straddle_page_bands: continuation.straddle_page_bands.clone(),
+            straddle_row_relief,
+            relieved_cut_row_heights,
+            relieved_whole_row_fit_heights,
             cursor_row: continuation.row,
             is_continuation: continuation.is_continuation,
             start_cut_is_block: continuation.start_cut_is_block,
             start_row_height_override: continuation.start_row_height_override,
-            fragment_starts_intra_row: continuation.start_cut_is_block || !start_cut.is_empty(),
             start_cut,
         };
         let input = FragmentInput {
@@ -105,17 +206,43 @@ impl TypesetEngine {
             && !start_cut.is_empty()
             && start_row_height_override.is_none()
             && can_intra_split
-            && layout_engine
-                .advance_row_cut(row_geometry_table, cursor_row, &start_cut, f64::MAX, styles)
-                .consumed_height
-                <= 0.0
+            && layout_engine.row_cut_units_exhausted(
+                row_geometry_table,
+                cursor_row,
+                &start_cut,
+                styles,
+            )
         {
             continuation.skip_consumed_row();
             return TableContinuationIteration::Skipped;
         }
 
-        let budget = self.prepare_table_fragment_budget(st, input);
-        let scan = self.scan_table_fragment(st, input, &budget, profile);
+        let mut budget = self.prepare_table_fragment_budget(st, input);
+        let mut scan = self.scan_table_fragment(st, input, &budget, profile);
+        let spanning_bottom =
+            crate::renderer::float_placement::column_rowbreak_grid_bottom_margin_px(
+                budget.fragment_opens_outer_top,
+                source.table,
+                start.is_continuation,
+                scan.split_end_limit == 0.0
+                    || scan.split_block_start.is_some()
+                    || start.start_cut_is_block,
+                scan.end_row < prepared.row_count || scan.split_end_limit > 0.0,
+                self.dpi,
+            )
+            .max(budget.fragment_outer_bottom_overhead);
+        if spanning_bottom > budget.fragment_outer_bottom_overhead {
+            // Intersect the physical object bottom with the already-reserved
+            // footnote/footer capacity; a narrower budget has this clearance.
+            let extra =
+                (budget.page_avail - budget.physical_content_limit + spanning_bottom).max(0.0);
+            budget.fragment_outer_bottom_overhead = spanning_bottom;
+            budget.page_avail -= extra;
+            budget.avail_for_rows = (budget.avail_for_rows - extra).max(0.0);
+            if extra > 0.0 {
+                scan = self.scan_table_fragment(st, input, &budget, profile);
+            }
+        }
         if scan.end_row == cursor_row && scan.consumed == 0.0 {
             // 캡션 종료 예산 때문에 마지막 유닛 전체를 이월했다.
             // 현재 조각에서는 내용이나 물리 높이를 소비하지 않았다.

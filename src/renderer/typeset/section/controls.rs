@@ -336,7 +336,10 @@ impl TypesetEngine {
                                     });
                                     crate::renderer::float_placement::stored_picture_successor_with_following_placement(
                                         para, next, following, host_style.spacing_before,
-                                        next_style.spacing_before, frame_vpos, actual_host_flow_y, self.dpi,
+                                        host_style.spacing_after, next_style.spacing_before,
+                                        frame_vpos, actual_host_flow_y,
+                                        Some(st.current_height + hwpunit_to_px(base - frame_vpos, self.dpi)),
+                                        self.dpi,
                                     )
                                 });
                                 if let Some(placement) = saved.filter(|p| {
@@ -432,7 +435,26 @@ impl TypesetEngine {
                                 let mb = hwpunit_to_px(cm.margin.bottom as i32, self.dpi);
                                 let hl = hwpunit_to_px(cm.horizontal_offset as i32, self.dpi);
                                 let hr = hl + hwpunit_to_px(cm.width as i32, self.dpi);
-                                Some((h, h + mb, hl, hr))
+                                // 도형 띠에 흡수된 빈 host 줄도 그림과 같은 판별을 쓴다.
+                                // 문단 측정이 이미 소비한 줄을 다시 예약하면 배치의
+                                // layout_shape_item보다 뒤 콘텐츠의 예산이 작아진다.
+                                let absorbed_host_line =
+                                    if crate::renderer::empty_host_line_absorbed_by_topbottom_float(
+                                        para, cm,
+                                    ) {
+                                        para.line_segs
+                                            .first()
+                                            .map(|seg| {
+                                                hwpunit_to_px(
+                                                    seg.line_height + seg.line_spacing,
+                                                    self.dpi,
+                                                )
+                                            })
+                                            .unwrap_or(0.0)
+                                    } else {
+                                        0.0
+                                    };
+                                Some((h, (h + mb - absorbed_host_line).max(0.0), hl, hr))
                             }
                             _ => None,
                         };
@@ -601,6 +623,7 @@ impl TypesetEngine {
                         paragraphs,
                         ctrl_idx,
                         fn_ctrl,
+                        styles,
                         has_table,
                         native_hwp5_footnote_break,
                     );

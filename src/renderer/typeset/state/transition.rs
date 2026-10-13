@@ -38,6 +38,7 @@ impl TypesetState {
                 square_band_bottom: 0.0,
                 square_band_top: None,
                 current_footnote_height: 0.0,
+                deferred_body_footnotes: Vec::new(),
                 current_footnote_body_bottom_reserved: false,
                 deferred_hwpx_note_body: false,
                 current_bottom_fixed_exclusion: 0.0,
@@ -58,9 +59,14 @@ impl TypesetState {
                 side_wrap_exclusions: std::collections::BTreeMap::new(),
                 inline_placements: std::collections::HashMap::new(),
                 inline_flow_plans: std::collections::HashMap::new(),
+                stored_paragraph_flow_ends: std::collections::HashMap::new(),
+                stored_column_top_spacings: std::collections::HashMap::new(),
                 paragraph_float_placements: std::collections::HashMap::new(),
+                float_pushed_line_spacings: std::collections::HashMap::new(),
                 inline_box_flow_bottom: 0.0,
                 deferred_table_controls: Vec::new(),
+                deferred_table_successor_start: None,
+                pending_table_terminal_gap: None,
                 deferred_next_page_square_pictures: Vec::new(),
                 page_start_square_pictures: Vec::new(),
                 deferred_next_page_stored_frames: Vec::new(),
@@ -322,6 +328,43 @@ impl TypesetState {
         }
     }
 
+    /// [#7548] 저장 줄이 없는 host 의 쪽·종이 기준 어울림 표를 뒤 재조판 문단의 배제
+    /// 영역으로 등록한다. 뒤 문단의 측정(`typeset_inline_flow`)과 배치(layout 의
+    /// `inline_flow_plans` 소비)가 이 한 상자로 만든 같은 줄 구성을 쓴다. 저장 host 의
+    /// 뒤 문단 위치는 저장 vpos 가 증언하므로 등록하지 않는다(저장 경로 무변화).
+    pub(in crate::renderer::typeset) fn register_page_anchored_square_table(
+        &mut self,
+        para_index: usize,
+        control_index: usize,
+        para: &Paragraph,
+        table: &crate::model::table::Table,
+    ) {
+        if !crate::renderer::para_has_no_stored_line_segs(para) {
+            return;
+        }
+        let column = self.inline_flow_column();
+        let paper = crate::renderer::page_layout::LayoutRect {
+            x: 0.0,
+            y: 0.0,
+            width: self.data.layout.page_width,
+            height: self.data.layout.page_height,
+        };
+        let frame = crate::renderer::float_placement::ObjectPlacementFrame {
+            container: &column,
+            column: &column,
+            body: &self.data.layout.body_area,
+            paper: &paper,
+            paragraph_y: column.y,
+            alignment: crate::model::style::Alignment::Left,
+            dpi: self.data.layout.dpi,
+        };
+        if let Some(exclusion) = frame.page_anchored_square_table_exclusion(table) {
+            self.data
+                .side_wrap_exclusions
+                .insert((para_index, control_index), exclusion);
+        }
+    }
+
     /// 현재 항목을 ColumnContent로 만들어 마지막 페이지에 push
     pub(in crate::renderer::typeset) fn flush_column(&mut self) {
         // [#4090] 쪽이 끝나면 어울림 밴드도 끝난다 — 개체 높이를 used 에 반영한다.
@@ -350,7 +393,10 @@ impl TypesetState {
             overlay_cuts: std::mem::take(&mut self.data.current_column_overlay_cuts),
             inline_placements: std::mem::take(&mut self.data.inline_placements),
             inline_flow_plans: std::mem::take(&mut self.data.inline_flow_plans),
+            stored_paragraph_flow_ends: std::mem::take(&mut self.data.stored_paragraph_flow_ends),
+            stored_column_top_spacings: std::mem::take(&mut self.data.stored_column_top_spacings),
             paragraph_float_placements: std::mem::take(&mut self.data.paragraph_float_placements),
+            float_pushed_line_spacings: std::mem::take(&mut self.data.float_pushed_line_spacings),
         };
         if let Some(page) = self.data.pages.last_mut() {
             page.column_contents.push(col_content);
@@ -425,7 +471,10 @@ impl TypesetState {
             overlay_cuts: std::mem::take(&mut self.data.current_column_overlay_cuts),
             inline_placements: std::mem::take(&mut self.data.inline_placements),
             inline_flow_plans: std::mem::take(&mut self.data.inline_flow_plans),
+            stored_paragraph_flow_ends: std::mem::take(&mut self.data.stored_paragraph_flow_ends),
+            stored_column_top_spacings: std::mem::take(&mut self.data.stored_column_top_spacings),
             paragraph_float_placements: std::mem::take(&mut self.data.paragraph_float_placements),
+            float_pushed_line_spacings: std::mem::take(&mut self.data.float_pushed_line_spacings),
         };
         if let Some(page) = self.data.pages.last_mut() {
             page.column_contents.push(col_content);
@@ -611,6 +660,7 @@ impl TypesetState {
             self.data.current_height = self.data.current_height.max(overlay_top_reserve);
             self.data.current_start_height = self.data.current_height;
         }
+        self.drain_deferred_body_footnotes();
     }
 
     pub(in crate::renderer::typeset) fn reset_for_new_page(&mut self) {

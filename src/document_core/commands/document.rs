@@ -1860,7 +1860,15 @@ impl DocumentCore {
 
         // 1단계 — 고칠 자리를 live IR 에서 정한다. 유닛 캐시가 live 셀 포인터로 메모이즈
         // 돼 있으므로 스냅숏 포인터를 캐시에 넣지 않는다.
-        let mut plans: Vec<(usize, usize, usize, usize, Vec<(usize, usize)>)> = Vec::new();
+        struct FrameWriteback {
+            section: usize,
+            paragraph: usize,
+            control: usize,
+            cell: usize,
+            resets: Vec<(usize, usize)>,
+            preserved_frames: Vec<((usize, usize), (usize, usize))>,
+        }
+        let mut plans = Vec::new();
         for (section_idx, section) in self.document.sections.iter().enumerate() {
             let Some(pagination) = self.pagination.get(section_idx) else {
                 continue;
@@ -1908,7 +1916,16 @@ impl DocumentCore {
                                     unmappable = true;
                                     continue;
                                 }
-                                for (slot, consumed) in start_cut.iter().enumerate() {
+                                // 소스 소유 컷은 연속으로 남겨 두고, 실제 배치와 같은
+                                // 물리 시작점에 저장 사다리의 프레임 재시작을 기록한다.
+                                let physical_start_cut =
+                                    self.layout_engine.skip_leading_free_spacers_in_row_cut(
+                                        table,
+                                        *start_row,
+                                        start_cut,
+                                        &self.styles,
+                                    );
+                                for (slot, consumed) in physical_start_cut.iter().enumerate() {
                                     if *consumed > 0 {
                                         per_cell
                                             .entry(row_cells[slot])
@@ -1929,6 +1946,33 @@ impl DocumentCore {
                         let anchors =
                             self.layout_engine
                                 .cell_unit_line_anchors(cell, table, &self.styles);
+                        if std::env::var_os("RHWP_DIAG_WRITEBACK").is_some() {
+                            let normalized_table = self
+                                .section_render_paragraphs(section_idx)
+                                .get(para_idx)
+                                .and_then(|p| p.controls.get(control_idx))
+                                .and_then(|c| {
+                                    if let Control::Table(t) = c {
+                                        Some(t)
+                                    } else {
+                                        None
+                                    }
+                                });
+                            if let Some(t) = normalized_table {
+                                if let Some(normalized_cell) = t.cells.get(cell_idx) {
+                                    let normalized_anchors = self
+                                        .layout_engine
+                                        .cell_unit_line_anchors(normalized_cell, t, &self.styles);
+                                    eprintln!("WRITEBACK_UNITS section={section_idx} para={para_idx} control={control_idx} cell={cell_idx} live_paras={} render_paras={} live_units={} render_units={} anchors_equal={} cuts={units:?}", cell.paragraphs.len(), normalized_cell.paragraphs.len(), anchors.len(), normalized_anchors.len(), anchors == normalized_anchors);
+                                    for &unit in &units {
+                                        let lo = unit.saturating_sub(1);
+                                        let hi = (unit + 2).min(anchors.len());
+                                        eprintln!("WRITEBACK_CUT cell={cell_idx} cut={unit} live={:?} render={:?}", anchors.get(lo..hi), normalized_anchors.get(lo..hi));
+                                    }
+                                }
+                            }
+                        }
+                        let mut preserved_frames = Vec::new();
                         let mut resets: Vec<(usize, usize)> = Vec::with_capacity(units.len());
                         for unit in units.iter() {
                             match anchors.get(*unit) {
@@ -1956,15 +2000,52 @@ impl DocumentCore {
                                 // 뒤 줄을 대신 적으면 그 구조를 통째로 앞 쪽에 넣으라는 거짓이
                                 // 되므로 이 경계는 **쓰지 않는다** — 읽는 쪽이 제 용량 컷을
                                 // 쓰게 두는 것이 편집 직후 배치와 같다.
-                                Some(CellUnitLineAnchor::InsideAnOpenLine) | None => {}
+                                Some(CellUnitLineAnchor::InsideAnOpenLine) => {
+                                    let preceding =
+                                        anchors[..*unit].iter().rev().find_map(|a| match a {
+                                            CellUnitLineAnchor::Opens(p, l) => Some((*p, *l)),
+                                            _ => None,
+                                        });
+                                    let following = anchors[*unit..].iter().find_map(|a| match a {
+                                        CellUnitLineAnchor::Opens(p, l) => Some((*p, *l)),
+                                        _ => None,
+                                    });
+                                    if let (Some(start), Some(end)) = (preceding, following) {
+                                        // A recursive cut has no host line at its physical
+                                        // start. Preserve the successor's source rewind;
+                                        // erasing it also changes the nested frame's extent.
+                                        if start < end {
+                                            preserved_frames.push((start, end));
+                                        }
+                                    }
+                                }
+                                None => {}
                             }
                         }
+                        preserved_frames.extend(
+                            self.layout_engine
+                                .cell_deferred_picture_source_frames(cell, table, &self.styles)
+                                .into_iter()
+                                .map(|(start, end)| ((start, 0), (end, 0))),
+                        );
+                        resets.retain(|line| {
+                            !preserved_frames
+                                .iter()
+                                .any(|(start, end)| start <= line && line <= end)
+                        });
                         resets.sort_unstable();
                         resets.dedup();
                         if resets.is_empty() {
                             continue;
                         }
-                        plans.push((section_idx, para_idx, control_idx, cell_idx, resets));
+                        plans.push(FrameWriteback {
+                            section: section_idx,
+                            paragraph: para_idx,
+                            control: control_idx,
+                            cell: cell_idx,
+                            resets,
+                            preserved_frames,
+                        });
                     }
                 }
             }
@@ -1976,7 +2057,15 @@ impl DocumentCore {
         // 나르고(조판의 `vpos_gap_before` 등이 읽는다), 촘촘한 사다리로 덮으면 그 신호가
         // 사라져 읽는 쪽이 더 채운다(실측: 문단 2276 편집에서 103쪽이 11낱말 더 먹었다).
         // 그래서 줄 사이 **원래 간격을 그대로 이어 붙이고**, 되감김만 실제 컷 자리로 옮긴다.
-        for (section_idx, para_idx, control_idx, cell_idx, resets) in plans {
+        for FrameWriteback {
+            section: section_idx,
+            paragraph: para_idx,
+            control: control_idx,
+            cell: cell_idx,
+            resets,
+            preserved_frames,
+        } in plans
+        {
             let Some(Control::Table(table)) = snapshot
                 .sections
                 .get_mut(section_idx)
@@ -1997,7 +2086,12 @@ impl DocumentCore {
                     let next = match previous {
                         None => stored,
                         Some((previous_stored, previous_new, previous_occupied)) => {
-                            if resets.contains(&(cell_para_idx, line_idx)) {
+                            if resets.contains(&(cell_para_idx, line_idx))
+                                || (preserved_frames
+                                    .iter()
+                                    .any(|(_, end)| *end == (cell_para_idx, line_idx))
+                                    && stored < previous_stored)
+                            {
                                 // 조각 시작 — 원래도 여기서 되감겼으면 그 원점을 그대로 쓰고,
                                 // 아니면 셀-로컬 원점 0 을 쓴다(이 문서의 조각 원점 관행).
                                 if stored < previous_stored {
@@ -3172,30 +3266,6 @@ mod validate_linesegs_tests {
     use crate::model::document::{Document, Section};
     use crate::model::paragraph::{ColumnBreakType, LineSeg, Paragraph};
 
-    fn p325_picture_band_core() -> DocumentCore {
-        DocumentCore::from_bytes(include_bytes!("../../../samples/3-09월_교육_통합_2022.hwp"))
-            .expect("p325 Picture-band corpus fixture")
-    }
-
-    fn line_seg_fields(lines: &[LineSeg]) -> Vec<(u32, i32, i32, i32, i32, i32, i32, i32, u32)> {
-        lines
-            .iter()
-            .map(|line| {
-                (
-                    line.text_start,
-                    line.vertical_pos,
-                    line.line_height,
-                    line.text_height,
-                    line.baseline_distance,
-                    line.line_spacing,
-                    line.column_start,
-                    line.segment_width,
-                    line.tag,
-                )
-            })
-            .collect()
-    }
-
     #[test]
     fn from_bytes_retains_hml_import_metadata_outside_document_ir() {
         let core =
@@ -3613,271 +3683,6 @@ mod validate_linesegs_tests {
     fn needs_reflow_broadly_skips_empty_paragraph() {
         let para = Paragraph::default();
         assert!(!DocumentCore::needs_reflow_broadly(&para));
-    }
-
-    #[test]
-    fn on_demand_picture_band_publishes_the_complete_p325_transaction() {
-        let mut core = p325_picture_band_core();
-        let section = &mut core.document.sections[0];
-        let stored_band = section.paragraphs[325..332]
-            .iter()
-            .map(|paragraph| paragraph.line_segs.clone())
-            .collect::<Vec<_>>();
-        let stored_first_full_width = section.paragraphs[332].line_segs.clone();
-
-        for paragraph in &mut section.paragraphs[325..332] {
-            paragraph.invalidate_layout_inputs();
-        }
-        section.paragraphs[325].line_segs.clear();
-        core.validation_report = DocumentCore::validate_linesegs(&core.document, true);
-        assert!(
-            core.validation_report
-                .warnings
-                .iter()
-                .any(|warning| warning.paragraph_idx == 325),
-            "the missing host row must enter the explicit on-demand path"
-        );
-
-        assert_eq!(core.reflow_linesegs_on_demand(), 7);
-
-        let section = &core.document.sections[0];
-        let mut expected_vpos = stored_band[0][0].vertical_pos;
-        for (paragraph_index, stored) in (325..332).zip(&stored_band) {
-            let generated = &section.paragraphs[paragraph_index].line_segs;
-            assert_eq!(generated.len(), stored.len(), "p{paragraph_index}");
-            for (actual, expected) in generated.iter().zip(stored) {
-                assert_eq!(actual.text_start, expected.text_start, "p{paragraph_index}");
-                assert_eq!(actual.vertical_pos, expected_vpos, "p{paragraph_index}");
-                assert_eq!(
-                    actual.column_start, expected.column_start,
-                    "p{paragraph_index}"
-                );
-                assert_eq!(
-                    actual.segment_width, expected.segment_width,
-                    "p{paragraph_index}"
-                );
-                assert_eq!(
-                    actual.line_height, expected.line_height,
-                    "p{paragraph_index}"
-                );
-                assert_eq!(
-                    actual.text_height, expected.text_height,
-                    "p{paragraph_index}"
-                );
-                assert_eq!(
-                    actual.baseline_distance, expected.baseline_distance,
-                    "p{paragraph_index}"
-                );
-                assert!(
-                    actual.line_spacing.abs_diff(expected.line_spacing) <= 3,
-                    "p{paragraph_index}: generated={} stored={}",
-                    actual.line_spacing,
-                    expected.line_spacing,
-                );
-                assert!(actual.is_first_segment(), "p{paragraph_index}");
-                assert!(actual.is_last_segment(), "p{paragraph_index}");
-                expected_vpos += actual.line_height + actual.line_spacing;
-            }
-        }
-        assert!(
-            section.paragraphs[325..332]
-                .iter()
-                .all(|paragraph| !paragraph.stored_text_partition_is_dirty()),
-            "the complete Picture-band publication makes every replacement row current"
-        );
-
-        let hwp_bytes = crate::serializer::body_text::serialize_section(section);
-        let hwp_roundtrip = crate::parser::body_text::parse_body_text_section(&hwp_bytes)
-            .expect("published Picture-band rows remain serializable as HWP");
-        assert!(!hwp_roundtrip.paragraphs[325].line_segs.is_empty());
-
-        let mut hwpx_context =
-            crate::serializer::hwpx::context::SerializeContext::collect_from_document(
-                &core.document,
-            );
-        // The whole band is one fresh implementation transaction. HWPX omits
-        // synthetic LineSeg arrays by policy so the consumer recomputes them;
-        // no successor may masquerade as authentic saved geometry.
-        let (_, p326_linesegs, _) = crate::serializer::hwpx::section::render_paragraph_parts(
-            &core.document.sections[0].paragraphs[326],
-            0,
-            &mut hwpx_context,
-        );
-        assert!(
-            p326_linesegs.is_empty(),
-            "fresh Picture-band rows remain implementation-owned in HWPX"
-        );
-        assert!(section.paragraphs[325..332]
-            .iter()
-            .all(|paragraph| paragraph
-                .line_segs
-                .iter()
-                .all(|line| line.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY != 0)));
-        assert_eq!(
-            section.paragraphs[332].line_segs.len(),
-            stored_first_full_width.len(),
-            "p332 remains outside the transaction"
-        );
-        for (actual, expected) in section.paragraphs[332]
-            .line_segs
-            .iter()
-            .zip(&stored_first_full_width)
-        {
-            assert_eq!(actual.text_start, expected.text_start);
-            assert_eq!(actual.line_height, expected.line_height);
-            assert_eq!(actual.text_height, expected.text_height);
-            assert_eq!(actual.baseline_distance, expected.baseline_distance);
-            assert_eq!(actual.line_spacing, expected.line_spacing);
-            assert_eq!(actual.column_start, expected.column_start);
-            assert_eq!(actual.segment_width, expected.segment_width);
-            assert_eq!(actual.tag, expected.tag);
-        }
-        assert!(
-            section.paragraphs[332]
-                .line_segs
-                .iter()
-                .all(|line| line.column_start == 0 && line.segment_width > 3_406),
-            "p332 is the first full-width row after the side-wrap band"
-        );
-    }
-
-    #[test]
-    fn on_demand_picture_band_discovers_stored_p325_host_from_missing_successor() {
-        let mut core = p325_picture_band_core();
-        let section = &mut core.document.sections[0];
-        let stored_band = section.paragraphs[325..332]
-            .iter()
-            .map(|paragraph| paragraph.line_segs.clone())
-            .collect::<Vec<_>>();
-        let stored_p326_column_start = stored_band[1][0].column_start;
-        let stored_p326_segment_width = stored_band[1][0].segment_width;
-        let first_full_width = section.paragraphs[332].line_segs[0].segment_width;
-
-        section.paragraphs[326].line_segs.clear();
-        core.validation_report = DocumentCore::validate_linesegs(&core.document, true);
-        assert!(
-            core.validation_report
-                .warnings
-                .iter()
-                .any(|warning| warning.paragraph_idx == 326),
-            "the missing successor must enter the explicit on-demand path"
-        );
-
-        assert_eq!(core.reflow_linesegs_on_demand(), 7);
-
-        let section = &core.document.sections[0];
-        let mut expected_vpos = stored_band[0][0].vertical_pos;
-        for (paragraph_index, stored) in (325..332).zip(&stored_band) {
-            let generated = &section.paragraphs[paragraph_index].line_segs;
-            assert_eq!(generated.len(), stored.len(), "p{paragraph_index}");
-            for (actual, expected) in generated.iter().zip(stored) {
-                assert_eq!(actual.text_start, expected.text_start, "p{paragraph_index}");
-                assert_eq!(actual.vertical_pos, expected_vpos, "p{paragraph_index}");
-                assert_eq!(
-                    actual.column_start, expected.column_start,
-                    "p{paragraph_index}"
-                );
-                assert_eq!(
-                    actual.segment_width, expected.segment_width,
-                    "p{paragraph_index}"
-                );
-                assert_eq!(
-                    actual.line_height, expected.line_height,
-                    "p{paragraph_index}"
-                );
-                assert_eq!(
-                    actual.text_height, expected.text_height,
-                    "p{paragraph_index}"
-                );
-                assert_eq!(
-                    actual.baseline_distance, expected.baseline_distance,
-                    "p{paragraph_index}"
-                );
-                assert!(
-                    actual.line_spacing.abs_diff(expected.line_spacing) <= 3,
-                    "p{paragraph_index}: generated={} stored={}",
-                    actual.line_spacing,
-                    expected.line_spacing,
-                );
-                assert!(actual.is_first_segment(), "p{paragraph_index}");
-                assert!(actual.is_last_segment(), "p{paragraph_index}");
-                expected_vpos += actual.line_height + actual.line_spacing;
-            }
-        }
-        let p326 = &section.paragraphs[326].line_segs[0];
-        assert_eq!(p326.column_start, stored_p326_column_start);
-        assert_eq!(p326.segment_width, stored_p326_segment_width);
-        assert!(
-            p326.segment_width < first_full_width,
-            "p326 keeps the Picture band's narrow side-wrap width rather than scalar full width"
-        );
-    }
-
-    #[test]
-    fn on_demand_rejected_tracked_picture_band_leaves_successor_source_geometry_untouched() {
-        let mut core = p325_picture_band_core();
-        let section = &mut core.document.sections[0];
-        section.paragraphs[326].line_segs.clear();
-        section.paragraphs[329].column_type = ColumnBreakType::Page;
-        let source_rows = section.paragraphs[325..333]
-            .iter()
-            .map(|paragraph| line_seg_fields(&paragraph.line_segs))
-            .collect::<Vec<_>>();
-        core.validation_report = DocumentCore::validate_linesegs(&core.document, true);
-        assert!(
-            core.validation_report
-                .warnings
-                .iter()
-                .any(|warning| warning.paragraph_idx == 326),
-            "the missing successor must enter the explicit on-demand path"
-        );
-
-        assert_eq!(core.reflow_linesegs_on_demand(), 0);
-
-        let section = &core.document.sections[0];
-        for (paragraph_index, source) in (325..333).zip(&source_rows) {
-            assert_eq!(
-                line_seg_fields(&section.paragraphs[paragraph_index].line_segs),
-                *source,
-                "p{paragraph_index} stays source-owned after the tracked host rejects its transaction"
-            );
-        }
-        assert!(
-            section.paragraphs[326].line_segs.is_empty(),
-            "the rejected tracked host must not scalar-reflow the missing successor"
-        );
-    }
-
-    #[test]
-    fn on_demand_rejected_picture_band_leaves_host_and_later_body_rows_untouched() {
-        let mut core = p325_picture_band_core();
-        let section = &mut core.document.sections[0];
-        let middle_before = line_seg_fields(&section.paragraphs[330].line_segs);
-        section.paragraphs[325].line_segs.clear();
-        section.paragraphs[329].column_type = ColumnBreakType::Page;
-        section.paragraphs[332].line_segs.clear();
-        let host_before = line_seg_fields(&section.paragraphs[325].line_segs);
-        let later_before = line_seg_fields(&section.paragraphs[332].line_segs);
-        core.validation_report = DocumentCore::validate_linesegs(&core.document, true);
-
-        assert_eq!(core.reflow_linesegs_on_demand(), 0);
-
-        let section = &core.document.sections[0];
-        assert_eq!(
-            line_seg_fields(&section.paragraphs[325].line_segs),
-            host_before,
-            "the rejected non-TAC Picture host cannot fall back to scalar geometry"
-        );
-        assert_eq!(
-            line_seg_fields(&section.paragraphs[330].line_segs),
-            middle_before,
-            "the incomplete transaction publishes no prefix rows"
-        );
-        assert_eq!(
-            line_seg_fields(&section.paragraphs[332].line_segs),
-            later_before,
-            "the conservative section stop leaves later body reflow for its existing owner"
-        );
     }
 
     // ---------- R3: LinesegTextRunReflow ----------

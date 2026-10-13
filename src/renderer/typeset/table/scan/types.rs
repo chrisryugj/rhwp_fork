@@ -3,6 +3,10 @@
 /// [#2085] 표 행-스캔 분할점 캐리 (값 왕복). split_end_cut 은 move.
 pub(in crate::renderer::typeset) struct BlockTableRowScan {
     pub(in crate::renderer::typeset) consumed: f64,
+    /// Physical space added by an accepted source frame beyond its content rows.
+    /// Already reserved in `consumed`; continuation ownership must carry it
+    /// without extending the painted frame a second time.
+    pub(in crate::renderer::typeset) source_frame_band: f64,
     pub(in crate::renderer::typeset) end_row: usize,
     pub(in crate::renderer::typeset) split_block_start: Option<usize>,
     pub(in crate::renderer::typeset) split_end_cut: Vec<usize>,
@@ -33,4 +37,5 @@ pub(in crate::renderer::typeset) struct BlockRowScanVars {
     /// whole-row를 수용할 때 이 끝을 넘지 않도록 제한한다.
     pub(in crate::renderer::typeset) source_first_fragment_row_end: Option<usize>,
     pub(in crate::renderer::typeset) start_row_height_override: Option<f64>,
+    pub(in crate::renderer::typeset) source_terminal_suffix_start: Option<usize>,
 }

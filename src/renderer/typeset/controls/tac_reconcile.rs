@@ -32,6 +32,7 @@ pub(super) fn measure(
     para: &Paragraph,
     next_para: Option<&Paragraph>,
     fmt: &FormattedParagraph,
+    styles: &crate::renderer::style_resolver::ResolvedStyleSet,
     measured_tables: &[MeasuredTable],
     tac_count: usize,
     height_before: f64,
@@ -156,6 +157,38 @@ pub(super) fn measure(
     } else {
         fmt.total_height
     };
+    // A complete source slot includes its outer margins and full closing
+    // advance. Reuse the same producer as table paint instead of independently
+    // halving spacing or adding a margin already owned by the stored line.
+    let cap =
+        if !profile.session_edited() && tac_count == 1 && fmt.line_count() == 1 {
+            next_para
+                .and_then(|next| {
+                    para.controls
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, control)| {
+                            let Control::Table(table) = control else {
+                                return None;
+                            };
+                            flow.is_effective_tac_table(para, table, fmt)
+                    .then(|| crate::renderer::float_placement::stored_tac_line_successor_advance(
+                        para, index, next, styles, dpi,
+                    )).flatten()
+                        })
+                })
+                .map(|advance| {
+                    advance
+                        + if height_before < 1.0 {
+                            0.0
+                        } else {
+                            fmt.spacing_before
+                        }
+                })
+                .unwrap_or(cap)
+        } else {
+            cap
+        };
     // [#2279 누적Δ] 저장 ladder 가 host paraPr spacing 을 누락한 기계생성
     // 결재문서(HWPX, 빈 host TAC 표): 저장 스텝(다음 문단 vpos−현 vpos)이
     // fmt.total_height(sb+lh+ls+sa)보다 짧으면 생성기가 sa/sb 를 좌표에
