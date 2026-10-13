@@ -1,6 +1,10 @@
 //! Public v2 exports must reject unanchored or unreplayable strict text variants.
 
 use rhwp::paint::*;
+use rhwp::renderer::layer_renderer::{
+    analyze_text_variant_selection, TextVariantSelectionOptions, VariantRejectReason,
+    VariantSelectionBackend,
+};
 use rhwp::renderer::render_tree::{BoundingBox, TextRunNode};
 use rhwp::renderer::{PathCommand, TextStyle};
 
@@ -186,4 +190,75 @@ fn strict_export_rejects_finite_coordinates_outside_the_portable_scalar_range() 
         outline.to_json_v2_strict_glyph_outline().is_err(),
         "outline placement requires the same portable scalar range as GlyphRun"
     );
+}
+
+#[test]
+fn browser_selector_checks_portable_scalars_and_exact_face_glyph_range() {
+    let mut control = native_tree();
+    let LayerNodeKind::Leaf { ops } = &mut control.root.kind else {
+        unreachable!("leaf fixture")
+    };
+    ops.retain(|op| !matches!(op, PaintOp::GlyphOutline { .. }));
+    let options = TextVariantSelectionOptions {
+        backend: VariantSelectionBackend::CanvasKitBrowser,
+        ..TextVariantSelectionOptions::canvaskit()
+    };
+    let reports = analyze_text_variant_selection(&control, options);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(
+        reports[0].selected_variant_kind,
+        Some(TextVariantKind::GlyphRun)
+    );
+    assert!(!reports[0].fallback_required);
+
+    for value in [1e100, -1e100] {
+        for (field, expected_reason) in [
+            ("placement", VariantRejectReason::PlacementNotFinite),
+            ("position", VariantRejectReason::PositionNotFinite),
+            ("advance", VariantRejectReason::AdvanceNotFinite),
+        ] {
+            let mut invalid = control.clone();
+            let run = glyph_run_mut(&mut invalid);
+            match field {
+                "placement" => run.placement.run_to_page.e = value,
+                "position" => run.positions[0].x = value,
+                "advance" => run.advances = Some(vec![LayerVector { dx: value, dy: 0.0 }]),
+                _ => unreachable!(),
+            }
+            let reports = analyze_text_variant_selection(&invalid, options);
+            assert_eq!(reports.len(), 1);
+            let report = &reports[0];
+            assert_eq!(report.selected_variant_kind, Some(TextVariantKind::TextRun));
+            assert!(report.fallback_required);
+            assert_eq!(report.rejected_variants.len(), 1);
+            assert!(report.rejected_variants[0]
+                .reasons
+                .contains(&expected_reason));
+        }
+    }
+    for value in [0.0, -16.0, f64::from(f32::MAX), -f64::from(f32::MAX)] {
+        let mut valid = control.clone();
+        glyph_run_mut(&mut valid).positions[0].x = value;
+        let reports = analyze_text_variant_selection(&valid, options);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(
+            reports[0].selected_variant_kind,
+            Some(TextVariantKind::GlyphRun)
+        );
+    }
+    // Fitting u16 does not prove membership in this exact font face.
+    let glyph_count = u32::from(ttf_parser::Face::parse(FONT, 0).unwrap().number_of_glyphs());
+    assert!(glyph_count > 1 && glyph_count < u32::from(u16::MAX));
+    for invalid_id in [glyph_count, u32::from(u16::MAX)] {
+        let mut invalid = control.clone();
+        glyph_run_mut(&mut invalid).glyph_ids[0] = invalid_id;
+        let reports = analyze_text_variant_selection(&invalid, options);
+        assert_eq!(reports.len(), 1);
+        let report = &reports[0];
+        assert_eq!(report.selected_variant_kind, Some(TextVariantKind::TextRun));
+        assert!(report.fallback_required);
+        assert!(report.rejected_variants[0]
+            .reasons
+            .contains(&VariantRejectReason::GlyphIdOutOfRange));
+    }
 }

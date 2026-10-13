@@ -1647,46 +1647,6 @@ mod tests {
     }
 
     #[test]
-    fn canvaskit_browser_checks_portable_scalars_and_exact_face_glyph_range() {
-        for value in [1e100, -1e100] {
-            let cases = [
-                (
-                    report_for_mutated_glyph_run(|run| run.placement.run_to_page.e = value),
-                    VariantRejectReason::PlacementNotFinite,
-                ),
-                (
-                    report_for_mutated_glyph_run(|run| run.positions[0].x = value),
-                    VariantRejectReason::PositionNotFinite,
-                ),
-                (
-                    report_for_mutated_glyph_run(|run| {
-                        run.advances = Some(vec![LayerVector { dx: value, dy: 0.0 }]);
-                    }),
-                    VariantRejectReason::AdvanceNotFinite,
-                ),
-            ];
-            for (report, reason) in cases {
-                assert_eq!(report.selected_variant_kind, Some(TextVariantKind::TextRun));
-                assert!(report.fallback_required);
-                assert!(report.rejected_variants[0].reasons.contains(&reason));
-            }
-        }
-        for value in [0.0, -16.0, f64::from(f32::MAX), -f64::from(f32::MAX)] {
-            let report = report_for_mutated_glyph_run(|run| run.positions[0].x = value);
-            assert_eq!(
-                report.selected_variant_kind,
-                Some(TextVariantKind::GlyphRun)
-            );
-        }
-        // The exact TTC face has two glyphs; fitting u16 does not prove membership.
-        let report = report_for_mutated_glyph_run(|run| run.glyph_ids[0] = 2);
-        assert_eq!(report.selected_variant_kind, Some(TextVariantKind::TextRun));
-        assert!(report.rejected_variants[0]
-            .reasons
-            .contains(&VariantRejectReason::GlyphIdOutOfRange));
-    }
-
-    #[test]
     fn canvaskit_browser_rejects_missing_glyph_zero() {
         let report = first_report(
             vec![text_op(), glyph_run(diagnostics(), 0)],
@@ -2297,43 +2257,6 @@ mod tests {
             rejected.rejected_variants[0].reasons,
             vec![VariantRejectReason::PositionAdjustedNotAllowed]
         );
-    }
-
-    #[test]
-    fn strict_outline_selector_obeys_the_portable_command_limit() {
-        let mut candidate = glyph_outline(None);
-        let PaintOp::GlyphOutline { outline, .. } = &mut candidate else {
-            unreachable!("outline fixture")
-        };
-        outline.paths[0]
-            .commands
-            .resize(4096, PathCommand::LineTo(0.0, 0.0));
-        let control = first_report(
-            vec![text_op(), candidate.clone()],
-            TextVariantSelectionOptions::canvaskit_strict_outline(),
-        );
-        assert_eq!(
-            control.selected_variant_kind,
-            Some(TextVariantKind::GlyphOutline)
-        );
-        let PaintOp::GlyphOutline { outline, .. } = &mut candidate else {
-            unreachable!("outline fixture")
-        };
-        outline.paths[0]
-            .commands
-            .push(PathCommand::LineTo(0.0, 0.0));
-        let rejected = first_report(
-            vec![text_op(), candidate],
-            TextVariantSelectionOptions::canvaskit_strict_outline(),
-        );
-        assert_eq!(
-            rejected.selected_variant_kind,
-            Some(TextVariantKind::TextRun)
-        );
-        assert!(rejected.fallback_required);
-        assert!(rejected.rejected_variants[0]
-            .reasons
-            .contains(&VariantRejectReason::UnsupportedOutlinePayload));
     }
 
     #[test]

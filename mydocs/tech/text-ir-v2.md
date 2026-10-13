@@ -549,13 +549,15 @@ bitmap의 페이지 누적 예산을 decode 전에 확인하며, bitmap/SVG 자�
 포함한다. linear/radial/sweep 모두 배열·shader를 만들기 전에 checked 연산으로 예약하며,
 실패하면 기존 `TextRun` fallback을 유지한다. P47 picture cache도 같은 helper의 expanded
 합계를 보유 추정에 포함해야 한다. 세 allocation 계약 검사는 버퍼 생성 없이 상한·반복 방문·
-overflow 거부를 검증하도록 추가했으며 rustfmt 외 실제 실행은 아직 하지 않았다.
+overflow 거부를 검증하도록 후보 패치에 보존했다. source unit-test 수를 늘리는 정책 변경은
+하지 않으며, private Native 준비 검사의 실제 실행은 아직 하지 않았다.
 
 ## P45/P47 통합 검토: Native admission 경계
 
 공유 selector는 개별 monochrome path를4096개 명령으로 제한하지만 Native의 일반 path
 builder는100000개까지 처리하므로 준비 입구에도 `has_portable_geometry()` 검사가 필요하다.
 이 검사를 Native의 자원 준비 전에 적용해4096은 수용하고4097은 TextRun fallback으로 남긴다.
-같은 경계의 selector 검사와 surface를 만들지 않는 Native preparation 검사를 추가했다.
+같은 경계의 공개 selector 검사는 기존 integration case에 추가했다. surface를 만들지 않는
+private Native preparation 검사는 source unit-test 정책에 따라 후보 패치에 보존했다.
 P47 cache는 거부된 준비 결과를 저장하지 않으며 실제 선택 결과로 진단을 갱신해야 한다.
-검사는 아직 실행하지 않았고 두 Rust 파일의 rustfmt·diff 확인까지만 수행했다.
+새 검사는 아직 실행하지 않았으며, source unit-test 정책과 변경 파일의 rustfmt·diff를 확인한다.

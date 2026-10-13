@@ -478,8 +478,7 @@ fn strict_stroke_rejects_finite_values_outside_f32() {
     .is_strict_subset());
 }
 
-#[test]
-fn strict_outline_selector_keeps_text_fallback_when_geometry_exceeds_f32() {
+fn monochrome_selector_tree() -> PageLayerTree {
     let bounds = BoundingBox::new(0.0, 0.0, 24.0, 24.0);
     let style = TextStyle {
         font_family: "Test".to_string(),
@@ -571,6 +570,12 @@ fn strict_outline_selector_keeps_text_fallback_when_geometry_exceeds_f32() {
         },
     ));
 
+    tree
+}
+
+#[test]
+fn strict_outline_selector_keeps_text_fallback_when_geometry_exceeds_f32() {
+    let tree = monochrome_selector_tree();
     let options = TextVariantSelectionOptions::canvaskit_strict_outline();
     let reports = analyze_text_variant_selection(&tree, options);
     assert_eq!(reports.len(), 1);
@@ -621,6 +626,42 @@ fn strict_outline_selector_keeps_text_fallback_when_geometry_exceeds_f32() {
                 vec![VariantRejectReason::UnsupportedOutlinePayload],
                 "only the changed scalar should reject {field}: {value}"
             );
+        }
+    }
+}
+
+#[test]
+fn strict_outline_selector_obeys_the_portable_command_limit() {
+    let mut tree = monochrome_selector_tree();
+    for (command_count, expected) in [
+        (4096, TextVariantKind::GlyphOutline),
+        (4097, TextVariantKind::TextRun),
+    ] {
+        let LayerNodeKind::Leaf { ops } = &mut tree.root.kind else {
+            unreachable!("leaf fixture")
+        };
+        let PaintOp::GlyphOutline { outline, .. } = &mut ops[1] else {
+            unreachable!("outline fixture")
+        };
+        outline.paths[0]
+            .commands
+            .resize(command_count, PathCommand::LineTo(0.0, 0.0));
+        let reports = analyze_text_variant_selection(
+            &tree,
+            TextVariantSelectionOptions::canvaskit_strict_outline(),
+        );
+        assert_eq!(reports.len(), 1);
+        let report = &reports[0];
+        assert_eq!(report.selected_variant_kind, Some(expected));
+        assert_eq!(report.fallback_required, command_count > 4096);
+        if command_count > 4096 {
+            assert_eq!(report.rejected_variants.len(), 1);
+            assert_eq!(
+                report.rejected_variants[0].reasons,
+                vec![VariantRejectReason::UnsupportedOutlinePayload]
+            );
+        } else {
+            assert!(report.rejected_variants.is_empty());
         }
     }
 }
