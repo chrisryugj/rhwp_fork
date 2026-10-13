@@ -483,3 +483,18 @@ JSON 검증 경로를 공유하므로 직렬화 없는 API는 아니며, resourc
 검사는 기존 bitmap/font producer를 사용한 자원 보존, source·paint order, 엄격한 거부와
 lossless compatibility downgrade에 한정한다. 새 font SVG producer 검사는 시각 증거 확보 후
 별도로 도입한다. 이관 파일의 rustfmt·diff 확인을 마쳤으며 실행 검증은 대기 중이다.
+
+## P45 이관: WASM object API
+
+`getPageLayerTreeValue*`는 정본 JSON writer의 필드를 재사용하고 resource의 그림·글꼴 bytes를
+`Uint8Array`로 제공한다. SVG resource는 문자열이며, 소비자가 이미 가진 content key의 slot만
+생략한다. resource hint는 최대 4096개 문자열, 각 UTF-8 문자열 1024 bytes로 제한한다.
+기본 JSON API와 Canvas2D 기본 선택은 바꾸지 않는다. v2 JSON/object API는 모두 명시적이다.
+
+기존 resource-key API와 연결할 수 있도록 v1 object API의 마지막 인수는 선택적인
+`omit_font_bytes`와 `omit_image_bytes`이다. 이미지 옵션은 기존 정본 writer의 source-key
+규칙을 따르며, 되찾을 key가 없는 payload를 무조건 생략하는 옵션이 아니다. paint 생성,
+직렬화와 resource 변환은 같은 hot render 경계 안에서 수행한다.
+
+hot boundary 등록 검사를 보완했다. rustfmt·정적 API 대조는 완료했으며 wasm32 빌드와 fresh
+WASM의 실제 object·편집 무효화 검사는 아직 실행하지 않았다. 직렬화 비용 감소를 주장하지 않는다.

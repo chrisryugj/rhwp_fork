@@ -48,6 +48,9 @@ mod hyperlink;
 mod render_patch_boundary;
 mod template_automation;
 
+#[cfg(target_arch = "wasm32")]
+mod layer_export;
+
 impl From<HwpError> for JsValue {
     fn from(err: HwpError) -> Self {
         JsValue::from_str(&err.to_string())
