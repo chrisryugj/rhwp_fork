@@ -553,8 +553,8 @@ fn glyph_run_diagnostics_are_strict(diagnostics: &GlyphRunDiagnostics) -> bool {
 fn glyph_run_is_strict(run: &LayerGlyphRunPaint, resources: &ResourceArena) -> bool {
     glyph_run_diagnostics_are_strict(&run.diagnostics)
         && matches!(run.orientation, GlyphRunOrientation::Horizontal)
-        && !run.shape_key.font_instance.synthetic_bold
-        && !run.shape_key.font_instance.synthetic_italic
+        && run.paint_style.is_simple_glyph_run_replay()
+        && run.shape_key.font_instance.variations.is_empty()
         && matches!(run.direction, TextDirection::Ltr)
         && matches!(run.shape_key.direction, TextDirection::Ltr)
         && run.bidi_level == Some(0)
@@ -583,8 +583,8 @@ fn glyph_run_fallback_reason(
     if run.glyph_transforms.is_some() {
         return Some("glyphTransformAuthorityPending".to_string());
     }
-    if run.shape_key.font_instance.synthetic_bold || run.shape_key.font_instance.synthetic_italic {
-        return Some("syntheticStyleAuthorityPending".to_string());
+    if !run.paint_style.is_simple_glyph_run_replay() {
+        return Some("unsupportedPaintEffect".to_string());
     }
     if !matches!(run.direction, TextDirection::Ltr)
         || !matches!(run.shape_key.direction, TextDirection::Ltr)
@@ -1495,11 +1495,7 @@ mod tests {
 
     #[test]
     fn reports_p42_strict_shape_authority_as_pending() {
-        let cases: [(fn(&mut LayerGlyphRunPaint), &str); 6] = [
-            (
-                |run| run.shape_key.font_instance.synthetic_italic = true,
-                "syntheticStyleAuthorityPending",
-            ),
+        let cases: [(fn(&mut LayerGlyphRunPaint), &str); 5] = [
             (
                 |run| run.direction = TextDirection::Rtl,
                 "bidiDirectionAuthorityPending",

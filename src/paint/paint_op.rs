@@ -1975,11 +1975,15 @@ impl PaintTextStyle {
     pub fn is_simple_glyph_run_replay(&self) -> bool {
         let ratio = if self.ratio > 0.0 { self.ratio } else { 1.0 };
         (ratio - 1.0).abs() <= 0.001
+            && self.font_size.is_finite()
+            && self.font_size > 0.0
+            && self.font_size <= 4096.0
             && self.tab_leaders.is_empty()
             && self.underline == UnderlineType::None
             && !self.strikethrough
-            && (self.shadow_type == 0
-                || (self.shadow_offset_x.is_finite() && self.shadow_offset_y.is_finite()))
+            && [self.shadow_offset_x, self.shadow_offset_y]
+                .into_iter()
+                .all(|offset| offset.is_finite() && offset.abs() <= f32::MAX as f64)
             && !self.superscript
             && !self.subscript
             && self.emphasis_dot == 0

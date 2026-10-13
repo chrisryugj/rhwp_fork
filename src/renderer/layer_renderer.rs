@@ -626,7 +626,13 @@ fn collect_glyph_run_reject_reasons(
     {
         reasons.insert(VariantRejectReason::GlyphAdvanceCountMismatch);
     }
-    let paint_supported = if options.backend == VariantSelectionBackend::NativeSkia {
+    let supports_exact_instance = matches!(
+        options.backend,
+        VariantSelectionBackend::NativeSkia
+            | VariantSelectionBackend::CanvasKit
+            | VariantSelectionBackend::CanvasKitBrowser
+    );
+    let paint_supported = if supports_exact_instance && !bounded_vertical_declared {
         run.paint_style.is_simple_glyph_run_replay()
     } else {
         run.paint_style.is_fill_only_glyph_replay()
@@ -635,7 +641,7 @@ fn collect_glyph_run_reject_reasons(
         reasons.insert(VariantRejectReason::UnsupportedPaintEffect);
     }
     if (run.shape_key.font_instance.synthetic_bold || run.shape_key.font_instance.synthetic_italic)
-        && options.backend != VariantSelectionBackend::NativeSkia
+        && !supports_exact_instance
     {
         reasons.insert(VariantRejectReason::SyntheticStyleAuthorityPending);
     }
@@ -1696,12 +1702,6 @@ mod tests {
         let cases = [
             (
                 report_for_mutated_glyph_run(|run| {
-                    run.shape_key.font_instance.synthetic_bold = true;
-                }),
-                VariantRejectReason::SyntheticStyleAuthorityPending,
-            ),
-            (
-                report_for_mutated_glyph_run(|run| {
                     run.direction = TextDirection::Rtl;
                 }),
                 VariantRejectReason::BidiDirectionAuthorityPending,
@@ -2112,7 +2112,7 @@ mod tests {
     fn canvaskit_rejects_unsupported_text_effects() {
         let mut op = glyph_run(diagnostics(), FIXTURE_GLYPH_ID);
         if let PaintOp::GlyphRun { run, .. } = &mut op {
-            run.paint_style.shadow_type = 1;
+            run.paint_style.strikethrough = true;
         }
         let report = first_report(
             vec![text_op(), op],
