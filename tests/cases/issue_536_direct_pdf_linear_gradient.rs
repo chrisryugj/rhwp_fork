@@ -188,6 +188,7 @@ fn direct_pdf_keeps_non_linear_and_pattern_fills_closed() {
         unreachable!("rectangle fixture")
     };
     rect.style.pattern = Some(PatternFillInfo {
+        tile_size: 7.68,
         pattern_type: 0,
         pattern_color: 0,
         background_color: 0xffffff,
