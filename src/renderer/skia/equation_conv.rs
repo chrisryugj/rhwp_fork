@@ -65,9 +65,16 @@ fn render_box(
             let family = crate::renderer::equation::hancom_glyphs::FONT_FAMILY;
             let typeface = fonts
                 .custom_typefaces
-                .get(family)
-                .or_else(|| fonts.bundled_typefaces.get(family))
-                .cloned()
+                .candidates(family, FontStyle::normal())
+                .into_iter()
+                .next()
+                .or_else(|| {
+                    fonts
+                        .bundled_typefaces
+                        .candidates(family, FontStyle::normal())
+                        .into_iter()
+                        .next()
+                })
                 .or_else(|| {
                     match_system_family_style(
                         fonts.font_mgr,
