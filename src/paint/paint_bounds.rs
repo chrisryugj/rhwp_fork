@@ -2,13 +2,16 @@
 
 use std::collections::HashMap;
 
-use super::paint_op::{LayerAffineTransform, PaintBounds, PaintOp, TextDecorationKind};
+use super::paint_op::{
+    ColorGlyphFormat, ColorPaintGraphNodeKind, ColorPaintGraphPayload, GlyphOutlinePayloadKind,
+    LayerAffineTransform, LayerGlyphOutlinePaint, PaintBounds, PaintOp, TextDecorationKind,
+};
 use super::{LayerNode, LayerNodeKind, PageLayerTree, MAX_POSITIONED_CONTROL_MARKS_PER_RUN};
 use crate::model::style::UnderlineType;
 use crate::renderer::composer::expand_pua_display_text;
 use crate::renderer::render_tree::{BoundingBox, ShapeTransform, TextRunNode};
 use crate::renderer::{
-    clamp_tab_leader_end_x, LineRenderType, LineStyle, PathCommand, ShadowStyle,
+    clamp_tab_leader_end_x, svg_arc_to_beziers, LineRenderType, LineStyle, PathCommand, ShadowStyle,
 };
 
 impl PaintOp {
@@ -50,6 +53,9 @@ impl PaintOp {
                             .map_or(0.0, |stroke| stroke.width * 0.5),
                     ),
                 );
+                if let Some(paths) = glyph_outline_bounds(outline) {
+                    bounds = union(bounds, paths);
+                }
                 // Bitmap placement and fontEmBox are already page-space. Applying
                 // run_to_page here would translate a positioned font glyph twice.
                 if let Some(bitmap) = &outline.bitmap_glyph {
@@ -348,7 +354,12 @@ fn affine_bounds(bounds: BoundingBox, transform: Option<LayerAffineTransform>) -
     let Some(t) = transform else {
         return bounds;
     };
-    let mut result = None;
+    checked_affine_bounds(bounds, t).unwrap_or(bounds)
+}
+
+fn checked_affine_bounds(bounds: BoundingBox, t: LayerAffineTransform) -> Option<BoundingBox> {
+    let (mut left, mut top) = (f64::INFINITY, f64::INFINITY);
+    let (mut right, mut bottom) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
     for (x, y) in [
         (bounds.x, bounds.y),
         (bounds.x + bounds.width, bounds.y),
@@ -357,11 +368,204 @@ fn affine_bounds(bounds: BoundingBox, transform: Option<LayerAffineTransform>) -
     ] {
         let point = BoundingBox::new(t.a * x + t.c * y + t.e, t.b * x + t.d * y + t.f, 0.0, 0.0);
         if !valid(point) {
-            return bounds;
+            return None;
         }
-        result = Some(result.map_or(point, |prior| union(prior, point)));
+        left = left.min(point.x);
+        top = top.min(point.y);
+        right = right.max(point.x);
+        bottom = bottom.max(point.y);
     }
-    result.unwrap_or(bounds)
+    let result = BoundingBox::new(left, top, right - left, bottom - top);
+    valid(result).then_some(result)
+}
+
+// Canvas concatenation applies the child matrix before its enclosing matrix.
+fn concat_affine(
+    parent: LayerAffineTransform,
+    child: LayerAffineTransform,
+) -> LayerAffineTransform {
+    LayerAffineTransform {
+        a: parent.a * child.a + parent.c * child.b,
+        b: parent.b * child.a + parent.d * child.b,
+        c: parent.a * child.c + parent.c * child.d,
+        d: parent.b * child.c + parent.d * child.d,
+        e: parent.a * child.e + parent.c * child.f + parent.e,
+        f: parent.b * child.e + parent.d * child.f + parent.f,
+    }
+}
+
+fn glyph_outline_bounds(outline: &LayerGlyphOutlinePaint) -> Option<BoundingBox> {
+    let placement = outline.placement.run_to_page;
+    match outline.payload_kind {
+        GlyphOutlinePayloadKind::MonochromeFill | GlyphOutlinePayloadKind::MonochromeFillStroke => {
+            if outline.paths.len() > 4096 {
+                return None;
+            }
+            let stroke_padding =
+                if outline.payload_kind == GlyphOutlinePayloadKind::MonochromeFillStroke {
+                    let stroke = outline.stroke.as_ref()?;
+                    if !stroke.is_strict_subset() {
+                        return None;
+                    }
+                    // Miter length is bounded in path space, before scale/skew.
+                    stroke.width * 0.5 * stroke.miter_limit
+                } else {
+                    0.0
+                };
+            let mut bounds = None;
+            for path in &outline.paths {
+                let local = expand(glyph_path_bounds(&path.commands)?, stroke_padding);
+                let path = checked_affine_bounds(local, placement)?;
+                bounds = Some(bounds.map_or(path, |prior| union(prior, path)));
+            }
+            bounds
+        }
+        GlyphOutlinePayloadKind::ColorLayers => {
+            let payload = outline.color_layers.as_ref()?;
+            if payload.color_format == ColorGlyphFormat::ColrV0
+                && payload.has_colrv0_resolved_layer_contract()
+            {
+                let mut bounds = None;
+                for layer in &payload.layers {
+                    let transform = layer
+                        .transform_to_run
+                        .map_or(placement, |transform| concat_affine(placement, transform));
+                    let path = checked_affine_bounds(
+                        glyph_path_bounds(layer.commands.as_deref()?)?,
+                        transform,
+                    )?;
+                    bounds = Some(bounds.map_or(path, |prior| union(prior, path)));
+                }
+                bounds
+            } else if payload.has_colrv1_supported_graph_contract() {
+                color_graph_bounds(payload.paint_graph.as_ref()?, placement)
+            } else {
+                None
+            }
+        }
+        // These payloads carry page-space placements and are handled separately.
+        GlyphOutlinePayloadKind::BitmapGlyph | GlyphOutlinePayloadKind::SvgGlyph => None,
+    }
+}
+
+fn color_graph_bounds(
+    graph: &ColorPaintGraphPayload,
+    placement: LayerAffineTransform,
+) -> Option<BoundingBox> {
+    // The caller checks the graph's bounded, acyclic replay contract. Do not
+    // deduplicate shared leaves: each parent can supply a different transform.
+    let mut pending = vec![(graph.root_node_id, placement, None::<BoundingBox>)];
+    let mut bounds = None;
+    while let Some((id, transform, clip)) = pending.pop() {
+        let node = graph.nodes.iter().find(|node| node.node_id == id)?;
+        let commands = match node.kind {
+            ColorPaintGraphNodeKind::Transform => {
+                let child = node.transform.as_ref()?;
+                pending.push((
+                    child.child_node_id,
+                    concat_affine(transform, child.transform),
+                    clip,
+                ));
+                continue;
+            }
+            ColorPaintGraphNodeKind::Composite => {
+                let composite = node.composite.as_ref()?;
+                pending.push((composite.source_node_id, transform, clip));
+                pending.push((composite.backdrop_node_id, transform, clip));
+                continue;
+            }
+            ColorPaintGraphNodeKind::Clip => {
+                let child = node.clip.as_ref()?;
+                let own_clip =
+                    checked_affine_bounds(glyph_path_bounds(&child.clip_commands)?, transform)?;
+                let clipped = match clip {
+                    Some(clip) => intersection(clip, own_clip),
+                    None => Some(own_clip),
+                };
+                if let Some(clipped) = clipped {
+                    // A later child transform must not move this enclosing clip.
+                    pending.push((child.child_node_id, transform, Some(clipped)));
+                }
+                continue;
+            }
+            ColorPaintGraphNodeKind::SolidPath => &node.solid_path.as_ref()?.commands,
+            ColorPaintGraphNodeKind::LinearGradientPath => {
+                &node.linear_gradient_path.as_ref()?.commands
+            }
+            ColorPaintGraphNodeKind::RadialGradientPath => {
+                &node.radial_gradient_path.as_ref()?.commands
+            }
+            ColorPaintGraphNodeKind::SweepGradientPath => {
+                &node.sweep_gradient_path.as_ref()?.commands
+            }
+        };
+        let path = checked_affine_bounds(glyph_path_bounds(commands)?, transform)?;
+        let path = match clip {
+            Some(clip) => intersection(path, clip),
+            None => Some(path),
+        };
+        if let Some(path) = path {
+            bounds = Some(bounds.map_or(path, |prior| union(prior, path)));
+        }
+    }
+    bounds
+}
+
+fn glyph_path_bounds(commands: &[PathCommand]) -> Option<BoundingBox> {
+    if !super::paint_op::path_commands_are_finite(commands) {
+        return None;
+    }
+    let mut bounds = None;
+    let mut include = |(x, y)| {
+        let point = BoundingBox::new(x, y, 0.0, 0.0);
+        if !valid(point) {
+            return None;
+        }
+        bounds = Some(bounds.map_or(point, |prior| union(prior, point)));
+        Some(())
+    };
+    let mut current = (0.0, 0.0);
+    let mut origin = current;
+    for command in commands {
+        match *command {
+            PathCommand::MoveTo(x, y) => {
+                include((x, y))?;
+                origin = (x, y);
+                current = origin;
+            }
+            PathCommand::LineTo(x, y) => {
+                include(current)?;
+                include((x, y))?;
+                current = (x, y);
+            }
+            PathCommand::CurveTo(x1, y1, x2, y2, x, y) => {
+                // A cubic lies within its endpoints/control-point convex hull.
+                for point in [current, (x1, y1), (x2, y2), (x, y)] {
+                    include(point)?;
+                }
+                current = (x, y);
+            }
+            PathCommand::ArcTo(rx, ry, rotation, large, sweep, x, y) => {
+                include(current)?;
+                include((x, y))?;
+                if rx != 0.0 && ry != 0.0 {
+                    // Native replay draws these same cubic approximations.
+                    for segment in svg_arc_to_beziers(
+                        current.0, current.1, rx, ry, rotation, large, sweep, x, y,
+                    ) {
+                        if let PathCommand::CurveTo(x1, y1, x2, y2, x, y) = segment {
+                            for point in [(x1, y1), (x2, y2), (x, y)] {
+                                include(point)?;
+                            }
+                        }
+                    }
+                }
+                current = (x, y);
+            }
+            PathCommand::ClosePath => current = origin,
+        }
+    }
+    bounds
 }
 
 fn shape_bounds(
