@@ -373,8 +373,7 @@ impl LayerGlyphOutlinePaint {
     /// Scalar representability shared by strict outline consumers. Resource
     /// preparation and transformed extents still require backend validation.
     pub(crate) fn has_portable_geometry(&self) -> bool {
-        layer_affine_is_finite(self.placement.run_to_page)
-            && portable_glyph_scalar(self.placement.baseline_y)
+        text_placement_is_finite(&self.placement)
             && (!matches!(
                 self.payload_kind,
                 GlyphOutlinePayloadKind::MonochromeFill
@@ -987,12 +986,13 @@ fn glyph_range_is_valid(range: GlyphRange) -> bool {
 }
 
 // Skia consumes f32 scalars even when the shared IR stores f64 geometry.
-fn portable_glyph_scalar(value: f64) -> bool {
+pub(crate) fn portable_glyph_scalar(value: f64) -> bool {
     value.is_finite() && value.abs() <= f64::from(f32::MAX)
 }
 
-fn path_commands_are_finite(commands: &[PathCommand]) -> bool {
+pub(crate) fn path_commands_are_finite(commands: &[PathCommand]) -> bool {
     !commands.is_empty()
+        && commands.len() <= 4096
         && commands.iter().all(|command| match *command {
             PathCommand::MoveTo(x, y) | PathCommand::LineTo(x, y) => {
                 portable_glyph_scalar(x) && portable_glyph_scalar(y)
@@ -1354,6 +1354,10 @@ impl SvgGlyphPayload {
 
 fn text_source_range_is_non_empty(range: TextSourceRange) -> bool {
     range.end > range.start
+}
+
+pub(crate) fn text_placement_is_finite(placement: &TextRunPlacement) -> bool {
+    layer_affine_is_finite(placement.run_to_page) && portable_glyph_scalar(placement.baseline_y)
 }
 
 fn layer_affine_is_finite(transform: LayerAffineTransform) -> bool {

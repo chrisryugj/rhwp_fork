@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/tech/text-ir-v2.md
-last_verified: 2026-09-03
+last_verified: 2026-10-14
 ---
 
 # Text IR v2 Migration Contract
@@ -447,3 +447,15 @@ improvement rather than a Canvas2D compatibility match.
   once writer emission starts.
 - Promote renderer diagnostics from report-only to backend selection telemetry
   once CanvasKit/native glyph alternatives are actually consumed.
+
+## P45 이관: 엄격한 글리프 자원 검증
+
+`GlyphRun` 선택은 정확한 face의 `maxp.numGlyphs`를 대조하며, glyph 0과 범위 밖 ID는
+`TextRun`으로 되돌린다. placement·position·advance는 저장형 `f64`의 유한성뿐 아니라
+소비형 `f32`의 표현 범위를 만족해야 한다. 개별 윤곽선 명령과 윤곽선 수는 각각 4096개로
+제한한다. Native SVG 준비는 파싱 불가능한 path를 부분적으로 생략하지 않고 전체 엄격한
+대안을 거부한다. 중첩 SVG의 viewport와 페이지별 준비 예산은 기존 계약을 유지한다.
+
+기존 selector 단위 검사에 표현 범위 양쪽 경계와 정확한 face 범위 검사를 추가했다.
+현재 이관 단계에서는 개별 파일 rustfmt와 diff 검사만 수행했다. Cargo·Native·fresh WASM 및
+독립 한컴 PDF 시각 검증은 저장 공간 확보 뒤 수행해야 하며, 과거 브랜치 결과를 재사용하지 않는다.

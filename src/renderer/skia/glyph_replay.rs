@@ -842,7 +842,7 @@ fn svg_glyph_image(
 ) -> Option<(Image, usize)> {
     use quick_xml::{
         events::{BytesEnd, Event},
-        Reader, Writer,
+        Reader, Writer, XmlVersion,
     };
     use resvg::{tiny_skia, usvg};
     if !crate::renderer::static_svg::static_svg_fragment_has_path_layer(fragment) {
@@ -868,6 +868,23 @@ fn svg_glyph_image(
     loop {
         let event = reader.read_event().ok()?;
         let empty = matches!(&event, Event::Empty(_));
+        if let Event::Start(element) | Event::Empty(element) = &event {
+            if element.name().as_ref() == "path" {
+                if let Some(attribute) = element.try_get_attribute("d").ok()? {
+                    let commands = attribute.normalized_value(XmlVersion::Implicit1_0).ok()?;
+                    // usvg may discard a malformed path but retain valid siblings.
+                    // A strict alternative must not silently lose part of its ink.
+                    for (index, segment) in
+                        svgtypes::PathParser::from(commands.as_ref()).enumerate()
+                    {
+                        if index >= MAX_PATH_COMMANDS || segment.is_err() {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+
         let rewrite_container = match &event {
             Event::Start(element) | Event::Empty(element) => {
                 depth == 0 && element.name().as_ref() == "svg"

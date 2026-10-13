@@ -1,5 +1,6 @@
 use crate::error::HwpError;
 use crate::model::ColorRef;
+use crate::paint::paint_op::{portable_glyph_scalar, text_placement_is_finite};
 use crate::paint::{
     GlyphOutlinePayloadKind, GlyphRunOrientation, GlyphRunReplayEligibility,
     LayerGlyphOutlinePaint, LayerGlyphRunPaint, LayerNode, LayerNodeKind, PageLayerTree, PaintOp,
@@ -691,32 +692,20 @@ fn collect_glyph_run_reject_reasons(
     {
         reasons.insert(VariantRejectReason::GlyphIdOutOfRange);
     }
-    let placement = run.placement.run_to_page;
-    if ![
-        placement.a,
-        placement.b,
-        placement.c,
-        placement.d,
-        placement.e,
-        placement.f,
-        run.placement.baseline_y,
-    ]
-    .into_iter()
-    .all(f64::is_finite)
-    {
+    if !text_placement_is_finite(&run.placement) {
         reasons.insert(VariantRejectReason::PlacementNotFinite);
     }
     if run
         .positions
         .iter()
-        .any(|position| !position.x.is_finite() || !position.y.is_finite())
+        .any(|position| !portable_glyph_scalar(position.x) || !portable_glyph_scalar(position.y))
     {
         reasons.insert(VariantRejectReason::PositionNotFinite);
     }
     if run.advances.as_ref().is_some_and(|advances| {
         advances
             .iter()
-            .any(|advance| !advance.dx.is_finite() || !advance.dy.is_finite())
+            .any(|advance| !portable_glyph_scalar(advance.dx) || !portable_glyph_scalar(advance.dy))
     }) {
         reasons.insert(VariantRejectReason::AdvanceNotFinite);
     }
@@ -822,6 +811,14 @@ fn collect_glyph_run_font_resource_reject_reasons(
                 reasons.insert(VariantRejectReason::FontBlobDigestMismatch);
             }
             let parsed_face = ttf_parser::Face::parse(bytes, face.face_index);
+            if parsed_face.as_ref().is_ok_and(|parsed| {
+                run.glyph_ids
+                    .iter()
+                    .any(|id| *id == 0 || *id >= u32::from(parsed.number_of_glyphs()))
+            }) {
+                reasons.insert(VariantRejectReason::GlyphIdOutOfRange);
+            }
+
             if (face.face_index != 0
                 && !matches!(
                     options.backend,
@@ -887,7 +884,7 @@ fn collect_glyph_outline_reject_reasons(
     if matches!(
         outline.payload_kind,
         GlyphOutlinePayloadKind::MonochromeFill | GlyphOutlinePayloadKind::MonochromeFillStroke
-    ) && outline.paths.is_empty()
+    ) && (outline.paths.is_empty() || outline.paths.len() > 4096)
     {
         reasons.insert(VariantRejectReason::EmptyGlyphOutlinePayload);
     }
@@ -1058,6 +1055,8 @@ mod tests {
     use crate::renderer::{PathCommand, TextStyle};
 
     const FIXTURE_PNG: &[u8] = include_bytes!("../../assets/logo/logo-32.png");
+    // Both collection faces contain only .notdef (0) and exactFace (1).
+    const FIXTURE_GLYPH_ID: u32 = 1;
     const FIXTURE_TTC: &[u8] = include_bytes!("../../tests/fixtures/fonts/RHWPExactFaceSmoke.ttc");
 
     fn bbox() -> BoundingBox {
@@ -1513,7 +1512,7 @@ mod tests {
     fn report_for_mutated_glyph_run(
         mutate: impl FnOnce(&mut LayerGlyphRunPaint),
     ) -> TextVariantSelectionReport {
-        let mut glyph_run = glyph_run(diagnostics(), 42);
+        let mut glyph_run = glyph_run(diagnostics(), FIXTURE_GLYPH_ID);
         let PaintOp::GlyphRun { run, .. } = &mut glyph_run else {
             unreachable!("glyph_run helper must return a GlyphRun")
         };
@@ -1537,7 +1536,7 @@ mod tests {
     #[test]
     fn canvaskit_selects_strict_glyph_run() {
         let report = first_report(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions::canvaskit(),
         );
         assert_eq!(report.selected_variant_id.as_deref(), Some("glyphRun"));
@@ -1552,7 +1551,11 @@ mod tests {
     #[test]
     fn canvaskit_browser_selects_the_outline_replayed_by_the_json_runtime() {
         let report = first_report(
-            vec![text_op(), glyph_run(diagnostics(), 42), glyph_outline(None)],
+            vec![
+                text_op(),
+                glyph_run(diagnostics(), FIXTURE_GLYPH_ID),
+                glyph_outline(None),
+            ],
             TextVariantSelectionOptions {
                 backend: VariantSelectionBackend::CanvasKitBrowser,
                 prefer_strict_outline: true,
@@ -1571,7 +1574,7 @@ mod tests {
     #[test]
     fn canvaskit_browser_selects_strict_glyph_run_without_an_outline() {
         let report = first_report(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions {
                 backend: VariantSelectionBackend::CanvasKitBrowser,
                 ..TextVariantSelectionOptions::canvaskit()
@@ -1638,6 +1641,46 @@ mod tests {
                 .reasons
                 .contains(&expected_reason));
         }
+    }
+
+    #[test]
+    fn canvaskit_browser_checks_portable_scalars_and_exact_face_glyph_range() {
+        for value in [1e100, -1e100] {
+            let cases = [
+                (
+                    report_for_mutated_glyph_run(|run| run.placement.run_to_page.e = value),
+                    VariantRejectReason::PlacementNotFinite,
+                ),
+                (
+                    report_for_mutated_glyph_run(|run| run.positions[0].x = value),
+                    VariantRejectReason::PositionNotFinite,
+                ),
+                (
+                    report_for_mutated_glyph_run(|run| {
+                        run.advances = Some(vec![LayerVector { dx: value, dy: 0.0 }]);
+                    }),
+                    VariantRejectReason::AdvanceNotFinite,
+                ),
+            ];
+            for (report, reason) in cases {
+                assert_eq!(report.selected_variant_kind, Some(TextVariantKind::TextRun));
+                assert!(report.fallback_required);
+                assert!(report.rejected_variants[0].reasons.contains(&reason));
+            }
+        }
+        for value in [0.0, -16.0, f64::from(f32::MAX), -f64::from(f32::MAX)] {
+            let report = report_for_mutated_glyph_run(|run| run.positions[0].x = value);
+            assert_eq!(
+                report.selected_variant_kind,
+                Some(TextVariantKind::GlyphRun)
+            );
+        }
+        // The exact TTC face has two glyphs; fitting u16 does not prove membership.
+        let report = report_for_mutated_glyph_run(|run| run.glyph_ids[0] = 2);
+        assert_eq!(report.selected_variant_kind, Some(TextVariantKind::TextRun));
+        assert!(report.rejected_variants[0]
+            .reasons
+            .contains(&VariantRejectReason::GlyphIdOutOfRange));
     }
 
     #[test]
@@ -1736,7 +1779,7 @@ mod tests {
     #[test]
     fn canvaskit_browser_requires_a_parseable_default_face() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions {
                 backend: VariantSelectionBackend::CanvasKitBrowser,
                 ..TextVariantSelectionOptions::canvaskit()
@@ -1754,7 +1797,7 @@ mod tests {
     fn canvaskit_browser_rejects_an_oversized_font_blob_before_replay() {
         let oversized_font = vec![0; MAX_PORTABLE_FONT_BLOB_BYTES + 1];
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions {
                 backend: VariantSelectionBackend::CanvasKitBrowser,
                 ..TextVariantSelectionOptions::canvaskit()
@@ -1771,7 +1814,7 @@ mod tests {
     #[test]
     fn canvaskit_keeps_default_face_without_variation_as_font_proof_control() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions::canvaskit(),
             add_portable_font_resources,
         );
@@ -1784,7 +1827,7 @@ mod tests {
     #[test]
     fn canvaskit_rejects_portable_glyph_run_without_font_face_proof() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions::canvaskit(),
             |_| {},
         );
@@ -1804,7 +1847,7 @@ mod tests {
     #[test]
     fn canvaskit_rejects_font_face_without_blob_proof() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions::canvaskit(),
             |resources| {
                 resources.font_resources_mut().faces.push(FontFaceResource {
@@ -1836,7 +1879,7 @@ mod tests {
     #[test]
     fn canvaskit_rejects_font_blob_without_resource_bytes() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions::canvaskit(),
             |resources| {
                 let digest_value = resource_digest_hex([0_u8, 1, 2, 3]);
@@ -1884,7 +1927,7 @@ mod tests {
     #[test]
     fn canvaskit_rejects_non_portable_font_blob_proof() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions::canvaskit(),
             |resources| {
                 let digest = FontDigest {
@@ -1929,7 +1972,7 @@ mod tests {
     #[test]
     fn canvaskit_rejects_font_blob_digest_mismatch() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions::canvaskit(),
             |resources| {
                 add_portable_font_resources(resources);
@@ -1955,7 +1998,7 @@ mod tests {
     #[test]
     fn canvaskit_rejects_font_blob_data_ref_mismatch() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions::canvaskit(),
             |resources| {
                 add_portable_font_resources(resources);
@@ -1977,7 +2020,7 @@ mod tests {
 
     #[test]
     fn canvaskit_rejects_variation_instances_until_exact_construction_is_proven() {
-        let mut op = glyph_run(diagnostics(), 42);
+        let mut op = glyph_run(diagnostics(), FIXTURE_GLYPH_ID);
         if let PaintOp::GlyphRun { run, .. } = &mut op {
             run.shape_key.font_instance.variations = vec![VariationAxisValue {
                 tag: "wght".to_string(),
@@ -2003,7 +2046,7 @@ mod tests {
     #[test]
     fn non_browser_canvaskit_rejects_non_default_collection_face() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions::canvaskit(),
             |resources| add_portable_font_bytes(resources, FIXTURE_TTC, 1),
         );
@@ -2022,7 +2065,7 @@ mod tests {
     #[test]
     fn canvaskit_browser_accepts_a_proven_collection_face() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions {
                 backend: VariantSelectionBackend::CanvasKitBrowser,
                 ..TextVariantSelectionOptions::canvaskit()
@@ -2041,7 +2084,7 @@ mod tests {
     #[test]
     fn canvaskit_browser_rejects_an_out_of_range_collection_face() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions {
                 backend: VariantSelectionBackend::CanvasKitBrowser,
                 ..TextVariantSelectionOptions::canvaskit()
@@ -2058,7 +2101,7 @@ mod tests {
     #[test]
     fn native_skia_keeps_default_face_without_variation_as_font_proof_control() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             native_skia_options(),
             add_portable_font_resources,
         );
@@ -2070,7 +2113,7 @@ mod tests {
 
     #[test]
     fn native_skia_rejects_variation_axes_missing_from_the_exact_face() {
-        let mut op = glyph_run(diagnostics(), 42);
+        let mut op = glyph_run(diagnostics(), FIXTURE_GLYPH_ID);
         if let PaintOp::GlyphRun { run, .. } = &mut op {
             run.shape_key.font_instance.variations = vec![VariationAxisValue {
                 tag: "wght".to_string(),
@@ -2089,7 +2132,7 @@ mod tests {
     #[test]
     fn native_skia_accepts_a_parseable_non_default_collection_face_contract() {
         let report = first_report_with_resource_setup(
-            vec![text_op(), glyph_run(diagnostics(), 42)],
+            vec![text_op(), glyph_run(diagnostics(), FIXTURE_GLYPH_ID)],
             native_skia_options(),
             |resources| add_portable_font_bytes(resources, FIXTURE_TTC, 1),
         );
@@ -2104,7 +2147,7 @@ mod tests {
 
     #[test]
     fn canvaskit_rejects_unsupported_text_effects() {
-        let mut op = glyph_run(diagnostics(), 42);
+        let mut op = glyph_run(diagnostics(), FIXTURE_GLYPH_ID);
         if let PaintOp::GlyphRun { run, .. } = &mut op {
             run.paint_style.shadow_type = 1;
         }
@@ -2120,7 +2163,7 @@ mod tests {
 
     #[test]
     fn mixed_per_glyph_runs_keep_text_fallback_until_orientation_authority_exists() {
-        let mut op = glyph_run(diagnostics(), 42);
+        let mut op = glyph_run(diagnostics(), FIXTURE_GLYPH_ID);
         if let PaintOp::GlyphRun { run, .. } = &mut op {
             run.orientation = GlyphRunOrientation::MixedPerGlyph;
             run.glyph_transforms = Some(vec![GlyphTransform {
@@ -2153,7 +2196,7 @@ mod tests {
 
     #[test]
     fn glyph_transform_runs_keep_text_fallback_until_transform_authority_exists() {
-        let mut op = glyph_run(diagnostics(), 42);
+        let mut op = glyph_run(diagnostics(), FIXTURE_GLYPH_ID);
         if let PaintOp::GlyphRun { run, .. } = &mut op {
             run.glyph_transforms = Some(vec![GlyphTransform {
                 xx: 1.0,
@@ -2183,7 +2226,7 @@ mod tests {
 
     #[test]
     fn vertical_glyph_runs_keep_text_fallback_until_orientation_authority_exists() {
-        let mut op = glyph_run(diagnostics(), 42);
+        let mut op = glyph_run(diagnostics(), FIXTURE_GLYPH_ID);
         if let PaintOp::GlyphRun { run, .. } = &mut op {
             run.orientation = GlyphRunOrientation::VerticalUpright;
         }
@@ -2212,14 +2255,14 @@ mod tests {
         diagnostics.quality = TextVariantQuality::PositionAdjusted;
         diagnostics.max_residual_after_adjustment_px = 0.2;
         let accepted = first_report(
-            vec![text_op(), glyph_run(diagnostics.clone(), 42)],
+            vec![text_op(), glyph_run(diagnostics.clone(), FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions::canvaskit(),
         );
         assert_eq!(accepted.selected_variant_id.as_deref(), Some("glyphRun"));
 
         diagnostics.max_residual_after_adjustment_px = 0.5;
         let rejected = first_report(
-            vec![text_op(), glyph_run(diagnostics, 42)],
+            vec![text_op(), glyph_run(diagnostics, FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions::canvaskit(),
         );
         assert_eq!(
@@ -2237,7 +2280,7 @@ mod tests {
         diagnostics.quality = TextVariantQuality::PositionAdjusted;
         diagnostics.max_residual_after_adjustment_px = 0.0;
         let rejected = first_report(
-            vec![text_op(), glyph_run(diagnostics, 42)],
+            vec![text_op(), glyph_run(diagnostics, FIXTURE_GLYPH_ID)],
             TextVariantSelectionOptions {
                 allow_position_adjusted: false,
                 ..TextVariantSelectionOptions::canvaskit()
@@ -2256,7 +2299,11 @@ mod tests {
     #[test]
     fn strict_outline_profile_can_select_glyph_outline() {
         let report = first_report(
-            vec![text_op(), glyph_run(diagnostics(), 42), glyph_outline(None)],
+            vec![
+                text_op(),
+                glyph_run(diagnostics(), FIXTURE_GLYPH_ID),
+                glyph_outline(None),
+            ],
             TextVariantSelectionOptions::canvaskit_strict_outline(),
         );
         assert_eq!(report.selected_variant_id.as_deref(), Some("glyphOutline"));
@@ -2330,7 +2377,11 @@ mod tests {
     #[test]
     fn canvas2d_keeps_text_fallback_for_variant_sidecars() {
         let report = first_report(
-            vec![text_op(), glyph_run(diagnostics(), 42), glyph_outline(None)],
+            vec![
+                text_op(),
+                glyph_run(diagnostics(), FIXTURE_GLYPH_ID),
+                glyph_outline(None),
+            ],
             TextVariantSelectionOptions {
                 backend: VariantSelectionBackend::Canvas2D,
                 ..TextVariantSelectionOptions::canvaskit()
@@ -2346,7 +2397,7 @@ mod tests {
 
     #[test]
     fn incomplete_variant_parts_are_rejected_before_selection() {
-        let mut op = glyph_run(diagnostics(), 42);
+        let mut op = glyph_run(diagnostics(), FIXTURE_GLYPH_ID);
         if let PaintOp::GlyphRun { run, .. } = &mut op {
             run.variant.part_count = 2;
         }
