@@ -4,7 +4,7 @@ use skia_safe::{
 };
 use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::error::HwpError;
@@ -418,7 +418,7 @@ pub struct SkiaLayerRenderer {
     /// lookup IPC가 영구 대기할 수 있어, match_family_style 호출 전 사전 필터로 사용한다.
     system_families: SystemFontFamilies,
     picture_cache: RefCell<BoundedCache<CachedPicture>>,
-    glyph_cache: RefCell<BoundedCache<Arc<PreparedGlyph>>>,
+    glyph_cache: RefCell<BoundedCache<Rc<PreparedGlyph>>>,
     image_cache: ImageResourceCache,
 }
 
@@ -856,13 +856,13 @@ impl SkiaLayerRenderer {
         resources: &ResourceArena,
         scale: f32,
         context: &ReplayCacheContext<'_>,
-    ) -> Option<Arc<PreparedGlyph>> {
+    ) -> Option<Rc<PreparedGlyph>> {
         let key = context.seed.and_then(|seed| debug_key(&(seed, op)));
         let cached = key.and_then(|key| self.glyph_cache.borrow_mut().get(key));
         if let Some(prepared) = cached {
             return Some(prepared);
         }
-        let prepared = Arc::new(match op {
+        let prepared = Rc::new(match op {
             PaintOp::GlyphRun { run, .. } => {
                 prepare_native_glyph_run(run, resources, &self.font_mgr).1?
             }
@@ -1188,7 +1188,7 @@ impl SkiaLayerRenderer {
                     })
                     .collect::<HashSet<_>>();
                 let mut variant_order = 0usize;
-                let mut prepared_glyphs = HashMap::<usize, Arc<PreparedGlyph>>::new();
+                let mut prepared_glyphs = HashMap::<usize, Rc<PreparedGlyph>>::new();
                 let mut preparation_budget = GlyphPreparationBudget::new();
                 let mut glyph_variants = HashMap::<
                     String,
