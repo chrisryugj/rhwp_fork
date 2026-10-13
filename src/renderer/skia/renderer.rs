@@ -2991,13 +2991,16 @@ mod tests {
             .render_raster_with_options(&tree, RasterRenderOptions::default())
             .expect("render shapes");
         let image = decode_rgba(&output.bytes);
-        let gradient_pixel = *image.get_pixel(4, 4);
+        let gradient_top = *image.get_pixel(4, 3);
+        let gradient_bottom = *image.get_pixel(4, 8);
         let pattern_pixel = *image.get_pixel(18, 4);
         let ellipse_pixel = *image.get_pixel(7, 17);
         let path_pixel = *image.get_pixel(7, 29);
         let line_pixel = *image.get_pixel(24, 30);
 
-        assert_channel(gradient_pixel, 2, 180, 255);
+        // HWP angle 0 runs bottom (blue) to top (red).
+        assert_channel(gradient_top, 0, 180, 255);
+        assert_channel(gradient_bottom, 2, 180, 255);
         assert_channel(pattern_pixel, 1, 180, 255);
         assert_channel(ellipse_pixel, 0, 180, 255);
         assert_channel(path_pixel, 2, 180, 255);
