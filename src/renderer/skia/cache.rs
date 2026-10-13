@@ -5,9 +5,11 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Debug, Write};
 
 use super::diagnostics::ReplayDiagnostics;
+use super::glyph_replay::gradient_stop_byte_cost;
 use super::replay_policy::ReplayPolicy;
 use crate::paint::{
-    LayerNode, LayerNodeKind, PageLayerTree, PaintOp, ResourceArena, LAYER_TREE_SCHEMA,
+    ColorPaintGraphNodeKind, ColorPaintGraphPayload, LayerNode, LayerNodeKind, PageLayerTree,
+    PaintOp, ResourceArena, LAYER_TREE_SCHEMA,
 };
 
 pub(super) type CacheKey = [u8; 32];
@@ -77,7 +79,10 @@ impl<V: Clone> BoundedCache<V> {
         bytes: usize,
         mut on_eviction: impl FnMut(&V, usize),
     ) -> bool {
-        let bytes = bytes.saturating_add(std::mem::size_of::<(CacheKey, V, usize)>());
+        let Some(bytes) = bytes.checked_add(std::mem::size_of::<(CacheKey, V, usize)>()) else {
+            self.usage.skipped_oversized = self.usage.skipped_oversized.saturating_add(1);
+            return false;
+        };
         if self.max_entries == 0 || bytes > self.max_bytes {
             self.usage.skipped_oversized = self.usage.skipped_oversized.saturating_add(1);
             return false;
@@ -194,6 +199,18 @@ pub(super) fn inline_resource_estimate(node: &LayerNode, scale: f32) -> usize {
                 for op in ops {
                     let payload = match op {
                         PaintOp::GlyphOutline { bbox, outline } => {
+                            if let Some(graph) = outline
+                                .color_layers
+                                .as_ref()
+                                .and_then(|payload| payload.paint_graph.as_ref())
+                            {
+                                let Some(total) = gradient_graph_byte_cost(graph)
+                                    .and_then(|cost| bytes.checked_add(cost))
+                                else {
+                                    return usize::MAX;
+                                };
+                                bytes = total;
+                            }
                             if let Some(svg) = &outline.svg_glyph {
                                 let viewport = svg.font_em_box.unwrap_or(*bbox);
                                 let width = (viewport.width * f64::from(scale)).ceil();
@@ -236,6 +253,52 @@ pub(super) fn inline_resource_estimate(node: &LayerNode, scale: f32) -> usize {
         }
     }
     bytes
+}
+
+// A Picture retains every shader constructed by expanded replay. Shared DAG
+// nodes therefore cost once per visit, not once per stored graph node.
+fn gradient_graph_byte_cost(graph: &ColorPaintGraphPayload) -> Option<usize> {
+    if !graph.has_colrv1_supported_graph_contract() {
+        return None;
+    }
+    let mut pending = vec![graph.root_node_id];
+    let mut visits = 0usize;
+    let mut bytes = 0usize;
+    while let Some(id) = pending.pop() {
+        visits += 1;
+        if visits > 4096 {
+            return None;
+        }
+        let node = graph.nodes.iter().find(|node| node.node_id == id)?;
+        let stop_count = match node.kind {
+            ColorPaintGraphNodeKind::Transform => {
+                pending.push(node.transform.as_ref()?.child_node_id);
+                continue;
+            }
+            ColorPaintGraphNodeKind::Clip => {
+                pending.push(node.clip.as_ref()?.child_node_id);
+                continue;
+            }
+            ColorPaintGraphNodeKind::Composite => {
+                let composite = node.composite.as_ref()?;
+                pending.push(composite.source_node_id);
+                pending.push(composite.backdrop_node_id);
+                continue;
+            }
+            ColorPaintGraphNodeKind::SolidPath => continue,
+            ColorPaintGraphNodeKind::LinearGradientPath => {
+                node.linear_gradient_path.as_ref()?.gradient.stops.len()
+            }
+            ColorPaintGraphNodeKind::RadialGradientPath => {
+                node.radial_gradient_path.as_ref()?.gradient.stops.len()
+            }
+            ColorPaintGraphNodeKind::SweepGradientPath => {
+                node.sweep_gradient_path.as_ref()?.gradient.stops.len()
+            }
+        };
+        bytes = bytes.checked_add(gradient_stop_byte_cost(stop_count)?)?;
+    }
+    Some(bytes)
 }
 
 fn decoded_resource_cost(bytes: &[u8], svg_estimate: usize) -> usize {
