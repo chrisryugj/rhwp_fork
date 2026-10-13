@@ -851,7 +851,9 @@ pub(super) fn prepare_glyph_outline(
                 return None;
             }
             let fragment = resources.svg_fragment(payload.svg_ref)?;
-            let (image, bytes) = svg_glyph_image(fragment, payload.view_box, bbox, raster_scale)?;
+            let viewport = payload.font_em_box.unwrap_or(bbox);
+            let (image, bytes) =
+                svg_glyph_image(fragment, payload.view_box, viewport, raster_scale)?;
             let transforms = optional_matrix(payload.transform_to_run)?;
             result.byte_cost = bytes;
             result.draws.push(PreparedDraw {
@@ -860,7 +862,7 @@ pub(super) fn prepare_glyph_outline(
                 paint: fill_paint(Color::WHITE),
                 content: DrawContent::Image {
                     image,
-                    destination: drawable_rect(bbox)?,
+                    destination: drawable_rect(viewport)?,
                     sampling: SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
                 },
             });

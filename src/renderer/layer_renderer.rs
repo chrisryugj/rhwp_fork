@@ -1429,6 +1429,7 @@ mod tests {
                 source_range_utf8: TextSourceRange::new(0, 1),
                 glyph_range: GlyphRange::new(0, 1),
                 view_box: BoundingBox::new(0.0, 0.0, 10.0, 10.0),
+                font_em_box: None,
                 intrinsic_size: Some(LayerVector { dx: 10.0, dy: 10.0 }),
                 static_sanitized: true,
                 script_allowed: false,

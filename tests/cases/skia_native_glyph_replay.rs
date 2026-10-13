@@ -557,6 +557,7 @@ fn svg_tree(fragment: &str) -> PageLayerTree {
         source_range_utf8: TextSourceRange::new(0, 1),
         glyph_range: GlyphRange::new(0, 1),
         view_box: BoundingBox::new(10.0, 20.0, 30.0, 30.0),
+        font_em_box: None,
         intrinsic_size: None,
         static_sanitized: true,
         script_allowed: false,

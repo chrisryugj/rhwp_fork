@@ -54,6 +54,7 @@ const KNOWN_TEXT_FEATURES: &[&str] = &[
     "text.glyphOutline.bitmapGlyph",
     "text.glyphOutline.svgGlyph",
     "text.glyphOutline.svgGlyph.vectorResourceId",
+    "text.glyphOutline.svgGlyph.fontEmBox",
     "text.glyphOutline.payloadResourceKey",
     "text.glyphOutline.payloadResourceDigestKey",
     "text.specialVisualOps",
@@ -231,6 +232,9 @@ fn write_text_export_metadata(buf: &mut String, root: &LayerNode, resources: &Re
         buf.push_str(",\"text.glyphOutline.svgGlyph\"");
         buf.push_str(",\"text.glyphOutline.svgGlyph.vectorResourceId\"");
     }
+    if text_variant_features.has_svg_font_em_box {
+        buf.push_str(",\"text.glyphOutline.svgGlyph.fontEmBox\"");
+    }
     if has_glyph_outline_payload_resource_keys {
         buf.push_str(",\"text.glyphOutline.payloadResourceKey\"");
     }
@@ -293,6 +297,9 @@ fn write_text_export_metadata(buf: &mut String, root: &LayerNode, resources: &Re
         optional_features.push("text.glyphOutline.svgGlyph");
         optional_features.push("text.glyphOutline.svgGlyph.vectorResourceId");
     }
+    if text_variant_features.has_svg_font_em_box {
+        optional_features.push("text.glyphOutline.svgGlyph.fontEmBox");
+    }
     if has_glyph_outline_payload_resource_keys {
         optional_features.push("text.glyphOutline.payloadResourceKey");
     }
@@ -339,6 +346,7 @@ struct TextVariantFeatureFlags {
     has_colrv1_clip: bool,
     has_glyph_outline_bitmap: bool,
     has_glyph_outline_svg: bool,
+    has_svg_font_em_box: bool,
     has_glyph_outline_payload_resource_keys: bool,
     has_glyph_outline_payload_resource_digest_keys: bool,
     has_display_text: bool,
@@ -372,6 +380,10 @@ fn collect_text_variant_features(
                         }
                         PaintOp::GlyphRun { .. } => features.has_glyph_runs = true,
                         PaintOp::GlyphOutline { outline, .. } => {
+                            features.has_svg_font_em_box |= outline
+                                .svg_glyph
+                                .as_ref()
+                                .is_some_and(|payload| payload.font_em_box.is_some());
                             if let Some(graph) = outline
                                 .color_layers
                                 .as_ref()
@@ -2564,6 +2576,10 @@ fn write_svg_glyph_payload(buf: &mut String, payload: &SvgGlyphPayload) {
         payload.glyph_range.start, payload.glyph_range.end
     );
     write_bbox(buf, payload.view_box);
+    if let Some(em_box) = payload.font_em_box {
+        buf.push_str(",\"fontEmBox\":");
+        write_bbox(buf, em_box);
+    }
     if let Some(size) = payload.intrinsic_size {
         let _ = write!(
             buf,
@@ -4492,6 +4508,7 @@ mod tests {
                     glyph_range: GlyphRange::new(0, 1),
                     view_box: BoundingBox::new(0.1234, 0.5678, 10.9876, 10.5432),
                     intrinsic_size: Some(LayerVector { dx: 10.0, dy: 10.0 }),
+                    font_em_box: None,
                     static_sanitized: true,
                     script_allowed: false,
                     animation_allowed: false,

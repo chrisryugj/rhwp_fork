@@ -520,3 +520,17 @@ payload·같은 직접 source/backdrop child를 거부한다. Native는 backdrop
 렌더링 회귀 검사는 원래 브랜치의 합성 IR 계약과 독립 한컴 출력 증거가 서로 다르므로 현재
 활성 테스트에 추가하지 않았다. 별도 패치에 보존했으며 실제 Native·fresh WASM 실행,
 독립 출력 및 페이지별 90% gate는 미검증이다. 기존 scalar 검사는 신설 optional 필드만 채웠다.
+
+## P45 이관: font SVG baseline viewport
+
+bitmap producer가 성립하지 않을 때만 정적인 font SVG 후보를 검토한다. 단일 square viewBox와
+단일 root를 요구하며 root sizing/transform과 중첩 viewport는 거부한다. 통과한 payload에는
+page-space `fontEmBox=(run.x, run.y+baseline, fontSize, fontSize)`를 기록한다. Native와 browser
+consumer는 이를 같은 viewport로 쓰며, 일반 SVG decoder가 만든 `fontEmBox=None`은 기존 bbox
+배치를 유지한다. viewBox·em-box와 끝점은 공통 portable scalar 계약을 만족해야 한다.
+
+bitmap의 페이지 누적 예산을 decode 전에 확인하며, bitmap/SVG 자원은 scratch arena에서
+검증을 마친 뒤에만 실제 arena에 넣는다. 새 font SVG·color 출력 fixture 및 Native pixel 검사는
+별도 패치로 보존하고 시각 증거 확보 전에는 활성 회귀에 추가하지 않았다. 현재 확인은 rustfmt,
+신설 필드의 기존 생성자 정합성, 기존 producer JSON 필드·SVG depth·준비 예산 보존까지다.
+실제 빌드·출력 일치·성능 결과는 아직 없다.

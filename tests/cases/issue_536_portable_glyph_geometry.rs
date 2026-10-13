@@ -186,6 +186,7 @@ fn svg() -> SvgGlyphPayload {
         source_range_utf8: TextSourceRange { start: 0, end: 1 },
         glyph_range: GlyphRange { start: 0, end: 1 },
         view_box: BoundingBox::new(-2.0, -3.0, 8.0, 8.0),
+        font_em_box: None,
         intrinsic_size: Some(LayerVector { dx: 8.0, dy: 8.0 }),
         static_sanitized: true,
         script_allowed: false,

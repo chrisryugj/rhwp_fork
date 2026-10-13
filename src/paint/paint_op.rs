@@ -726,6 +726,10 @@ fn svg_glyph_payload_resource_key(
         payload.interactivity_allowed,
         optional_affine_key(payload.transform_to_run),
     );
+    if let Some(em_box) = payload.font_em_box {
+        key.push_str(":fontEmBox:");
+        key.push_str(&bbox_key(em_box));
+    }
     if let Some(resource_key) =
         resources.and_then(|resources| resources.svg_resource_key(payload.svg_ref))
     {
@@ -1532,6 +1536,9 @@ pub struct SvgGlyphPayload {
     pub source_range_utf8: TextSourceRange,
     pub glyph_range: GlyphRange,
     pub view_box: BoundingBox,
+    /// OpenType SVG initial em-square viewport in page coordinates. Its origin
+    /// is the glyph baseline, not the compatibility TextRun bounding box.
+    pub font_em_box: Option<BoundingBox>,
     pub intrinsic_size: Option<LayerVector>,
     pub static_sanitized: bool,
     pub script_allowed: bool,
@@ -1546,6 +1553,7 @@ impl SvgGlyphPayload {
         text_source_range_is_non_empty(self.source_range_utf8)
             && self.glyph_range.is_non_empty()
             && bbox_is_finite_positive(self.view_box)
+            && self.font_em_box.is_none_or(bbox_is_finite_positive)
             && self
                 .intrinsic_size
                 .map(|size| {
