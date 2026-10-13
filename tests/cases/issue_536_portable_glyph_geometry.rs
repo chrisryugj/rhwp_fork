@@ -78,6 +78,8 @@ fn colrv1(kind: ColorPaintGraphNodeKind) -> ColorLayersPayload {
         radial_gradient_path: None,
         sweep_gradient_path: None,
         transform: None,
+        composite: None,
+        clip: None,
         source_range_utf8: Some(TextSourceRange { start: 0, end: 1 }),
         glyph_range: Some(GlyphRange { start: 0, end: 1 }),
         source_font_ref: Some(source_font(ColorGlyphFormat::ColrV1)),

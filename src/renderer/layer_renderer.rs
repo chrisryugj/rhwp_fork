@@ -1366,6 +1366,8 @@ mod tests {
                     radial_gradient_path,
                     sweep_gradient_path,
                     transform: None,
+                    composite: None,
+                    clip: None,
                     source_range_utf8,
                     glyph_range,
                     source_font_ref: Some(source_font_ref),

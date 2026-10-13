@@ -13,10 +13,10 @@ use skia_safe::{
 };
 
 use crate::paint::{
-    BitmapGlyphFiltering, ColorGlyphFormat, ColorPaintGraphNodeKind, GlyphOutlineFillRule,
-    GlyphOutlinePaintOrder, GlyphOutlinePayloadKind, GlyphRunReplayEligibility,
-    LayerAffineTransform, LayerGlyphOutlinePaint, LayerGlyphRunPaint, ResolvedColor, ResourceArena,
-    TextVariantQuality,
+    BitmapGlyphFiltering, ColorGlyphFormat, ColorPaintCompositeMode, ColorPaintGraphNodeKind,
+    GlyphOutlineFillRule, GlyphOutlinePaintOrder, GlyphOutlinePayloadKind,
+    GlyphRunReplayEligibility, LayerAffineTransform, LayerGlyphOutlinePaint, LayerGlyphRunPaint,
+    ResolvedColor, ResourceArena, TextVariantQuality,
 };
 use crate::renderer::render_tree::BoundingBox;
 use crate::renderer::{svg_arc_to_beziers, PathCommand};
@@ -97,6 +97,9 @@ pub(super) fn glyph_run_minimum_byte_cost(
 
 struct PreparedDraw {
     transforms: Vec<Matrix>,
+    /// Clips are prepared in page space so child transforms cannot move an
+    /// enclosing graph clip. The renderer's outer layer transform still applies.
+    clips: Vec<Path>,
     paint: Paint,
     content: DrawContent,
 }
@@ -119,6 +122,9 @@ impl PreparedGlyph {
     pub fn draw(&self, canvas: &Canvas) {
         for draw in &self.draws {
             canvas.save();
+            for clip in &draw.clips {
+                canvas.clip_path(clip, None, true);
+            }
             for transform in &draw.transforms {
                 canvas.concat(transform);
             }
@@ -303,6 +309,7 @@ pub(super) fn construct_glyph_font(
         byte_cost: bytes.len() + run.glyph_ids.len() * (std::mem::size_of::<Point>() + 2),
         draws: vec![PreparedDraw {
             transforms,
+            clips: Vec::new(),
             paint: fill_paint(colorref_to_skia(run.paint_style.color, 1.0)),
             content: DrawContent::Glyphs {
                 font,
@@ -394,6 +401,7 @@ fn prepare_glyph_effects(
                 .ok_or_else(unsupported)?;
             draws.push(PreparedDraw {
                 transforms: transforms.clone(),
+                clips: Vec::new(),
                 paint: paint.clone(),
                 content: DrawContent::Path(shifted),
             });
@@ -587,6 +595,7 @@ pub(super) fn prepare_glyph_outline(
                 for paint in paints {
                     result.draws.push(PreparedDraw {
                         transforms: vec![placement],
+                        clips: Vec::new(),
                         paint,
                         content: DrawContent::Path(path.clone()),
                     });
@@ -616,6 +625,7 @@ pub(super) fn prepare_glyph_outline(
                     }
                     result.draws.push(PreparedDraw {
                         transforms,
+                        clips: Vec::new(),
                         paint: fill_paint(resolved_color(
                             layer.fill.as_ref()?,
                             layer.opacity.unwrap_or(1.0),
@@ -625,15 +635,54 @@ pub(super) fn prepare_glyph_outline(
                 }
             } else if payload.has_colrv1_supported_graph_contract() {
                 let graph = payload.paint_graph.as_ref()?;
-                let mut transforms = vec![placement];
-                let mut node_id = graph.root_node_id;
-                for _ in 0..64 {
+                let mut pending = vec![(graph.root_node_id, vec![placement], Vec::<Path>::new())];
+                let mut visits = 0;
+                while let Some((node_id, mut transforms, mut clips)) = pending.pop() {
+                    visits += 1;
+                    if visits > 4096 {
+                        return None;
+                    }
                     let node = graph.nodes.iter().find(|node| node.node_id == node_id)?;
                     let (commands, fill_rule, paint) = match node.kind {
                         ColorPaintGraphNodeKind::Transform => {
                             let transform = node.transform.as_ref()?;
                             transforms.push(matrix(transform.transform)?);
-                            node_id = transform.child_node_id;
+                            pending.push((transform.child_node_id, transforms, clips));
+                            continue;
+                        }
+                        ColorPaintGraphNodeKind::Composite => {
+                            let composite = node.composite.as_ref()?;
+                            if composite.mode != ColorPaintCompositeMode::SourceOver {
+                                return None;
+                            }
+                            // Source-over is associative. Flattening each complete
+                            // subtree preserves backdrop-first paint order, including
+                            // shared DAG nodes that must be replayed more than once.
+                            pending.push((
+                                composite.source_node_id,
+                                transforms.clone(),
+                                clips.clone(),
+                            ));
+                            pending.push((composite.backdrop_node_id, transforms, clips));
+                            continue;
+                        }
+                        ColorPaintGraphNodeKind::Clip => {
+                            let clip = node.clip.as_ref()?;
+                            let mut clip_path = path(&clip.clip_commands, clip.fill_rule)?;
+                            for transform in transforms.iter().rev() {
+                                clip_path = clip_path.with_transform(transform);
+                            }
+                            if !clip_path.is_finite() {
+                                return None;
+                            }
+                            result.byte_cost = result
+                                .byte_cost
+                                .checked_add(clip_path.approximate_bytes_used())?;
+                            if result.byte_cost > MAX_PREPARED_GLYPH_BYTES {
+                                return None;
+                            }
+                            clips.push(clip_path);
+                            pending.push((clip.child_node_id, transforms, clips));
                             continue;
                         }
                         ColorPaintGraphNodeKind::SolidPath => {
@@ -729,15 +778,22 @@ pub(super) fn prepare_glyph_outline(
                             paint.set_shader(shader);
                             (&leaf.commands, leaf.fill_rule, paint)
                         }
-                        _ => return None,
                     };
-                    result.byte_cost = commands.len() * std::mem::size_of::<PathCommand>();
+                    let path = path(commands, fill_rule)?;
+                    result.byte_cost = result
+                        .byte_cost
+                        .checked_add(path.approximate_bytes_used())?
+                        .checked_add(transforms.len() * std::mem::size_of::<Matrix>())?
+                        .checked_add(clips.len() * std::mem::size_of::<Path>())?;
+                    if result.byte_cost > MAX_PREPARED_GLYPH_BYTES {
+                        return None;
+                    }
                     result.draws.push(PreparedDraw {
                         transforms,
+                        clips,
                         paint,
-                        content: DrawContent::Path(path(commands, fill_rule)?),
+                        content: DrawContent::Path(path),
                     });
-                    break;
                 }
             } else {
                 return None;
@@ -774,6 +830,7 @@ pub(super) fn prepare_glyph_outline(
             result.byte_cost = pixels as usize * 4;
             result.draws.push(PreparedDraw {
                 transforms: transforms.into_iter().collect(),
+                clips: Vec::new(),
                 paint: fill_paint(Color::WHITE),
                 content: DrawContent::Image {
                     image,
@@ -799,6 +856,7 @@ pub(super) fn prepare_glyph_outline(
             result.byte_cost = bytes;
             result.draws.push(PreparedDraw {
                 transforms: transforms.into_iter().collect(),
+                clips: Vec::new(),
                 paint: fill_paint(Color::WHITE),
                 content: DrawContent::Image {
                     image,

@@ -507,3 +507,16 @@ CPAL digest를 resource identity에 포함한다. 전경색 palette entry, 선�
 이 helper는 일반 문서 lowerer에 자동 연결되어 있지 않다. 정상 문서의 COLRv0 출력 지원 완료를
 뜻하지 않는다. 합성 font producer 검사 패치는 독립 한컴 PDF 증거를 확보할 때까지 별도 보존하며,
 현재 source 확인·rustfmt 외 빌드와 출력 검증은 미실행이다.
+
+## P45 이관: bounded color graph와 Native 재생
+
+schema v1 minor 24는 `sourceOver` composite와 path clip을 명시한다. 64개 고유 node,
+깊이 64, 공유 subtree를 포함한 최대 4096회 방문을 검증하며 cycle·도달 불가능 node·혼합
+payload·같은 직접 source/backdrop child를 거부한다. Native는 backdrop 뒤 source 순으로
+재생하고 조상 transform으로 계산한 page-space clip을 자식 transform과 분리한다.
+페이지별 사전 준비 예산과 실패 후보의 비용 차감은 유지한다.
+
+기존 public payload 검사도 layer 수와 정규화 RGBA·opacity를 확인한다. 새로운 graph의
+렌더링 회귀 검사는 원래 브랜치의 합성 IR 계약과 독립 한컴 출력 증거가 서로 다르므로 현재
+활성 테스트에 추가하지 않았다. 별도 패치에 보존했으며 실제 Native·fresh WASM 실행,
+독립 출력 및 페이지별 90% gate는 미검증이다. 기존 scalar 검사는 신설 optional 필드만 채웠다.
