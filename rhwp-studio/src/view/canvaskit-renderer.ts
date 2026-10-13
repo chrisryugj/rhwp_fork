@@ -99,6 +99,7 @@ import { layerResourceKeyMatches } from './canvaskit/resource-key';
 import {
   glyphOutlinePayloadResourceKey,
   glyphOutlinePayloadStatus,
+  glyphOutlinePaintIsSupported,
 } from './glyph-outline-payload-status';
 import { parseStaticSvgPathLayers, type StaticSvgPathLayer } from './static-svg-path-layers';
 import { loadLocalFontBytesFor, localFontFaceKey, resolveLocalFont, resolveRendererLocalFont,
@@ -1129,9 +1130,10 @@ export class CanvasKitLayerRenderer {
   }
 
   private glyphOutlineVariantReplayable(op: LayerGlyphOutlineOp): boolean {
-    if (op.diagnostics?.strictVisualEligible !== true) return false;
+    if (op.diagnostics?.strictVisualEligible !== true || !glyphOutlinePaintIsSupported(op)) return false;
     const status = glyphOutlinePayloadStatus(op, {
       allowMonochromeFillStroke: true,
+      allowColrv0ColorLayers: true,
       allowColrv1Stage1ColorGraph: true,
       allowBitmapGlyph: true,
       allowSvgGlyph: true,
@@ -1400,6 +1402,7 @@ export class CanvasKitLayerRenderer {
       case 'glyphOutline': {
         const status = glyphOutlinePayloadStatus(op, {
           allowMonochromeFillStroke: true,
+          allowColrv0ColorLayers: true,
           allowColrv1Stage1ColorGraph: true,
           allowBitmapGlyph: true,
           allowSvgGlyph: true,
@@ -1493,7 +1496,7 @@ export class CanvasKitLayerRenderer {
   }
 
   private renderPath(canvas: SkCanvas, op: LayerPathOp): void {
-    const path = this.createCommandPath(op.commands ?? [], op.bbox.x, op.bbox.y);
+    const path = this.pathFromCommands(op.commands ?? [], op.bbox.x, op.bbox.y);
     const style: LayerShapeStyle = op.style ?? (op.lineStyle ? {} : {
       strokeColor: '#000000',
       strokeWidth: 1,
@@ -1541,24 +1544,15 @@ export class CanvasKitLayerRenderer {
     path.delete?.();
   }
 
-  private createCommandPath(
-    commands: readonly LayerPathCommand[],
-    currentX = 0,
-    currentY = 0,
-  ): Path {
+  private pathFromCommands(commands: readonly LayerPathCommand[], x = 0, y = 0): Path {
     const builder = new this.canvasKit.PathBuilder();
     try {
-      for (const command of commands) {
-        [currentX, currentY] = this.applyPathCommand(builder, command, currentX, currentY);
-      }
-      // CanvasKit 0.42의 Path는 생성 명령을 받지 않는다. 완성된 경로만 넘긴다.
+      for (const command of commands) [x, y] = this.applyPathCommand(builder, command, x, y);
       return builder.detach();
-    } finally {
-      builder.delete();
-    }
+    } finally { builder.delete(); }
   }
 
-  private applyPathCommand(path: PathBuilder, command: LayerPathCommand, currentX: number, currentY: number): [number, number] {
+  private applyPathCommand(path: Pick<PathBuilder, 'arcToRotated' | 'close' | 'cubicTo' | 'lineTo' | 'moveTo'>, command: LayerPathCommand, currentX: number, currentY: number): [number, number] {
     switch (command.type) {
       case 'moveTo':
         path.moveTo(command.x, command.y);
@@ -1628,6 +1622,35 @@ export class CanvasKitLayerRenderer {
       this.renderMonochromeGlyphOutline(canvas, op);
       return;
     }
+    if (op.colorLayers?.colorFormat === 'colrV0') {
+      const status = glyphOutlinePayloadStatus(op, { allowColrv0ColorLayers: true });
+      if (!status.supported) {
+        this.unsupportedOps.add('glyphOutline:replayInvariant');
+        return;
+      }
+      canvas.save();
+      try {
+        const placement = this.affineToCanvasKitMatrix(op.placement?.runToPage);
+        if (placement) canvas.concat(placement);
+        for (const layer of op.colorLayers.layers ?? []) {
+          const path = this.pathFromCommands(layer.commands ?? []);
+          const paint = new this.canvasKit.Paint();
+          canvas.save();
+          try {
+            const transform = this.affineToCanvasKitMatrix(layer.transformToRun);
+            if (transform) canvas.concat(transform);
+            this.applyGlyphPathFillRule(path, layer.fillRule);
+            paint.setAntiAlias(true);
+            paint.setStyle(this.canvasKit.PaintStyle.Fill);
+            const color = this.resolvedColor(layer.fill ?? {});
+            color[3] *= layer.opacity ?? 1;
+            paint.setColor(color);
+            canvas.drawPath(path, paint);
+          } finally { canvas.restore(); paint.delete(); path.delete(); }
+        }
+      } finally { canvas.restore(); }
+      return;
+    }
     const graph = op.colorLayers?.paintGraph;
     const nodes = graph?.nodes ?? [];
     if (!graph || nodes.length === 0 || graph.rootNodeId === undefined) {
@@ -1673,8 +1696,9 @@ export class CanvasKitLayerRenderer {
   private renderSvgGlyphOutline(canvas: SkCanvas, op: LayerGlyphOutlineOp): void {
     const payload = op.svgGlyph;
     const viewBox = payload?.viewBox;
+    const placement = payload?.fontEmBox ?? op.bbox;
     const layers = this.staticSvgGlyphPathLayers(op);
-    if (!payload || !viewBox || !layers || !this.boundsAreDrawable(op.bbox) || !this.boundsAreDrawable(viewBox)) {
+    if (!payload || !viewBox || !layers || !this.boundsAreDrawable(placement) || !this.boundsAreDrawable(viewBox)) {
       this.unsupportedOps.add('glyphOutline:svgReplayInvariant');
       return;
     }
@@ -1684,8 +1708,8 @@ export class CanvasKitLayerRenderer {
       if (payloadMatrix) {
         (canvas as unknown as { concat: (matrix: number[]) => void }).concat(payloadMatrix);
       }
-      canvas.translate(op.bbox.x, op.bbox.y);
-      canvas.scale(op.bbox.width / viewBox.width, op.bbox.height / viewBox.height);
+      canvas.translate(placement.x, placement.y);
+      canvas.scale(placement.width / viewBox.width, placement.height / viewBox.height);
       canvas.translate(-viewBox.x, -viewBox.y);
       for (const layer of layers) {
         canvas.save();
@@ -1750,15 +1774,22 @@ export class CanvasKitLayerRenderer {
     const stroke = op.payloadKind === 'monochromeFillStroke' && op.stroke
       ? this.makeStrokePaint(op.stroke.color ?? op.paintStyle?.color ?? '#000000', op.stroke.width ?? 1)
       : null;
+    if (stroke) {
+      // The admission contract currently proves only the miter/butt strict subset.
+      stroke.setStrokeJoin(this.canvasKit.StrokeJoin.Miter);
+      stroke.setStrokeCap(this.canvasKit.StrokeCap.Butt);
+      stroke.setStrokeMiter(op.stroke!.miterLimit!);
+    }
     canvas.save();
     try {
       (canvas as unknown as { concat: (matrix: number[]) => void }).concat(matrix);
       for (const outline of op.paths) {
-        const path = this.createCommandPath(outline.commands ?? []);
+        const path = this.pathFromCommands(outline.commands ?? []);
         try {
           this.applyGlyphPathFillRule(path, outline.fillRule);
+          if (stroke && op.stroke?.paintOrder === 'strokeThenFill') canvas.drawPath(path, stroke);
           canvas.drawPath(path, fill);
-          if (stroke) canvas.drawPath(path, stroke);
+          if (stroke && op.stroke?.paintOrder !== 'strokeThenFill') canvas.drawPath(path, stroke);
         } finally {
           path.delete?.();
         }
@@ -1779,73 +1810,102 @@ export class CanvasKitLayerRenderer {
     nodesById: Map<number, LayerColorGraphNode>,
     nodeId: number,
     visited: Set<number>,
+    budget = { remaining: 4096 },
+    depth = 0,
   ): void {
-    if (visited.has(nodeId)) {
+    if (visited.has(nodeId) || depth >= 64 || --budget.remaining < 0) {
       this.unsupportedOps.add('glyphOutline:replayInvariant');
       return;
     }
     visited.add(nodeId);
-    const node = nodesById.get(nodeId);
-    if (!node) {
-      this.unsupportedOps.add('glyphOutline:replayInvariant');
-      return;
-    }
-    if (node.kind === 'transform') {
-      const transformNode = node.transform;
-      const matrix = this.affineToCanvasKitMatrix(transformNode?.transform);
-      if (!matrix || transformNode?.childNodeId === undefined) {
+    try {
+      const node = nodesById.get(nodeId);
+      if (!node) {
         this.unsupportedOps.add('glyphOutline:replayInvariant');
         return;
       }
-      canvas.save();
-      (canvas as unknown as { concat?: (matrix: number[]) => void }).concat?.(matrix);
-      try {
-        this.renderColorPaintGraphNode(canvas, nodesById, transformNode.childNodeId, visited);
-      } finally {
-        canvas.restore();
-      }
-      return;
-    }
-    const pathNode = node.solidPath ?? node.linearGradientPath ?? node.radialGradientPath ?? node.sweepGradientPath;
-    if (!pathNode?.commands) {
-      this.unsupportedOps.add('glyphOutline:replayInvariant');
-      return;
-    }
-    const path = this.createCommandPath(pathNode.commands);
-    this.applyFillRule(path, pathNode.fillRule);
-    const paint = new this.canvasKit.Paint();
-    let shader: unknown | undefined;
-    try {
-      paint.setAntiAlias?.(true);
-      paint.setStyle(this.canvasKit.PaintStyle.Fill);
-      if (node.kind === 'solidPath' && node.solidPath?.fill) {
-        paint.setColor(this.resolvedColor(node.solidPath.fill));
-      } else if (node.kind === 'linearGradientPath' && node.linearGradientPath?.gradient) {
-        shader = this.makeLinearGradientShader(node.linearGradientPath.gradient);
-        if (!shader) {
+      if (node.kind === 'transform') {
+        const transformNode = node.transform;
+        const matrix = this.affineToCanvasKitMatrix(transformNode?.transform);
+        if (!matrix || transformNode?.childNodeId === undefined) {
+          this.unsupportedOps.add('glyphOutline:replayInvariant');
           return;
         }
-        (paint as unknown as { setShader: (shader: unknown) => void }).setShader(shader);
-      } else if (node.kind === 'radialGradientPath' && node.radialGradientPath?.gradient) {
-        shader = this.makeRadialGradientShader(node.radialGradientPath.gradient);
-        if (!shader) {
-          return;
+        canvas.save();
+        (canvas as unknown as { concat?: (matrix: number[]) => void }).concat?.(matrix);
+        try {
+          this.renderColorPaintGraphNode(canvas, nodesById, transformNode.childNodeId, visited, budget, depth + 1);
+        } finally {
+          canvas.restore();
         }
-        (paint as unknown as { setShader: (shader: unknown) => void }).setShader(shader);
-      } else if (node.kind === 'sweepGradientPath' && node.sweepGradientPath?.gradient) {
-        shader = this.makeSweepGradientShader(node.sweepGradientPath.gradient);
-        if (!shader) {
-          return;
-        }
-        (paint as unknown as { setShader: (shader: unknown) => void }).setShader(shader);
-      } else {
         return;
       }
-      canvas.drawPath(path, paint);
+      if (node.kind === 'composite' && node.composite?.mode === 'sourceOver') {
+        const { sourceNodeId, backdropNodeId } = node.composite;
+        if (sourceNodeId === undefined || backdropNodeId === undefined) {
+          this.unsupportedOps.add('glyphOutline:replayInvariant');
+          return;
+        }
+        this.renderColorPaintGraphNode(canvas, nodesById, backdropNodeId, visited, budget, depth + 1);
+        this.renderColorPaintGraphNode(canvas, nodesById, sourceNodeId, visited, budget, depth + 1);
+        return;
+      }
+      if (node.kind === 'clip' && node.clip?.clipCommands && node.clip.childNodeId !== undefined) {
+        const path = this.pathFromCommands(node.clip.clipCommands);
+        canvas.save();
+        try {
+          this.applyFillRule(path, node.clip.fillRule);
+          canvas.clipPath(path, this.canvasKit.ClipOp.Intersect, true);
+          this.renderColorPaintGraphNode(canvas, nodesById, node.clip.childNodeId, visited, budget, depth + 1);
+        } finally {
+          canvas.restore();
+          path.delete?.();
+        }
+        return;
+      }
+      const pathNode = node.solidPath ?? node.linearGradientPath ?? node.radialGradientPath ?? node.sweepGradientPath;
+      if (!pathNode?.commands) {
+        this.unsupportedOps.add('glyphOutline:replayInvariant');
+        return;
+      }
+      const path = this.pathFromCommands(pathNode.commands);
+      this.applyFillRule(path, pathNode.fillRule);
+      const paint = new this.canvasKit.Paint();
+      let shader: unknown | undefined;
+      try {
+        paint.setAntiAlias?.(true);
+        paint.setStyle(this.canvasKit.PaintStyle.Fill);
+        if (node.kind === 'solidPath' && node.solidPath?.fill) {
+          paint.setColor(this.resolvedColor(node.solidPath.fill));
+        } else if (node.kind === 'linearGradientPath' && node.linearGradientPath?.gradient) {
+          shader = this.makeLinearGradientShader(node.linearGradientPath.gradient);
+          if (!shader) {
+            return;
+          }
+          (paint as unknown as { setShader: (shader: unknown) => void }).setShader(shader);
+        } else if (node.kind === 'radialGradientPath' && node.radialGradientPath?.gradient) {
+          shader = this.makeRadialGradientShader(node.radialGradientPath.gradient);
+          if (!shader) {
+            return;
+          }
+          (paint as unknown as { setShader: (shader: unknown) => void }).setShader(shader);
+        } else if (node.kind === 'sweepGradientPath' && node.sweepGradientPath?.gradient) {
+          shader = this.makeSweepGradientShader(node.sweepGradientPath.gradient);
+          if (!shader) {
+            return;
+          }
+          (paint as unknown as { setShader: (shader: unknown) => void }).setShader(shader);
+        } else {
+          return;
+        }
+        canvas.drawPath(path, paint);
+      } finally {
+        (shader as { delete?: () => void } | undefined)?.delete?.();
+        paint.delete?.();
+        path.delete?.();
+      }
     } finally {
-      (shader as { delete?: () => void } | undefined)?.delete?.();
-      paint.delete?.();
-      path.delete?.();
+      visited.delete(nodeId);
     }
   }
 
@@ -1873,9 +1933,9 @@ export class CanvasKitLayerRenderer {
   private resolvedColor(color: { rgba?: number[] }): Color {
     const rgba = color.rgba ?? [0, 0, 0, 1];
     return this.canvasKit.Color(
-      clampUnit(rgba[0]),
-      clampUnit(rgba[1]),
-      clampUnit(rgba[2]),
+      clampUnit(rgba[0]) * 255,
+      clampUnit(rgba[1]) * 255,
+      clampUnit(rgba[2]) * 255,
       clampUnit(rgba[3]),
     );
   }
@@ -4062,7 +4122,7 @@ export class CanvasKitLayerRenderer {
       return;
     }
     for (const head of heads ?? []) {
-      const path = this.createCommandPath(head.commands, 0, 0);
+      const path = this.pathFromCommands(head.commands, 0, 0);
       const fill = this.makeFillPaint(head.filled ? color : '#ffffff');
       const outline = head.filled ? null : this.makeStrokePaint(color, Math.max(0.5, width * 0.3), 1);
       try {

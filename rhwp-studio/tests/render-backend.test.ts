@@ -1194,7 +1194,7 @@ test('GlyphOutline payload resource keys are suppressed for incomplete payloads'
   }), null);
 });
 
-test('GlyphOutline COLRv1 gate reports unsupported graph node kind exactly', () => {
+test('GlyphOutline COLRv1 gate rejects an incomplete composite graph', () => {
   const status = glyphOutlinePayloadStatus({
     type: 'glyphOutline',
     bbox: { x: 0, y: 0, width: 10, height: 10 },
@@ -1208,7 +1208,7 @@ test('GlyphOutline COLRv1 gate reports unsupported graph node kind exactly', () 
     },
   }, { allowColrv1Stage1ColorGraph: true });
   assert.equal(status.reason, 'unsupportedColorGlyph');
-  assert.equal(status.detail, 'colrV1Node:composite');
+  assert.equal(status.detail, 'colrV1InvalidGraph');
 });
 
 test('GlyphOutline COLRv1 gradient graph subset can pass the explicit gate', () => {

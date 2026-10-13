@@ -1768,6 +1768,8 @@ export interface LayerColorPaintGraphNode {
   radialGradientPath?: LayerColorRadialGradientPathNode;
   sweepGradientPath?: LayerColorSweepGradientPathNode;
   transform?: LayerColorTransformNode;
+  composite?: { sourceNodeId?: number; backdropNodeId?: number; mode?: 'sourceOver' | string };
+  clip?: { childNodeId?: number; clipCommands?: LayerPathCommand[]; fillRule?: string };
   sourceRangeUtf8?: LayerTextRange;
   glyphRange?: LayerTextRange;
   sourceFontRef?: LayerFontColorGlyphRef;
@@ -1819,6 +1821,8 @@ export interface LayerSvgGlyphPayload {
   sourceRangeUtf8?: LayerTextRange;
   glyphRange?: LayerTextRange;
   viewBox?: LayerBounds;
+  /** OpenType SVG의 em square와 baseline을 보존하는 producer 전용 배치. */
+  fontEmBox?: LayerBounds;
   intrinsicSize?: { width?: number; height?: number };
   staticSanitized?: boolean;
   scriptAllowed?: boolean;
