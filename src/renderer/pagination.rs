@@ -593,10 +593,26 @@ pub struct ColumnContent {
     /// 조각을 본문으로 읽는다(실측: `overflow_cell_baseline` 래칫 62 → 63줄).
     pub overlay_continuations: Vec<OverlayContinuation>,
     /// [#4568] 이 단에서 잔여 행을 다음 쪽에 넘긴 overlay 표의 **앵커 쪽 컷**.
-    /// `(para_index, control_index, end_row)` — 앵커 그리기는 `0..end_row` 만 그린다.
+    /// `(para_index, control_index, cut)` — 앵커는 cut의 행·셀 유닛만 그린다.
     /// 넘긴 행을 앵커 쪽에서도 전부 그리면(bleed) 시각적으로는 클립돼 안 보이지만
     /// render tree 에 쪽 밖 줄이 남아 `overflow_cell_baseline` 래칫에 계상된다.
-    pub overlay_cuts: Vec<(usize, usize, usize)>,
+    pub overlay_cuts: Vec<(usize, usize, OverlayCut)>,
+}
+
+/// 장식 표의 앵커 쪽 내용 소유와 마지막 행의 물리 높이.
+#[derive(Debug, Clone)]
+pub struct OverlayCut {
+    pub end_row: usize,
+    pub end_cut: Vec<usize>,
+    pub end_row_height: Option<f64>,
+}
+
+/// 한 행의 앞/뒤 조각은 동일한 셀 유닛 컷과 점유 높이를 소비한다.
+#[derive(Debug, Clone)]
+pub struct OverlayRowFragment {
+    pub end_cut: Vec<usize>,
+    pub opening_height: f64,
+    pub remaining_height: f64,
 }
 
 /// [#4568] 쪽을 넘긴 overlay 표의 잔여 행 조각.
@@ -606,8 +622,12 @@ pub struct OverlayContinuation {
     pub para_index: usize,
     /// 문단 내 컨트롤 인덱스
     pub control_index: usize,
-    /// 이 단에서 그릴 첫 행 (inclusive). 앞 쪽이 이미 그린 행 수와 같다.
+    /// 이 단에서 그릴 첫 행 (inclusive). 부분 행이면 start_cut 이후만 소유한다.
     pub start_row: usize,
+    /// 앞 쪽이 소비한 셀 유닛. 비어 있으면 온전한 행에서 시작한다.
+    pub start_cut: Vec<usize>,
+    /// 부분 첫 행의 물리 높이. 전체 행의 선언 높이를 다시 계상하지 않는다.
+    pub start_row_height: Option<f64>,
     /// [#5792] 이 단 최상단에 잔여 행이 차지하는 높이(px). 0 이면 예약하지 않는다.
     ///
     /// 뒤따르는 흐름이 잔여 행의 자리를 스스로 만드는 형상(#4514 필러 문단)에서는
@@ -742,6 +762,11 @@ pub enum PageItem {
         /// 조판 scan 이 같은 값으로 행을 쟀으므로 그리기도 이 값을 그대로 적용한다.
         straddle_row_relief: Vec<(usize, f64)>,
         straddle_page_bands: Vec<crate::renderer::pagination::StraddleCellCarry>,
+        /// Fragment row geometry with previously accepted physical boxes.
+        /// None keeps the ordinary global measured-row contract.
+        fragment_row_heights: Option<Vec<f64>>,
+        /// 예산에서 인증·수용한 종료 행의 저장 물리 프레임 소유. 배치가 다시 추정하지 않는다.
+        end_row_owns_stored_frame: bool,
     },
     /// 그리기 개체
     Shape {
@@ -751,6 +776,8 @@ pub enum PageItem {
     },
     /// 미주 영역 시작 구분선
     EndnoteSeparator {
+        /// 확정된 미주 시작 흐름 원점(px, 단 본문 상단 기준). None은 기존 저장 경로.
+        flow_origin: Option<f64>,
         /// 구분선 길이 (HWP 단위). 한컴 전폭 sentinel(14692344)이 i16을 넘으므로 i32.
         separator_length: i32,
         /// 구분선 위 여백 (HWP 단위)
@@ -945,6 +972,8 @@ impl PageItem {
                 start_row_height_override,
                 straddle_row_relief,
                 straddle_page_bands,
+                fragment_row_heights,
+                end_row_owns_stored_frame,
             } => PageItem::PartialTable {
                 para_index: adjust(*para_index),
                 control_index: *control_index,
@@ -960,6 +989,8 @@ impl PageItem {
                 start_row_height_override: *start_row_height_override,
                 straddle_row_relief: straddle_row_relief.clone(),
                 straddle_page_bands: straddle_page_bands.clone(),
+                fragment_row_heights: fragment_row_heights.clone(),
+                end_row_owns_stored_frame: *end_row_owns_stored_frame,
             },
             PageItem::Shape {
                 para_index,
@@ -969,6 +1000,7 @@ impl PageItem {
                 control_index: *control_index,
             },
             PageItem::EndnoteSeparator {
+                flow_origin,
                 separator_length,
                 margin_above,
                 margin_below,
@@ -976,6 +1008,7 @@ impl PageItem {
                 line_width,
                 color,
             } => PageItem::EndnoteSeparator {
+                flow_origin: *flow_origin,
                 separator_length: *separator_length,
                 margin_above: *margin_above,
                 margin_below: *margin_below,
@@ -1042,7 +1075,26 @@ impl PageItem {
                     control_index: c2,
                 },
             ) => *a == adj(*b) && c1 == c2,
-            (PageItem::EndnoteSeparator { .. }, PageItem::EndnoteSeparator { .. }) => true,
+            (
+                PageItem::EndnoteSeparator {
+                    flow_origin: a,
+                    separator_length: al,
+                    margin_above: aa,
+                    margin_below: ab,
+                    line_type: at,
+                    line_width: aw,
+                    color: ac,
+                },
+                PageItem::EndnoteSeparator {
+                    flow_origin: b,
+                    separator_length: bl,
+                    margin_above: ba,
+                    margin_below: bb,
+                    line_type: bt,
+                    line_width: bw,
+                    color: bc,
+                },
+            ) => a == b && al == bl && aa == ba && ab == bb && at == bt && aw == bw && ac == bc,
             _ => false,
         }
     }

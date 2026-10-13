@@ -1251,6 +1251,7 @@ export interface LayerTextRunOp {
 
 export interface LayerFootnoteMarkerOp {
   type: 'footnoteMarker';
+  baseline?: number;
   bbox: LayerBounds;
   text: string;
   fontFamily?: string;
@@ -1269,6 +1270,7 @@ export interface LayerShadowStyle {
 }
 
 export interface LayerPatternFill {
+  tileSize?: number;
   patternType?: number;
   patternColor?: string;
   backgroundColor?: string;
@@ -1400,6 +1402,7 @@ export interface LayerEquationOp {
   color?: string;
   fontSize?: number;
   layoutBox?: LayerEquationLayoutBox;
+  scaleX?: number;
 }
 
 export interface LayerControlLabelOp {
@@ -1447,6 +1450,7 @@ export interface LayerEquationLayoutBox {
 }
 
 export type LayerEquationLayoutKind =
+  | { type: 'hancomGlyphs'; glyphs: string; positions: number[]; shears?: number[]; baselineShift: number }
   | { type: 'row'; children: LayerEquationLayoutBox[] }
   | { type: 'text'; text: string }
   | { type: 'number'; text: string }

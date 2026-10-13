@@ -63,8 +63,9 @@ pub(super) fn measure(
                         .unwrap_or(0.0);
                     let effective_h = crate::renderer::tac_table_effective_height(seg_lh, mt_h);
                     let trailing = if seg.line_spacing > 0 {
-                        crate::renderer::composer::tac_host_trailing_spacing(
+                        crate::renderer::composer::tac_host_trailing_spacing_at_boundary(
                             para,
+                            next_para,
                             ci,
                             seg,
                             profile.hwpx_stored_layout(),

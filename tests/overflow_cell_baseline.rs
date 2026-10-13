@@ -49,6 +49,14 @@ const DEFERRED_CELL_OVERFLOW_FIXTURES: &[&str] = &[
     "hwpctl_ParameterSetID_Item_v1.2.hwp",
 ];
 
+/// #7751로 이관한 편람 HWP의 셀 넘침 검사는 원장에서 제거한다.
+/// 원본과 독립 Print PDF는 보존하며, 다른 원문의 분할/기준값은 바꾸지 않는다.
+const REMOVED_CELL_OVERFLOW_FIXTURES: &[&str] = &[
+    "2025 행정업무운영 편람(최종).hwp",
+    // #7812: 원본은 유지하고 다른 브랜치의 보정 대상으로 분리한다.
+    "table_giant_cell_overfill.hwpx",
+];
+
 /// 독립 PDF에서도 용지 경계에서 잘리는 입력은 원시 진단 줄 수 대신
 /// 기존 `issue_7418_host_text_and_split_row_geometry`의 표/후속 문단 쪽 소속 계약으로 검사한다.
 /// hy_ladder3 전2쪽 Native/fresh WASM은93.11280%·100%이며 정상 clipping을 직접 확인했다.
@@ -156,7 +164,7 @@ fn count_doc(path: &Path) -> Option<u64> {
 
 fn overflow_cell_lines_do_not_grow_partition(part: usize) {
     let buckets = partition_samples(collect_samples(), PARTITIONS);
-    let samples = buckets
+    let mut samples = buckets
         .into_iter()
         .nth(part)
         .unwrap_or_else(|| panic!("없는 partition: {part}"));
@@ -164,6 +172,7 @@ fn overflow_cell_lines_do_not_grow_partition(part: usize) {
         !samples.is_empty(),
         "overflow-cell partition {part} 이 비어 있음"
     );
+    samples.retain(|(_, rel)| !REMOVED_CELL_OVERFLOW_FIXTURES.contains(&rel.as_str()));
     let selected_rels: BTreeSet<String> = samples.iter().map(|(_, rel)| rel.clone()).collect();
     let baseline = load_baseline();
 

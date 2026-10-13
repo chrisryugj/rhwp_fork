@@ -1,5 +1,9 @@
 use rhwp::document_core::DocumentCore;
 
+mod corpus_scope {
+    include!("../common/corpus_scope.rs");
+}
+
 fn standalone_native_reason() -> &'static str {
     if cfg!(all(not(target_arch = "wasm32"), feature = "native-skia")) {
         "nativeRendererSnapshotRequired"
@@ -82,6 +86,12 @@ fn stage4_public_hwp_hwpx_profiles_are_end_to_end_and_feature_detected() {
         .expect("maxCharacters");
     let mut traces = std::collections::HashMap::new();
     for document in manifest["documents"].as_array().expect("documents") {
+        // 사용자가 별도 작업으로 이관한 시험지의 프로필·렌더 핀은 제거한다.
+        if !corpus_scope::sample_is_in_scope(std::path::Path::new(
+            document["path"].as_str().expect("document path"),
+        )) {
+            continue;
+        }
         let id = document["id"].as_str().expect("document id");
         let trace = public_trace(
             document["path"].as_str().expect("document path"),

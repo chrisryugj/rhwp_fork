@@ -117,9 +117,10 @@ pub(super) fn place_split_paragraph(
             // 여기서 별도 각주 높이와 40px 여백을 다시 빼면 물리적으로
             // 들어가는 본문 줄이 다음 쪽으로 밀린다. 다른 profile은 기존
             // 분할 예산을 유지한다.
-            if st.profile.hwpx_stored_layout()
-                && st.deferred_hwpx_note_body
-                && st.current_footnote_height > 0.0
+            if st.current_footnote_body_bottom_reserved
+                || (st.profile.hwpx_stored_layout()
+                    && st.deferred_hwpx_note_body
+                    && st.current_footnote_height > 0.0)
             {
                 (st.available_height() - st.current_height).max(0.0)
             } else {
@@ -312,6 +313,7 @@ fn stored_successor_flow(
     dpi: f64,
 ) -> Option<(f64, f64)> {
     if st.col_count != 1
+        || fmt.stored_ladder_is_filler
         || fmt.computed_host_lines.is_some()
         || fmt.line_count() != para.line_segs.len()
     {

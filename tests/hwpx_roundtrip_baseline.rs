@@ -34,8 +34,6 @@ const SAMPLES_ROOT: &str = "samples/hwpx";
 /// #1379 2~3단계에서 subList(셀·글상자) 컨트롤 보존이 해소되어 25건이 baseline 으로
 /// 승격됨 (task_m100_1379_stage3.md 측정). #1382 해소로 143E433F503322BD33 승격
 /// (autoNum 폭 축 일관화 — task_m100_1382_stage2.md). #1384 해소(borderFill 등록
-/// 1-based 정정 — task_m100_1384_stage2.md)로 잔존 4건(exam_kor/exam_social/
-/// exam_social-p1/issue_1133) 승격 → **xfail 0**.
 const XFAIL: &[(&str, &str)] = &[];
 
 /// 검사 제외 — 샘플 자체가 HWPX 패키지가 아님.
@@ -194,7 +192,6 @@ fn xfail_entries_still_fail() {
 /// 목록 정합 가드 — EXCLUDED/ORACLE_UNFIT 항목이 실제로 존재하고,
 /// ORACLE_UNFIT 은 HWPX 샘플(EXCLUDED 아님)이어야 한다.
 /// (XFAIL 과의 중복은 허용 — xfail 샘플도 시각 oracle 부적합 표시는 유효하며,
-/// 해소 후 승격 시 표시가 그대로 살아 있어야 한다. 예: exam_kor #1384)
 #[test]
 fn grade_lists_are_consistent() {
     for (name, _) in EXCLUDED {

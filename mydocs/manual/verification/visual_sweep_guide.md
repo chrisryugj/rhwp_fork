@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/verification/visual_verification_governance.md
-last_verified: 2026-10-11
+last_verified: 2026-10-14
 ---
 
 # PDF/SVG visual sweep 가이드
@@ -371,6 +371,69 @@ Sweep은 Native/WASM의 선택 SVG를 캡처하거나 resume checkpoint를 재�
 캡처 전에 실패한다. 입력 문서에 필요한 face가 실제로 공급되는지와 대표 PNG의 글꼴 표시를
 직접 확인해야 한다. 한글 두부가 있어도 실루엣 점수만으로 gate가 통과할 수 있다.
 
+### 쪽 작업자 수와 Chrome 캡처 재사용
+
+`--page-workers N`으로 내장 글꼴 검사, PNG 캡처, 실루엣 TSV 계산의 작업자 수를
+설정한다. 기본값은 **4**이며 **1**이면 순차 실행한다. 실제 작업자 수는 대상 쪽 수를
+넘지 않는다. CPU 계산은 Python 프로세스, webfont 캡처는 Node/Chrome 작업자로
+나눠 실행하며, 결과와 checkpoint는 원래 쪽 순서대로 기록한다.
+
+```bash
+# 같은 원본·독립 Print PDF를 네 작업자로 전쪽 비교
+python3 scripts/visual_sweep.py --silhouette-only --page-workers 4 \
+  --rhwp-bin target/pr-review/release-test/rhwp --embed-fonts full \
+  --file-target kps samples/kps-ai.hwp pdf/kps-ai-2022.pdf \
+  --out output/pr-review/kps-four-workers
+
+# 메모리가 부족하거나 순차 결과와 비교할 때
+python3 scripts/visual_sweep.py --silhouette-only --page-workers 1 \
+  --rhwp-bin target/pr-review/release-test/rhwp --embed-fonts full \
+  --file-target kps samples/kps-ai.hwp pdf/kps-ai-2022.pdf \
+  --out output/pr-review/kps-one-worker
+```
+
+같은 옵션을 `--wasm-pkg pkg`의 fresh WASM 실행과 `--png-pair`에도 사용할 수 있다.
+기존 `--font-path`, `--font-environment`, `--compat` 설정은 비교 양쪽에서 동일하게
+유지한다. Native/WASM 원문 내보내기와 일반 모드의 상세 overlay 분석은 순차 구간으로
+남으며, 전체 실행이 작업자 수에 비례해 빨라진다고 가정하지 않는다.
+
+캡처 작업자마다 Chrome 하나를 재사용하고 동시에 탭 하나만 연다. 따라서 기본4에서는
+캡처 중 최대4개의 Chrome과4개의 탭을 사용한다. 큰 SVG와 내장 글꼴은 작업자별 메모리를
+사용하므로 가용 메모리가 부족하면 `--page-workers 2` 또는 `1`로 줄인다.
+
+#### 실제 문서의 순차·병렬 비교
+
+2026-10-14 Ubuntu의16 논리 CPU·15GiB 메모리 환경에서 `samples/kps-ai.hwp`와
+독립 Print `pdf/kps-ai-2022.pdf`의 전체77쪽을 같은 Native 실행 파일·글꼴 공급·96dpi로
+측정했다. 다른 검증도 실행 중이던 환경의 관측값이며 모든 문서에 같은 단축률을 보장하지 않는다.
+
+| 작업자 수 | SVG 내보내기부터 TSV 완료까지 |
+| --- | ---: |
+| 1 | 382.79초 |
+| 4 | 147.71초 |
+
+235.08초(61.4%) 단축됐고 약2.59배 빨랐다. 두 실행의77쪽 PNG RGBA, 원본 TSV 바이트,
+페이지별 글꼴 검사 결과가 모두 같다. 각 실행의 최저값은42쪽90.85010%이며 누락·미달0이다.
+원문 내보내기와 PDF 래스터화는 순차 구간으로 남는다. 점수 계산 구간은 마지막 캡처 완료부터
+TSV 완료까지93.31초→12.48초였다. 전체 실행 시간에는 원문 내보내기도 포함되지만
+Rust/WASM 패키지 빌드 시간은 포함하지 않는다.
+
+생산 source는 `6995bc5d35b14f598e03cf0f5cc99bd957a42843`이고 실행 명령·tool/CLI SHA·
+단계별 로그·비교 원문은 ignored `output/pr-review/semanticist21-20261008/visual-sweep-page-workers-v457/`
+에 보존한다. 이전 별도 캡처의22쪽 라벨은 같은 SVG·render tree에서도 PNG가 달라 별도 진단으로
+남겼으며, 그 과거 PNG까지 모두 동일하다고 주장하지 않는다. 위 동등성은 실제1/4 작업자 비교 범위다.
+
+Native/fresh WASM의 여러 쪽을 웹 글꼴로 캡처할 때는 작업자당 Chrome을 한 번 실행한다.
+각 쪽은 새 문서 탭에서 같은 배율·글꼴 준비·누락 bold 복구 조건으로 캡처하고 곧 닫는다.
+검증용 탭을 쌓아두지 않으며, 쪽별 완료 기록을 받아 기존 분석·checkpoint를 계속 저장한다.
+실행 종료나 중단 시 이 실행의 Chrome과 임시 profile을 정리한다.
+
+직접 캡처는 `node scripts/rasterize-svg-webfonts.mjs --batch-json <JSON파일> --workers 4`를 사용한다.
+이 직접 명령의 기본 작업자 수는1이다. JSON은 `[{"input":"원본.svg","output":"출력.png","zoom":1}, ...]` 목록이며 입력 순서대로
+JSONL을 출력한다. 일반 단일 `--input`/`--output` 명령도 사용할 수 있다. Sweep의 배치 기록은
+`analysis/raster_batch.jsonl`과 `raster_batch.stderr.log`에 남는다. 글꼴 바이너리는 저장소의
+공용 `output/pr-review/font-raster-cache`에서 SHA-256을 확인해 재사용한다.
+
 ## 필수 도구
 
 스크립트는 실행 시작 시 다음 CLI가 `PATH`에 있는지 확인한다.
@@ -721,8 +784,8 @@ reviewer가 저장소를 찾아 열게 하지 않는다.
    실제 빌드 명령·옵션·인쇄 프로필·글꼴 공급을 적는다. 입력/기준 Print PDF의 경로·해시·제품/빌드·출처도 연결한다.
 2. 전체 결과: 입력마다 Native/fresh WASM 두 행을 만들어 실제 검증 페이지 범위·전체 쪽수·최저값과 그 쪽,
    90% 미만/누락/측정 불가 쪽·gate를 적는다. 여러 문서의 최저값을 하나로 합쳐 개별 실패를 가리지 않는다.
-   검증 대상 전체 페이지의 **Native TSV와 fresh WASM TSV 원본 모두** ZIP으로 묶어 PR 본문에 업로드하거나
-   검토자가 내려받을 수 있는 동일 파일의 링크를 첨부한다. ZIP 안에서 Native/fresh WASM을 구분한다.
+   검증 대상 전체 페이지의 **Native TSV와 fresh WASM TSV 원본 모두** PR 본문에 첨부하거나
+   검토자가 내려받을 수 있는 동일 파일의 링크를 첨부한다. Native/fresh WASM 출력 경로를 구분한다.
    첨부 파일의 입력·출력 경로·검증 head를 명시한다.
    요약 표·최저값·로컬 output 경로만으로 TSV 원본을 대신하지 않는다. TSV는 ignored output에
    보존하고 Git에 커밋하지 않는다. 수정 전 비교를 실행했다면 source SHA와 같은 입력·페이지의 전후 값도 연결한다.
@@ -750,7 +813,7 @@ reviewer가 저장소를 찾아 열게 하지 않는다.
 - PR head repository/SHA: `<head-owner>/<head-repo>` / `<head-sha>`
 - 검증 source·빌드/글꼴 환경·입력/Print PDF 해시: <실제 실행 기록>
 - Native/fresh WASM TSV 명령과 ignored output 경로: <실제 실행 기록>
-- 전체 검증 범위 TSV 원본: [Native·fresh WASM TSV ZIP](TSV_ATTACHMENT_URL) — <입력·출력 경로·검증 head>
+- 전체 검증 범위 TSV 원본: [Native TSV](NATIVE_TSV_ATTACHMENT_URL), [fresh WASM TSV](WASM_TSV_ATTACHMENT_URL) — <입력·출력 경로·검증 head>
 - 아래 이미지는 대표 페이지에만 첨부한다. 전체 페이지 이미지는 필요하지 않다.
 
 | 입력·기준 Print PDF | 경로 | 검증 범위/전체 쪽수 | 최저 일치율·쪽 | 90% 미만/누락/측정 불가 쪽 | 판정 |
