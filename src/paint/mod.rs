@@ -17,6 +17,7 @@ pub mod profile;
 pub mod replay_order;
 pub mod resources;
 pub mod schema;
+mod shaped_measurement;
 pub(crate) mod shaping_glyph;
 pub(crate) mod shaping_glyph_vertical;
 pub mod text_shape;
@@ -74,8 +75,11 @@ pub use schema::{
     PAGE_LAYER_TREE_SCHEMA_MINOR_VERSION, PAGE_LAYER_TREE_SCHEMA_VERSION, PAGE_LAYER_TREE_UNIT,
 };
 pub use text_shape::{
-    FontRequest, FontResolver, GlyphRunQuality, NoopFontResolver, ResolvedFontFace,
-    ResolvedGlyphRun, TextShapeDiagnostic, TextShapeLowerer, TextShapeReport,
+    FontRequest, FontResolver, GlyphRunQuality, JustificationMode, LineBreakChangeRisk,
+    LineBreakContextValue, LineBreakShadowReport, NoopFontResolver, ResolvedFontFace,
+    ResolvedGlyphRun, ShapedMeasurementLineReport, ShapedMeasurementPageSummary,
+    ShapedMeasurementParagraphSummary, ShapedMeasurementRunReport, TabStopSummary,
+    TableCellConstraintSummary, TextShapeDiagnostic, TextShapeLowerer, TextShapeReport,
 };
 pub use text_v2::{
     TextV2CompatibilityProfile, TextV2Diagnostics, TextV2LineBreakRisk, TextV2LineBreakRiskLevel,

@@ -459,3 +459,13 @@ improvement rather than a Canvas2D compatibility match.
 기존 selector 단위 검사에 표현 범위 양쪽 경계와 정확한 face 범위 검사를 추가했다.
 현재 이관 단계에서는 개별 파일 rustfmt와 diff 검사만 수행했다. Cargo·Native·fresh WASM 및
 독립 한컴 PDF 시각 검증은 저장 공간 확보 뒤 수행해야 하며, 과거 브랜치 결과를 재사용하지 않는다.
+
+## P45 이관: 보고 전용 shaping 측정
+
+`TextShapeReport`의 run·line·paragraph·page 측정과 `LineBreakShadowReport`는 진단값이다.
+기존 `shape_glyph_run` 결과를 한 번 관찰하며 추가 shaping 호출이나 레이아웃·variant 선택
+분기를 만들지 않는다. 줄 소속과 문맥은 호출자가 제공하며 `Unknown`을 값 없음과 구분한다.
+수평 advance span의 차이는 잉크 경계나 수직 메트릭의 정확성 증명이 아니다.
+
+합성 resolver 검사는 호출 수, 원래 배치 보존, 명시적 소속 집계와 문맥별 위험 보고를 검사한다.
+이 단계의 실행 검증은 파일 rustfmt·diff 확인까지이며 Cargo 실행은 대기 중이다.
