@@ -124,7 +124,7 @@ import type { CanvasKitBundledFontSource } from '@/core/font-loader';
 import type { FontDecisionTraceRecordV1 } from '@/core/font-decision-trace';
 import { readBoundedResponseArrayBuffer } from './canvaskit/bounded-response';
 import { localFontFaceStyle } from './canvaskit/local-font-style';
-import { canvasKitImageEffectKey, makeCanvasKitEffectImage } from './canvaskit/image-effects';
+import { canvasKitEffectCrop, canvasKitImageEffectKey, makeCanvasKitEffectImage } from './canvaskit/image-effects';
 import { decodeBrowserImage } from './canvaskit/browser-image-decoder';
 import { BoundedNativeCache } from './canvaskit/bounded-native-cache';
 import { replayFingerprint } from './canvaskit/replay-fingerprint';
@@ -286,6 +286,10 @@ export interface CanvasKitRenderDiagnostics {
   imageCacheHits: number;
   imageCacheMisses: number;
   imageCacheEvictions: number;
+  mipmapCacheEntries: number;
+  mipmapCacheBytes: number;
+  mipmapCacheHits: number;
+  mipmapCacheMisses: number;
   imageFailureCacheHits: number;
   imageFailures: CanvasKitImageFailureDiagnostic[];
   localTypefaceCount: number;
@@ -380,6 +384,12 @@ export class CanvasKitLayerRenderer {
   private static readonly MAX_BUNDLED_FONT_BYTES = 32 * 1024 * 1024;
 
   private readonly imageCache = new Map<string, { image: SkImage; pixels: number }>();
+  private readonly mipmapImages = new BoundedNativeCache<SkImage>(32, 64 * 1024 * 1024, image => image.delete());
+  private readonly imageNativeKeys = new WeakMap<SkImage, string>();
+  private readonly croppedEffectImages = new WeakMap<SkImage, { width: number; height: number }>();
+  private nextImageKey = 1;
+  private currentProfile: LayerRenderProfile = 'screen';
+  private preferRasterDepth = 0;
   private readonly surfaceCache = new CanvasKitSurfaceCache();
   private readonly staticPictures = new BoundedNativeCache<StaticPictureEntry>(32, 64 * 1024 * 1024, entry => entry.picture.delete());
   private readonly textBlobs = new BoundedNativeCache<TextBlob>(2048, 8 * 1024 * 1024, blob => blob.delete());
@@ -893,6 +903,7 @@ export class CanvasKitLayerRenderer {
       renderedCanvas = surfaceTarget.canvas;
       const canvas = surface.getCanvas();
       this.currentResources = tree.resources;
+      this.currentProfile = tree.profile ?? 'screen';
       this.currentImageBytesResolver = resolveImageBytes;
       this.currentFontResources = tree.fontResources;
       this.glyphRunFonts.registerResources(
@@ -969,6 +980,8 @@ export class CanvasKitLayerRenderer {
       this.currentTreeFingerprint = null;
       this.currentPictureContext = null;
       this.currentPageExtent = null;
+      this.currentProfile = 'screen';
+      this.preferRasterDepth = 0;
       this.currentResources = undefined;
       this.currentImageBytesResolver = undefined;
       this.currentFontResources = undefined;
@@ -1008,6 +1021,7 @@ export class CanvasKitLayerRenderer {
     this.cancelDocumentPreparation();
     for (const entry of this.imageCache.values()) entry.image?.delete?.();
     this.imageCache.clear();
+    this.mipmapImages.clear(true);
     this.imageCachePixels = 0;
     this.imageDecodeFailures.clear();
     this.svgGlyphPathCache.clear();
@@ -1105,6 +1119,10 @@ export class CanvasKitLayerRenderer {
       imageCacheHits: this.imageCacheHits,
       imageCacheMisses: this.imageCacheMisses,
       imageCacheEvictions: this.imageCacheEvictions,
+      mipmapCacheEntries: this.mipmapImages.size,
+      mipmapCacheBytes: this.mipmapImages.bytes,
+      mipmapCacheHits: this.mipmapImages.hits,
+      mipmapCacheMisses: this.mipmapImages.misses,
       imageFailureCacheHits: this.imageFailureCacheHits,
       imageFailures: [...this.currentImageFailures.values()].map((failure) => ({ ...failure })),
       localTypefaceCount: this.localTypefaces.size,
@@ -1525,6 +1543,15 @@ export class CanvasKitLayerRenderer {
     replayPlane: CanvasKitReplayPlane,
     inheritedLayer: LayerInfo | null = null,
   ): void {
+    const preferRaster = node.kind === 'group' && node.cacheHint === 'preferRaster';
+    if (preferRaster) this.preferRasterDepth++;
+    try {
+      this.renderNodeContents(canvas, node, profile, replayPlane, inheritedLayer);
+    } finally { if (preferRaster) this.preferRasterDepth--; }
+  }
+
+  private renderNodeContents(canvas: SkCanvas, node: LayerNode, profile: LayerRenderProfile,
+    replayPlane: CanvasKitReplayPlane, inheritedLayer: LayerInfo | null): void {
     const activeLayer = node.layer ?? inheritedLayer;
     if (node.kind === 'group') {
       const recordingBounds = this.staticPictureBounds(node);
@@ -1563,7 +1590,8 @@ export class CanvasKitLayerRenderer {
               },
             };
             // SkPicture's own estimate excludes retained images/fonts, so charge those as well.
-            const bytes = Math.ceil(picture.approximateBytesUsed() + this.imageCachePixels * 4 + this.glyphRunFonts.diagnostics().bytes);
+            const bytes = Math.ceil(picture.approximateBytesUsed() + this.imageCachePixels * 4
+              + this.mipmapImages.bytes + this.glyphRunFonts.diagnostics().bytes);
             if (this.pendingImageLoads.size === 0 && this.localTypefacePending.size === 0
               && this.staticPictures.set(key, { picture, treeFingerprint: this.currentTreeFingerprint, diagnostics: metadata }, bytes)) {
               picture = null;
@@ -2051,7 +2079,7 @@ export class CanvasKitLayerRenderer {
       const transform = op.bitmapGlyph?.transformToRun;
       const matrix = this.affineToCanvasKitMatrix(transform);
       if (matrix) (canvas as unknown as { concat: (matrix: number[]) => void }).concat(matrix);
-      this.drawImageOp(canvas, image, imageOp);
+      this.drawImageOp(canvas, image, imageOp, op.bitmapGlyph?.filtering === 'nearest' ? 'nearest' : 'linear');
     } finally {
       canvas.restore();
     }
@@ -2345,7 +2373,7 @@ export class CanvasKitLayerRenderer {
     );
   }
 
-  private drawImageOp(canvas: SkCanvas, image: SkImage, op: LayerImageOp): void {
+  private drawImageOp(canvas: SkCanvas, image: SkImage, op: LayerImageOp, bitmapFiltering?: 'nearest' | 'linear'): void {
     if (imageCropSelectionIsEmpty(op.crop)) return;
     const imageWithDimensions = image as SkImage & { width?: unknown; height?: unknown };
     const widthMember = imageWithDimensions.width;
@@ -2383,7 +2411,7 @@ export class CanvasKitLayerRenderer {
       return;
     }
 
-    const crop = canvasKitImageSourceRect(
+    const crop = this.croppedEffectImages.has(image) ? null : canvasKitImageSourceRect(
       imageWidth,
       imageHeight,
       op.crop,
@@ -2394,7 +2422,13 @@ export class CanvasKitLayerRenderer {
       const src = crop
         ? this.canvasKit.XYWHRect(crop.x, crop.y, crop.width, crop.height)
         : this.canvasKit.XYWHRect(0, 0, imageWidth, imageHeight);
-      this.drawImageRect(canvas, image, src, this.canvasKit.XYWHRect(dstX, dstY, dstW, dstH), opacity);
+      const effectWasApplied = !!canvasKitImageEffectKey(op);
+      const useMipmaps = bitmapFiltering === undefined && !effectWasApplied
+        && this.currentProfile !== 'fastPreview' && this.preferRasterDepth === 0
+        && (this.renderMode === 'compat' || this.currentProfile === 'print' || this.currentProfile === 'highQuality')
+        && ((crop?.width ?? imageWidth) > dstW * 1.2 || (crop?.height ?? imageHeight) > dstH * 1.2);
+      this.drawImageRect(canvas, image, src, this.canvasKit.XYWHRect(dstX, dstY, dstW, dstH), opacity,
+        bitmapFiltering ?? (effectWasApplied ? 'nearest' : 'linear'), useMipmaps);
     };
 
     const fillMode = op.fillMode ?? 'fitToSize';
@@ -2406,7 +2440,9 @@ export class CanvasKitLayerRenderer {
     // 종횡비 기준은 잘린 뒤의 픽셀 영역이다 — 타일 기준인 `originalSize`(HWP
     // shape_attr) 가 아니다. SVG 의 `preserveAspectRatio="xMidYMid meet"` 와 같다.
     if (canvasKitImageFillModeContains(fillMode)) {
-      const fit = canvasKitImageContainRect(op.bbox, crop?.width ?? imageWidth, crop?.height ?? imageHeight);
+      const effectCrop = this.croppedEffectImages.get(image);
+      const fit = canvasKitImageContainRect(op.bbox,
+        crop?.width ?? effectCrop?.width ?? imageWidth, crop?.height ?? effectCrop?.height ?? imageHeight);
       drawImage(fit.x, fit.y, fit.width, fit.height);
       return;
     }
@@ -2430,15 +2466,38 @@ export class CanvasKitLayerRenderer {
     }
   }
 
-  private drawImageRect(canvas: SkCanvas, image: SkImage, source: Rect, dest: Rect, opacity = 1): void {
+  private drawImageRect(canvas: SkCanvas, image: SkImage, source: Rect, dest: Rect, opacity = 1,
+    filtering: 'nearest' | 'linear' = 'linear', useMipmaps = false): void {
     const paint = new this.canvasKit.Paint();
     paint.setAntiAlias?.(true);
     if (opacity < 1) {
       paint.setAlphaf(opacity);
     }
+    let sampled = image;
+    let temporary: SkImage | null = null;
+    if (useMipmaps && typeof image.makeCopyWithDefaultMipmaps === 'function') {
+      let key = this.imageNativeKeys.get(image);
+      if (!key) { key = `nativeImage:${this.nextImageKey++}`; this.imageNativeKeys.set(image, key); }
+      const cached = this.mipmapImages.get(key);
+      if (cached) sampled = cached;
+      else {
+        try {
+          const copy = image.makeCopyWithDefaultMipmaps();
+          if (copy) {
+            sampled = copy;
+            if (!this.mipmapImages.set(key, copy, Math.ceil(image.width() * image.height() * 16 / 3))) temporary = copy;
+          }
+        } catch { /* Mipmaps are optional; the original native image remains valid. */ }
+      }
+    }
     try {
-      canvas.drawImageRect(image, source, dest, paint);
+      if (typeof canvas.drawImageRectOptions === 'function') {
+        canvas.drawImageRectOptions(sampled, source, dest,
+          filtering === 'nearest' ? this.canvasKit.FilterMode.Nearest : this.canvasKit.FilterMode.Linear,
+          sampled !== image ? this.canvasKit.MipmapMode.Linear : this.canvasKit.MipmapMode.None, paint);
+      } else canvas.drawImageRect(image, source, dest, paint);
     } finally {
+      temporary?.delete();
       paint.delete?.();
     }
   }
@@ -4751,7 +4810,21 @@ export class CanvasKitLayerRenderer {
     const resourceIndex = this.layerResourceIndex(op.imageRef, this.currentResources?.imageKeys,
       this.currentResources?.images?.length ?? 0);
     const resourceKey = resourceIndex === null ? undefined : this.currentResources?.imageKeys?.[resourceIndex];
-    const sourceKey = canvasKitImageCacheKey(resourceKey ? { sourceImageKey: resourceKey } : op, this.documentGeneration);
+    let sourceKey = canvasKitImageCacheKey(resourceKey ? { sourceImageKey: resourceKey } : op, this.documentGeneration);
+    const resource = resourceIndex === null ? undefined : this.currentResources?.images?.[resourceIndex];
+    let providedBytes: Uint8Array | null = null;
+    // Object transport owns copies, but callers can still mutate their replay input.
+    // Validate supplied bytes before a native cache hit; source keys alone are not proof.
+    if (resource !== undefined || base64) {
+      try { providedBytes = this.imageResourceBytes(resource ?? base64); }
+      catch { this.recordImageFailure(op, 'base64DecodeFailed', null); return null; }
+      if (!providedBytes || (resourceKey && !layerResourceKeyMatches('img', resourceKey, providedBytes))) {
+        this.recordImageFailure(op, 'encodedImageRejected', null); return null;
+      }
+      const contentKey = replayFingerprint(providedBytes);
+      if (!contentKey) { this.recordImageFailure(op, 'encodedImageRejected', null); return null; }
+      sourceKey = `${sourceKey ?? 'provided'}:bytes:${contentKey}`;
+    }
     const effectKey = canvasKitImageEffectKey(op);
     if (!sourceKey) {
       this.recordImageFailure(op, 'cacheKeyMissing', null);
@@ -4761,7 +4834,8 @@ export class CanvasKitLayerRenderer {
       this.recordImageFailure(op, 'imageEffectFailed', null);
       return null;
     }
-    const key = `${sourceKey}:effect:${effectKey}`;
+    const effectSourceKey = effectKey ? JSON.stringify([op.crop, op.originalSizeHu, op.fillMode]) : '';
+    const key = `${sourceKey}:effect:${effectKey}:crop:${effectSourceKey}`;
     const cached = this.imageCache.get(key);
     if (cached) {
       this.imageCache.delete(key);
@@ -4780,10 +4854,9 @@ export class CanvasKitLayerRenderer {
     this.imageCacheMisses += 1;
     let bytes: Uint8Array;
     try {
-      const resource = resourceIndex === null ? undefined : this.currentResources?.images?.[resourceIndex];
       const sourceBytes = resource === undefined && !base64 && op.sourceImageKey
         ? this.currentImageBytesResolver?.(op.sourceImageKey) : undefined;
-      const resolved = this.imageResourceBytes(resource ?? sourceBytes ?? base64);
+      const resolved = providedBytes ?? this.imageResourceBytes(sourceBytes ?? undefined);
       if (!resolved) {
         this.recordImageFailure(op, 'dataMissing', key);
         return null;
@@ -4812,6 +4885,8 @@ export class CanvasKitLayerRenderer {
         return null;
       }
       const generation = this.documentGeneration;
+      const effectOp = { ...op, crop: op.crop ? { ...op.crop } : undefined,
+        originalSizeHu: op.originalSizeHu ? [...op.originalSizeHu] as [number, number] : undefined };
       const load = decodeBrowserImage(this.canvasKit, bytes, encodedHeader);
       const pending = {
         cancel: load.cancel,
@@ -4823,11 +4898,11 @@ export class CanvasKitLayerRenderer {
           this.pendingImageLoads.delete(key);
           let image = decoded;
           if (image && effectKey) {
-            image = makeCanvasKitEffectImage(this.canvasKit, decoded!, op);
+            image = this.applyImageEffect(decoded!, effectOp);
             decoded!.delete();
           }
           if (!image) this.recordImageFailure(op, decoded ? 'imageEffectFailed' : 'imageDecodeFailed', key);
-          else this.retainImage(key, image, encodedHeader.width * encodedHeader.height);
+          else this.retainImage(key, image, image.width() * image.height());
         }),
       };
       this.pendingImageLoads.set(key, pending);
@@ -4849,7 +4924,7 @@ export class CanvasKitLayerRenderer {
       return null;
     }
     if (effectKey) {
-      const processed = makeCanvasKitEffectImage(this.canvasKit, image, op);
+      const processed = this.applyImageEffect(image, op);
       image.delete?.();
       image = processed;
       if (!image) {
@@ -4857,7 +4932,14 @@ export class CanvasKitLayerRenderer {
         return null;
       }
     }
-    return this.retainImage(key, image, decodedPixels);
+    return this.retainImage(key, image, effectKey ? image.width() * image.height() : decodedPixels);
+  }
+
+  private applyImageEffect(original: SkImage, op: LayerImageOp): SkImage | null {
+    const crop = canvasKitEffectCrop(original, op);
+    const image = makeCanvasKitEffectImage(this.canvasKit, original, op);
+    if (image && crop) this.croppedEffectImages.set(image, { width: crop.width, height: crop.height });
+    return image;
   }
 
   private imageResourceBytes(value: Uint8Array | number[] | string | undefined): Uint8Array | null {
@@ -4878,6 +4960,8 @@ export class CanvasKitLayerRenderer {
       const oldestKey = this.imageCache.keys().next().value as string | undefined;
       if (oldestKey === undefined) break;
       const oldest = this.imageCache.get(oldestKey);
+      const mipmapKey = oldest ? this.imageNativeKeys.get(oldest.image) : undefined;
+      if (mipmapKey) this.mipmapImages.delete(mipmapKey);
       oldest?.image.delete?.();
       this.imageCache.delete(oldestKey);
       this.imageCachePixels = Math.max(0, this.imageCachePixels - (oldest?.pixels ?? 0));
