@@ -9,8 +9,11 @@ use crate::renderer::typeset::{
 use super::{BlockTableContinuationPreparedState, TableContinuationCursor};
 
 mod budget;
+mod coanchored_origin;
 mod emit;
+mod physical_rows;
 mod scan;
+mod stored_frame_budget;
 
 pub(super) struct FragmentProfile {
     pub(super) enabled: bool,
@@ -24,6 +27,8 @@ struct FragmentStart {
     is_continuation: bool,
     start_cut_is_block: bool,
     start_row_height_override: Option<f64>,
+    stored_fragment_outer_frame: bool,
+    stored_fragment_closes_body: bool,
     start_cut: Vec<usize>,
     /// [#7531] 이 조각에서 쪽을 넘어온 걸침 칸의 끝 행 높이에서 덜 양 `(행, px)`.
     straddle_row_relief: Vec<(usize, f64)>,
@@ -39,6 +44,7 @@ struct FragmentInput<'a> {
     prepared: &'a BlockTableContinuationPreparedState,
     start: &'a FragmentStart,
     row_cursor_is_nested: bool,
+    fragment_row_heights: Option<&'a [f64]>,
 }
 
 impl FragmentInput<'_> {
@@ -78,6 +84,7 @@ impl FragmentInput<'_> {
                     rows - 1,
                     rows - 1,
                     end_cut,
+                    false,
                     None,
                     &self.source.measured_table.row_heights,
                     &self.start.straddle_page_bands,
@@ -98,9 +105,12 @@ struct FragmentBudget {
     physical_content_limit: f64,
     vert_offset_overhead: f64,
     page_avail: f64,
+    /// 원본 물리 프레임이 반복해서 닫히는 하단. 종료 인증·예약·방출이 함께 쓴다.
+    source_frame_bottom: Option<f64>,
     fragment_placement: Option<crate::renderer::float_placement::ParagraphFloatPlacement>,
     scan_row_count: usize,
     saved_first_fragment_source_frame: Option<(f64, f64)>,
+    stored_partial_frame_height: Option<f64>,
     source_first_fragment_row_end: Option<usize>,
     /// Complete source frame: the last row's physical remainder, shared by scan and paint.
     source_complete_frame_last_row: Option<(usize, f64)>,
@@ -139,7 +149,11 @@ impl TypesetEngine {
                 source.styles,
             )
         };
-        let straddle_row_relief = if continuation.start_cut_is_block
+        // 이 계획은 앞 조각의 실제 상자와 빈 띠를 이미 차감한 공통 결과다.
+        // 기존 별도 띠 차감을 다시 적용하면 예약과 paint의 행 높이가 달라진다.
+        let physical_rows = self.stored_fragment_row_plan(st, prepared, continuation, source);
+        let straddle_row_relief = if physical_rows.is_some()
+            || continuation.start_cut_is_block
             || !continuation.start_cut.is_empty()
             || continuation.start_row_height_override.is_some()
         {
@@ -180,13 +194,36 @@ impl TypesetEngine {
             is_continuation: continuation.is_continuation,
             start_cut_is_block: continuation.start_cut_is_block,
             start_row_height_override: continuation.start_row_height_override,
+            stored_fragment_outer_frame: continuation.stored_fragment_outer_frame,
+            stored_fragment_closes_body: continuation.stored_fragment_closes_body,
             start_cut,
+        };
+        let fragment_measurement = physical_rows.as_ref().map(|rows| {
+            let mut measured = source.measured_table.clone();
+            measured.row_heights.clone_from(rows);
+            measured.cumulative_heights = vec![0.0];
+            for (row, &height) in rows.iter().enumerate() {
+                let spacing = if row > 0 { measured.cell_spacing } else { 0.0 };
+                let next =
+                    measured.cumulative_heights.last().copied().unwrap_or(0.0) + height + spacing;
+                measured.cumulative_heights.push(next);
+            }
+            measured.total_height = measured.cumulative_heights.last().copied().unwrap_or(0.0)
+                + measured.caption_height;
+            measured
+        });
+        let source = BlockTableContinuationSource {
+            measured_table: fragment_measurement
+                .as_ref()
+                .unwrap_or(source.measured_table),
+            ..source
         };
         let input = FragmentInput {
             source,
             prepared,
             start: &start,
             row_cursor_is_nested,
+            fragment_row_heights: physical_rows.as_deref(),
         };
         let row_geometry_table = input.source.row_geometry_table;
         let styles = input.source.styles;

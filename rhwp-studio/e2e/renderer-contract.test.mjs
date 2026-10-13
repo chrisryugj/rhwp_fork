@@ -9,6 +9,8 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 
 import { comparePngBuffers } from './helpers.mjs';
 import { inspectCanvasKitRuntimeImageFailures } from './renderer-baseline-contract.mjs';
+import { makePatternImageReplayApi } from './pattern-image-replay-api.mjs';
+import { assertFootnoteMarkerBaselineReplay } from './footnote-marker-replay-contract.mjs';
 
 const studioRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(studioRoot, '..');
@@ -1132,6 +1134,7 @@ function runExecutableM07PackReplay({ withArrowGeometry = true } = {}) {
     setStyle() {}
     setColor(color) { this.color = color; }
     setStrokeWidth(width) { this.width = width; }
+    setShader(shader) { this.shader = shader; }
     setPathEffect() {}
     delete() { events.push({ type: 'paint.delete' }); }
   }
@@ -1146,6 +1149,7 @@ function runExecutableM07PackReplay({ withArrowGeometry = true } = {}) {
     delete() { events.push({ type: 'pathBuilder.delete' }); }
   }
   const renderer = new CanvasKitLayerRendererRuntime({
+    ...makePatternImageReplayApi(events),
     Paint: FakePaint,
     Path: FakePath,
     PathBuilder: FakePathBuilder,
@@ -1168,7 +1172,7 @@ function runExecutableM07PackReplay({ withArrowGeometry = true } = {}) {
       events.push({ type: 'canvas.drawOval', rect, color: paint.color });
     },
     drawRect(rect, paint) {
-      events.push({ type: 'canvas.drawRect', rect, color: paint.color });
+      events.push({ type: 'canvas.drawRect', rect, color: paint.color, shader: Boolean(paint.shader) });
     },
   };
   renderer.unsupportedOps = new Set();
@@ -2073,11 +2077,28 @@ assert.equal(
   false,
   'missing arrow geometry must be reported without guessing a replacement head',
 );
-assert.equal(
-  m07PackReplay.events.some((event) => event.type === 'canvas.drawRect' && event.color?.[0] === 255),
-  true,
-  'patternFill should paint the serialized background color first',
+const patternImage = m07PackReplay.events.find((event) => event.type === 'image.create');
+assert.ok(patternImage, '무늬 채우기는 배경색과 무늬색을 담은 이미지를 생성해야 한다');
+assert.deepEqual(
+  [patternImage.info.colorType, patternImage.info.alphaType, patternImage.info.colorSpace],
+  ['RGBA_8888', 'Unpremul', 'SRGB'],
 );
+assert.equal(patternImage.rowBytes, patternImage.info.width * 4);
+assert.equal(patternImage.bytes.length, patternImage.rowBytes * patternImage.info.height);
+const patternPixels = Array.from({ length: patternImage.bytes.length / 4 },
+  (_, i) => patternImage.bytes.slice(i * 4, i * 4 + 4));
+assert.ok(patternPixels.some((pixel) => pixel.join(',') === '17,34,51,255'),
+  '직렬화한 무늬색이 이미지에 있어야 한다');
+assert.ok(patternPixels.some((pixel) => pixel.join(',') === '255,255,255,255'),
+  '직렬화한 배경색이 이미지에 있어야 한다');
+assert.ok(m07PackReplay.events.some((event) => event.type === 'canvas.drawRect' && event.shader),
+  '무늬 shader는 원래 사각형 경로에 그려져야 한다');
+const patternShader = m07PackReplay.events.find((event) => event.type === 'shader.pattern');
+assert.deepEqual([patternShader.tileX, patternShader.tileY], ['Repeat', 'Repeat']);
+assert.deepEqual([patternShader.filter, patternShader.mipmap], ['Linear', 'None']);
+const patternDraw = m07PackReplay.events.findIndex((event) => event.type === 'canvas.drawRect' && event.shader);
+assert.ok(m07PackReplay.events.findIndex((event) => event.type === 'shader.delete') > patternDraw);
+assert.ok(m07PackReplay.events.findIndex((event) => event.type === 'image.delete') > patternDraw);
 assert.equal(
   m07PackReplay.renderer.unsupportedOps.has('tabLeader:invalidGeometry'),
   false,
@@ -2169,8 +2190,10 @@ requireSnippet(formReplaySource, /if \(!drawing\) return 'missingProducerDrawing
 requireSnippet(canvaskitSource,
   /private drawStaticControlText\([\s\S]*?this\.paragraphFonts\.source[\s\S]*?MakeFromFontProvider[\s\S]*?unresolvedCodepoints[\s\S]*?getAlphabeticBaseline/,
   'static labels should consume only prepared Paragraph fonts and reject missing native glyphs');
+assertFootnoteMarkerBaselineReplay(CanvasKitLayerRendererRuntime);
+assert.doesNotMatch(extractSwitchCaseClusterBody(renderOpBody, 'footnoteMarker'), /baseline:\s*op\.bbox\.y/,
+  '각주 표식의 기준선은 쪽의 절대 y 좌표가 아닌 줄 내부 값이어야 한다');
 for (const [label, body, baselinePattern] of [
-  ['footnote marker', extractSwitchCaseClusterBody(renderOpBody, 'footnoteMarker'), /baseline: op\.fontSize \?\? 7/],
   ['placeholder', renderPlaceholderBody, /baseline: Math\.max\(10, op\.bbox\.height \* 0\.65\)/],
 ]) {
   requireSnippet(body, baselinePattern, `${label} replay should declare its run-local baseline`);
@@ -3311,9 +3334,11 @@ for (const sample of rendererBaselineManifest.samples) {
 }
 assert.equal(
   rendererBaselineManifest.samples.filter((sample) => sample.baselineTier === 'representative').length,
-  23,
+  22,
   'the default renderer baseline tier must remain bounded',
 );
+assert.equal(rendererBaselineManifest.samples.some((sample) => sample.id === 'hwpctl-api'), false,
+  '#7445/#7731로 이관한 hwpctl_API_v2.4.hwp는 활성 renderer baseline에서 제외한다');
 for (const sampleId of [
   'chart-line-markers-hwp',
   'chart-line-markers-hwpx',

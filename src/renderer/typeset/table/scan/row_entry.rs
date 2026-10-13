@@ -134,7 +134,8 @@ impl RowEntryQuery<'_> {
             && intra_row_cut_here
             && (mt.is_row_splittable(r)
                 || native_short_parent_child_splittable
-                || stored_picture_cell_splittable);
+                || stored_picture_cell_splittable
+                || layout_engine.stored_single_line_row_is_fragmentable(table, r, styles));
 
         RowSplitGate {
             native_short_parent_child_splittable,

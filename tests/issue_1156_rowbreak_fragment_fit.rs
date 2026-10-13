@@ -1,9 +1,14 @@
-//! RowBreak 표의 내용 순서와 조각의 실제 본문 포함을 검사한다.
+//! RowBreak 표의 행 내부 조각 때문에 전체 조각이 쪽 경계를 넘으면
+//! 그 조각을 현재 쪽에 남기지 않는다.
 //!
-//! 독립 Print 37쪽은 성능 요구사항으로 끝나고 38쪽은 데이터 요구사항으로
-//! 이어진다. 기존 rows=0..16 핀은 데이터 행까지 앞 쪽에 수용하도록 강제했다.
-//! 행 번호 핀 대신 두 조각의 원본 행 소유·내용 순서·본문 점유를 검사한다.
+//! `samples/kps-ai.hwp` 37쪽의 329문단은 32행 2열 RowBreak 표다.
+//! 독립 Print의37쪽은 성능 요구사항으로 끝나고38쪽은 데이터 요구사항부터 잇는다.
+//! 고정 행 번호 대신 원본 소유·쪽별 내용·본문 포함 관계를 검사한다.
+//! v448 Native/fresh 전77쪽 최저90.85010%, 누락·미달0, 전쪽 RGBA 동일.
 
+use rhwp::document_core::DocumentCore;
+use rhwp::model::control::Control;
+use rhwp::renderer::render_tree::{RenderNode, RenderNodeType};
 use std::fs;
 use std::path::Path;
 
@@ -20,8 +25,30 @@ fn page_dump(rel_path: &str, page_idx: u32) -> String {
     doc.dump_page_items(Some(page_idx))
 }
 
-fn subtree_text(node: &rhwp::renderer::render_tree::RenderNode) -> String {
-    use rhwp::renderer::render_tree::RenderNodeType;
+fn compact(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_whitespace()).collect()
+}
+
+fn walk<'a>(node: &'a RenderNode, nodes: &mut Vec<&'a RenderNode>) {
+    nodes.push(node);
+    for child in &node.children {
+        walk(child, nodes);
+    }
+}
+
+fn owned_table(root: &RenderNode, pi: usize, ci: usize) -> &RenderNode {
+    let mut nodes = Vec::new();
+    walk(root, &mut nodes);
+    nodes
+        .into_iter()
+        .find(|n| {
+            matches!(&n.node_type, RenderNodeType::Table(t)
+        if t.para_index == Some(pi) && t.control_index == Some(ci))
+        })
+        .expect("원본 표의 실제 쪽 조각")
+}
+
+fn subtree_text(node: &RenderNode) -> String {
     let own = match &node.node_type {
         RenderNodeType::TextRun(run) => run.display_or_text().to_string(),
         _ => String::new(),
@@ -32,26 +59,69 @@ fn subtree_text(node: &rhwp::renderer::render_tree::RenderNode) -> String {
     })
 }
 
-fn table_with_label<'a>(
-    node: &'a rhwp::renderer::render_tree::RenderNode,
-    label: &str,
-) -> Option<&'a rhwp::renderer::render_tree::RenderNode> {
-    use rhwp::renderer::render_tree::RenderNodeType;
-    if matches!(node.node_type, RenderNodeType::Table(_)) && subtree_text(node).contains(label) {
-        return Some(node);
-    }
-    node.children
-        .iter()
-        .find_map(|child| table_with_label(child, label))
-}
-
 #[test]
 fn kps_ai_page37_defers_overflowing_split_row_slice() {
-    use rhwp::document_core::DocumentCore;
-    use rhwp::renderer::render_tree::{RenderNode, RenderNodeType};
-    use std::collections::BTreeSet;
-
-    fn left_rows(table: &RenderNode) -> BTreeSet<u16> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/kps-ai.hwp");
+    let core = DocumentCore::from_bytes(&fs::read(path).expect("KPS 원본")).unwrap();
+    let (pi, ci, original) = core.document().sections[0]
+        .paragraphs
+        .iter()
+        .enumerate()
+        .find_map(|(pi, paragraph)| {
+            paragraph
+                .controls
+                .iter()
+                .enumerate()
+                .find_map(|(ci, control)| {
+                    let Control::Table(table) = control else {
+                        return None;
+                    };
+                    table
+                        .cells
+                        .iter()
+                        .any(|c| {
+                            c.paragraphs
+                                .iter()
+                                .any(|p| compact(&p.text) == "4.성능요구사항")
+                        })
+                        .then_some((pi, ci, table))
+                        .filter(|(_, _, table)| {
+                            table.cells.iter().any(|c| {
+                                c.paragraphs.iter().any(|p| compact(&p.text) == "작성방법")
+                            })
+                        })
+                })
+        })
+        .expect("제안서 작성방법 표의 원본 소유자");
+    let boundary = original
+        .cells
+        .iter()
+        .find(|c| {
+            c.paragraphs
+                .iter()
+                .any(|p| compact(&p.text) == "5.데이터요구사항")
+        })
+        .expect("독립 Print의 다음 쪽 시작 항목")
+        .row;
+    let first = core.build_page_render_tree(36).unwrap();
+    let next = core.build_page_render_tree(37).unwrap();
+    let first_table = owned_table(&first.root, pi, ci);
+    let next_table = owned_table(&next.root, pi, ci);
+    assert!(
+        first_table
+            .children
+            .iter()
+            .filter_map(|n| match &n.node_type {
+                RenderNodeType::TableCell(c) => Some(c),
+                _ => None,
+            })
+            .all(|c| c.row < boundary),
+        "데이터 항목의 일부를 앞 조각에 남기지 않는다"
+    );
+    assert!(next_table.children.iter().any(|n| matches!(&n.node_type,
+        RenderNodeType::TableCell(c) if c.row == boundary)));
+    // 두 조각은 원본의 모든 행을 보존하고 반복 머리행만 공유한다.
+    let left_rows = |table: &RenderNode| {
         table
             .children
             .iter()
@@ -59,84 +129,54 @@ fn kps_ai_page37_defers_overflowing_split_row_slice() {
                 RenderNodeType::TableCell(cell) if cell.col == 0 => Some(cell.row),
                 _ => None,
             })
-            .collect()
-    }
-    fn column_contains_table(root: &RenderNode, table: &RenderNode) -> bool {
-        matches!(root.node_type, RenderNodeType::Column(_))
-            && root.children.iter().any(|child| std::ptr::eq(child, table))
-            && table.bbox.y >= root.bbox.y - 0.5
-            && table.bbox.y + table.bbox.height <= root.bbox.y + root.bbox.height + 0.5
-            || root
-                .children
-                .iter()
-                .any(|child| column_contains_table(child, table))
-    }
-
-    let bytes = fs::read("samples/kps-ai.hwp").expect("read sample");
-    let core = DocumentCore::from_bytes(&bytes).expect("parse sample");
-    let pages: Vec<_> = (0..38)
-        .map(|page| core.build_page_render_tree(page).expect("render page"))
-        .collect();
-    let before = &pages[36].root;
-    let after = &pages[37].root;
-    let first = table_with_label(before, "성능 요구사항").expect("performance row on page 37");
-    let next = table_with_label(after, "데이터 요구사항").expect("data row on page 38");
-    assert!(
-        !subtree_text(first).contains("데이터 요구사항"),
-        "data row belongs to next page"
-    );
-    assert!(
-        !subtree_text(next).contains("성능 요구사항"),
-        "performance row must not repeat"
-    );
-    assert!(
-        column_contains_table(before, first),
-        "opening fragment escapes body"
-    );
-    assert!(
-        column_contains_table(after, next),
-        "continuation fragment escapes body"
-    );
-    let (RenderNodeType::Table(first_info), RenderNodeType::Table(next_info)) =
-        (&first.node_type, &next.node_type)
-    else {
-        unreachable!("table_with_label returns a table");
+            .collect::<std::collections::BTreeSet<_>>()
     };
-    assert_eq!(
-        first_info.para_index, next_info.para_index,
-        "same source table owner"
-    );
-    assert_eq!(
-        first_info.control_index, next_info.control_index,
-        "same source control owner"
-    );
-    let rows = left_rows(first);
-    let following = left_rows(next);
-    let headers: BTreeSet<_> = first
+    let rows = left_rows(first_table);
+    let following = left_rows(next_table);
+    let headers = first_table
         .children
         .iter()
         .filter_map(|node| match &node.node_type {
             RenderNodeType::TableCell(cell)
-                if cell.col == 0
-                    && subtree_text(node).split_whitespace().collect::<String>() == "항목" =>
+                if cell.col == 0 && compact(&subtree_text(node)) == "항목" =>
             {
                 Some(cell.row)
             }
             _ => None,
         })
-        .collect();
+        .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
         rows.intersection(&following)
             .copied()
-            .collect::<BTreeSet<_>>(),
+            .collect::<std::collections::BTreeSet<_>>(),
         headers,
-        "only the repeated header may share row ownership"
+        "반복 머리행만 두 조각에 속한다"
     );
     assert_eq!(
         rows.union(&following).count(),
-        usize::from(first_info.row_count),
-        "two fragments must preserve every original row"
+        usize::from(original.row_count),
+        "두 조각은 원본의 모든 행을 보존한다"
     );
+    for (tree, table) in [(&first, first_table), (&next, next_table)] {
+        let mut nodes = Vec::new();
+        walk(&tree.root, &mut nodes);
+        let column = nodes
+            .into_iter()
+            .find(|n| {
+                matches!(n.node_type, RenderNodeType::Column(_))
+                    && n.children.iter().any(|c| c.id == table.id)
+            })
+            .expect("조각의 소유 단");
+        assert!(
+            table.bbox.y >= column.bbox.y - 1e-8
+                && table.bbox.y + table.bbox.height <= column.bbox.y + column.bbox.height + 1e-8,
+            "표 조각 전체는 소유 본문 단 안에 있어야 한다"
+        );
+    }
+    let first_text = compact(&core.extract_page_text_native(36).unwrap());
+    let next_text = compact(&core.extract_page_text_native(37).unwrap());
+    assert!(first_text.contains("4.성능요구사항") && !first_text.contains("5.데이터요구사항"));
+    assert!(!next_text.contains("4.성능요구사항") && next_text.contains("5.데이터요구사항"));
 }
 
 #[test]

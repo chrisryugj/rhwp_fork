@@ -860,6 +860,10 @@ impl DocumentCore {
 
         // ── 인라인 TAC 표 생성 ──
 
+        let previous_host_end = crate::renderer::composer::paragraph_flow_end(
+            &self.document.sections[section_idx].paragraphs[para_idx],
+        );
+
         let instance_id = super::super::clone_identity::next_instance_id(&self.document)?;
 
         let pd = &self.document.sections[section_idx].section_def.page_def;
@@ -990,6 +994,7 @@ impl DocumentCore {
         let flags: u32 = (1 << 0) /* treat_as_char */
             | (0 << 3) /* vert=Page */
             | (3 << 8) /* horz=Para */
+            | (1 << 13) /* flow_with_text: 인라인 개체의 본문 흐름 */
             | (4 << 15) /* width_criterion=Absolute */
             | (2 << 18) /* height_criterion=Absolute */
             | (1 << 21) /* wrap=TopAndBottom */;
@@ -1006,7 +1011,7 @@ impl DocumentCore {
         raw_ctrl_data[common_obj_offsets::INSTANCE_ID].copy_from_slice(&instance_id.to_le_bytes());
 
         let mut table = Table {
-            attr: 0x04000006,
+            attr: flags,
             row_count,
             col_count,
             cell_spacing: 0,
@@ -1020,8 +1025,10 @@ impl DocumentCore {
             repeat_header: false,
             caption: None,
             common: crate::model::shape::CommonObjAttr {
+                attr: flags,
                 instance_id,
                 treat_as_char: true,
+                flow_with_text: true,
                 text_wrap: crate::model::shape::TextWrap::TopAndBottom,
                 vert_rel_to: crate::model::shape::VertRelTo::Page,
                 horz_rel_to: crate::model::shape::HorzRelTo::Para,
@@ -1079,15 +1086,19 @@ impl DocumentCore {
         // char_count 갱신 (확장 제어문자 8 + 기존)
         para.char_count += 8;
 
-        // LINE_SEG 갱신: 표 높이를 반영
-        if let Some(seg) = para.line_segs.first_mut() {
-            let new_lh = (total_height as i32).max(seg.line_height);
-            if new_lh > seg.line_height {
-                seg.line_height = new_lh;
-                seg.text_height = new_lh;
-                seg.baseline_distance = (new_lh as f64 * 0.85) as i32;
-            }
-        }
+        // 실제 줄 나눔은 글자/표 순서와 가용 폭을 함께 소비한다. 최초 줄의 높이만
+        // 바꾸면 앞 글자도 표 줄에 귀속되고 뒤 문단의 오래된 vpos가 리셋처럼 남는다.
+        self.reflow_paragraph(section_idx, para_idx);
+        let hwp3_layout = self.document.layout_profile().hwp3_layout();
+        crate::renderer::composer::recalculate_section_vpos(
+            &mut self.document.sections[section_idx].paragraphs,
+            para_idx,
+            None,
+            previous_host_end,
+            &self.styles,
+            self.dpi,
+            hwp3_layout,
+        );
 
         // rebuild
         self.rebuild_section(section_idx);

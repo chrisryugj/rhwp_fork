@@ -1530,7 +1530,10 @@ impl SkiaLayerRenderer {
                         PaintOp::FootnoteMarker { bbox, marker } => {
                             let style = crate::renderer::TextStyle {
                                 font_family: marker.font_family.clone(),
-                                font_size: (marker.base_font_size * 0.55).max(7.0),
+                                font_size:
+                                    crate::renderer::render_tree::FootnoteMarkerNode::font_size(
+                                        marker.base_font_size,
+                                    ),
                                 color: marker.color,
                                 ..Default::default()
                             };
@@ -1538,7 +1541,7 @@ impl SkiaLayerRenderer {
                                 &marker.text,
                                 *bbox,
                                 &style,
-                                bbox.height * 0.4,
+                                marker.baseline,
                                 0.0,
                                 false,
                                 None,
@@ -1807,11 +1810,10 @@ impl SkiaLayerRenderer {
                         }
                         PaintOp::Equation { bbox, equation } => {
                             canvas.save();
-                            let scale_x = if equation.layout_box.width > 0.0 && bbox.width > 0.0 {
-                                bbox.width / equation.layout_box.width
-                            } else {
-                                1.0
-                            };
+                            let scale_x = crate::renderer::equation::stored_horizontal_scale(
+                                bbox.width,
+                                &equation.layout_box,
+                            );
                             let scale_y = crate::renderer::equation::stored_vertical_scale(
                                 bbox.height,
                                 equation.layout_box.height,
@@ -2930,6 +2932,7 @@ mod tests {
             ShapeStyle {
                 pattern: Some(PatternFillInfo {
                     pattern_type: 1,
+                    tile_size: 7.68,
                     pattern_color: 0x000000ff,
                     background_color: 0x0000ff00,
                 }),
@@ -3365,6 +3368,7 @@ mod tests {
             number: 1,
             text: "1)".to_string(),
             base_font_size: 18.0,
+            baseline: 7.0,
             font_family: String::new(),
             color: 0x00000000,
             section_index: 0,

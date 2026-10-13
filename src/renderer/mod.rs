@@ -13,6 +13,7 @@ pub(crate) mod arrow;
 pub mod canvas;
 pub mod canvas_text_font;
 pub mod canvaskit_policy;
+pub(crate) mod cell_paragraph_spacing;
 pub mod composer;
 pub mod equation;
 pub(crate) mod equation_tac_flow;
@@ -41,6 +42,7 @@ pub(crate) mod kerning;
 pub mod layer_renderer;
 pub mod layout;
 pub(crate) mod layout_frame;
+pub(crate) mod legacy_font_advances;
 pub mod page_layout;
 pub mod page_number;
 pub mod pagination;
@@ -69,7 +71,10 @@ pub(crate) mod shaping_vertical;
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-skia"))]
 pub mod skia;
 pub(crate) mod static_svg;
+pub(crate) mod stored_control_frame;
 pub(crate) mod stored_float_anchor;
+mod stored_line_ladder;
+pub(crate) mod stored_page_origin;
 pub mod style_resolver;
 pub mod supplemental_metrics;
 pub mod svg;
@@ -631,6 +636,8 @@ impl Default for TextStyle {
 pub struct PatternFillInfo {
     /// 패턴 종류 (1=가로줄, 2=세로줄, 3=역대각선, 4=대각선, 5=십자, 6=격자)
     pub pattern_type: i32,
+    /// 한컴 인쇄 무늬의 576HU 반복 주기를 현재 출력 DPI로 변환한 값.
+    pub tile_size: f64,
     /// 무늬색
     pub pattern_color: ColorRef,
     /// 배경색
@@ -1216,6 +1223,8 @@ pub(crate) fn composed_line_max_font_size(
         })
         .fold(0.0f64, f64::max);
 
+    let reference_max = composed_line_reference_font_size(line, para, styles);
+    let run_max = run_max.max(reference_max);
     if run_max > 0.0 {
         return run_max;
     }
@@ -1236,6 +1245,69 @@ pub(crate) fn composed_line_max_font_size(
         .and_then(|shape_id| styles.char_styles.get(shape_id as usize))
         .map(|style| style.font_size)
         .unwrap_or(0.0)
+}
+
+/// 참조 번호의 명목 글자 크기도 소유 줄의 상자에 참여한다. 표시 글리프가
+/// 3/4 크기여도 그 제어 슬롯의 저장 글자모양을 본문 문자 모양으로 대체하지 않는다.
+pub(crate) fn composed_line_reference_font_size(
+    line: &composer::ComposedLine,
+    para: &crate::model::paragraph::Paragraph,
+    styles: &style_resolver::ResolvedStyleSet,
+) -> f64 {
+    let end = line.char_start
+        + line
+            .runs
+            .iter()
+            .map(|run| run.text.chars().count())
+            .sum::<usize>();
+    let paragraph_end = para.text.chars().count();
+    let positions = para.control_text_positions();
+    let raw_positions = para.control_utf16_positions();
+    para.controls
+        .iter()
+        .enumerate()
+        .filter_map(|(index, control)| {
+            if !matches!(
+                control,
+                crate::model::control::Control::Footnote(_)
+                    | crate::model::control::Control::Endnote(_)
+            ) {
+                return None;
+            }
+            let position = *positions.get(index)?;
+            if position < line.char_start
+                || (position >= end && !(position == end && end == paragraph_end))
+            {
+                return None;
+            }
+            let raw = raw_positions.get(index)?;
+            let shape = para
+                .char_shapes
+                .iter()
+                .rev()
+                .find(|shape| shape.start_pos <= *raw)?;
+            styles
+                .char_styles
+                .get(shape.char_shape_id as usize)
+                .map(|style| style.font_size)
+        })
+        .fold(0.0_f64, f64::max)
+}
+
+/// 외곽선과 같은 채움 상자는 후행 줄간격을 감싼다. 측정·마지막 흐름 경계와
+/// 실제 paragraph border painter가 같은 점유 조건을 소비한다.
+pub(crate) fn paragraph_outline_reserves_line_spacing(
+    border_fill_id: u16,
+    styles: &style_resolver::ResolvedStyleSet,
+) -> bool {
+    border_fill_id
+        .checked_sub(1)
+        .and_then(|index| styles.border_styles.get(usize::from(index)))
+        .is_some_and(|style| {
+            style.borders.iter().any(|border| {
+                !matches!(border.line_type, crate::model::style::BorderLineType::None)
+            })
+        })
 }
 
 /// 공백도 글꼴 줄 상자를 가지지만 개체 대체 문자와 제어 문자에는 가시 글꼴이 없다.
@@ -1410,77 +1482,7 @@ pub(crate) fn paragraph_source_line_metrics_need_reflow(
 ///
 /// 판정이 참이면 호출자는 (1) 줄 metrics 를 저장값이 아니라 글꼴·문단 스타일에서
 /// 다시 뽑고, (2) `vertical_pos` 앵커 스냅을 끈다. 원본 IR 은 건드리지 않는다.
-pub(crate) fn stored_line_ladder_is_uniform_filler(
-    paragraphs: &[crate::model::paragraph::Paragraph],
-    styles: &style_resolver::ResolvedStyleSet,
-) -> bool {
-    /// 사다리 하나로 단정하기 위한 최소 문단 수.
-    const MIN_PARAGRAPHS: usize = 8;
-    /// 저장 advance 와 글꼴 advance 가 어긋나야 하는 최소 비율의 역수 (1/4).
-    const CONTRADICTION_RATIO_DIVISOR: usize = 4;
-
-    if paragraphs.len() < MIN_PARAGRAPHS {
-        return false;
-    }
-
-    let mut tuple: Option<(i32, i32, i32, i32)> = None;
-    let mut prev_vpos: Option<i32> = None;
-    let mut contradicting = 0usize;
-
-    for para in paragraphs {
-        let [seg] = para.line_segs.as_slice() else {
-            return false;
-        };
-        if seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY != 0
-            || seg.line_height <= 0
-            || seg.text_height <= 0
-        {
-            return false;
-        }
-        let current = (
-            seg.line_height,
-            seg.text_height,
-            seg.baseline_distance,
-            seg.line_spacing,
-        );
-        match tuple {
-            None => tuple = Some(current),
-            Some(first) if first != current => return false,
-            _ => {}
-        }
-        // 사다리 걸음은 그 튜플의 advance 와 같아야 한다 — 실측 조판이면 문단마다
-        // 다른 값이 나온다.
-        let step = seg.line_height.saturating_add(seg.line_spacing);
-        if let Some(previous) = prev_vpos {
-            if seg.vertical_pos.saturating_sub(previous) != step {
-                return false;
-            }
-        }
-        prev_vpos = Some(seg.vertical_pos);
-
-        let max_fs = para
-            .char_shapes
-            .iter()
-            .filter_map(|shape| styles.char_styles.get(shape.char_shape_id as usize))
-            .map(|style| style.font_size)
-            .fold(0.0f64, f64::max);
-        if max_fs <= 0.0 {
-            continue;
-        }
-        let (ls_type, ls_val) = styles
-            .para_styles
-            .get(para.para_shape_id as usize)
-            .map(|style| (style.line_spacing_type, style.line_spacing))
-            .unwrap_or((LineSpacingType::Percent, 160.0));
-        let (font_lh, font_ls) = corrected_line_metrics(0.0, 0.0, max_fs, ls_type, ls_val);
-        let stored_advance = hwpunit_to_px(step, DEFAULT_DPI);
-        if (font_lh + font_ls - stored_advance).abs() > 0.5 {
-            contradicting += 1;
-        }
-    }
-
-    contradicting * CONTRADICTION_RATIO_DIVISOR >= paragraphs.len()
-}
+pub(crate) use stored_line_ladder::stored_line_ladder_is_uniform_filler;
 
 /// 저장된 순수 텍스트 줄은 `vertsize`에 내부 여백이 포함되어도 한컴의 줄 진행이
 /// `textheight + spacing`에 맞춰지는 사례가 있다. IR 값은 보존하고 렌더/조판용

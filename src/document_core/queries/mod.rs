@@ -44,3 +44,5 @@ pub mod chart_csv;
 pub mod chart_extract;
 pub mod table_csv;
 pub mod table_extract;
+
+pub(crate) mod equation_fonts;

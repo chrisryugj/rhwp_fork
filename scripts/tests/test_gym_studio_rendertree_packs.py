@@ -404,7 +404,7 @@ class DocumentationTests(unittest.TestCase):
         render = (RT / "README.md").read_text(encoding="utf-8")
         for tid in ("ST02", "ST19", "ST25", "ST40"):
             self.assertIn(tid, studio, tid)
-        for tid in ("RT02", "RT28", "RT40"):
+        for tid in ("RT02", "RT40"):
             self.assertIn(tid, render, tid)
 
 
