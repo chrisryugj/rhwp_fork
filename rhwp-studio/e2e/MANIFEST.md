@@ -53,6 +53,7 @@ e2e 스크립트의 **단일 권위 목록**이다. 파일 추가/변경/폐기 
 | `export-hwpx.test.mjs` | 상시 | active | Issue #557 — npm/editor RPC + Wrapper 에 exportHwpx / exportHwpVeri | — | 수동 |  |
 | `footnote-delete-confirm.test.mjs` | 상시 | active | #598 본문 각주 삭제 확인창/취소/Undo | footnote-01.hwp | 수동 |  |
 | `footnote-insert.test.mjs` | 상시 | active | footnote-01.hwp 각주 삽입 시 문단 위치 이상 확인 | footnote-01.hwp | 수동 |  |
+| `footnote-marker-replay-contract.mjs` | 유틸 | active | 각주 표식의 줄 내부 기준선과 fallback 계약 | — | 수동 | `renderer-contract.test.mjs`에서 import |
 | `footnote-vpos.test.mjs` | 상시 | active | footnote-01.hwp "원료를" 뒤 스페이스 입력 시 문단 위치 이상 / WASM API 직접 호출로 정확한 재 | footnote-01.hwp | 수동 |  |
 | `form-control.test.mjs` | 상시 | active | 양식 컨트롤 — 셀 커서 진입(#111) + 체크박스 클릭 토글(#112) | form-002.hwpx | 수동 |  |
 | `find-count-edit-refresh.test.mjs` | 상시 | active | #7485 일반 입력·삭제·undo/redo 개수 갱신 1회, 커서 보존과 닫힌 창 검색 0회 | 합성 새 문서 foo foo | 수동 | 실제 Studio 키 이벤트·최적화 WASM |
@@ -120,6 +121,7 @@ e2e 스크립트의 **단일 권위 목록**이다. 파일 추가/변경/폐기 
 | `pr2260-vscode-zoom-menu.test.mjs` | 상시 | active | [PR #2260 검증] rhwp-vscode 배율 메뉴 — 호스트 Chrome CDP 로 webview 하네스 구동. | — | 수동 |  |
 | `issue-4224-pua-f02fb-small-right-triangle-canvas2d.test.mjs` | 상시 | active | #4224 한컴 문자표 U+F02FB 일반 TextRun을 작은 오른쪽 방향 삼각형으로 Canvas2D 투영 | basic/pau-004.hwp | npm e2e:issue-4224 | raw IR 보존·공개 글꼴 tofu 차단 |
 | `renderer-baseline-native-diff.mjs` | 유틸 | active | 렌더러 baseline — studio vs native 산출 대조 | — | CI |  |
+| `pattern-image-replay-api.mjs` | 유틸 | active | CanvasKit 이미지·반복 shader API 계약 모형 | — | 수동 | `renderer-contract.test.mjs`에서 import |
 | `renderer-baseline-contract.mjs` | 유틸 | active | CanvasKit runtime 실패 진단 정규화 helper | — | 수동 | `renderer-baseline.mjs`에서 import |
 | `renderer-baseline.mjs` | 유틸 | active | 렌더러 baseline 스윕 러너 (manifest 기반 다문서 측정) | — | npm+CI |  |
 | `renderer-contract.test.mjs` | 상시 | active | 렌더러 백엔드 계약 검증 (plane/replay 정합) | — | npm+CI |  |
