@@ -20,7 +20,8 @@ export function canvasKitImageEffectKey(op: LayerImageOp): string | null {
 }
 
 /** 원본 alpha를 유지한 unpremultiplied 픽셀 변환. 실패하면 원본을 성공으로 반환하지 않는다. */
-export function makeCanvasKitEffectImage(kit: CanvasKit, original: Image, op: LayerImageOp): Image | null {
+export function makeCanvasKitEffectImage(kit: CanvasKit, original: Image, op: LayerImageOp,
+  onReadback?: (route: 'direct' | 'surface') => void): Image | null {
   const crop = canvasKitEffectCrop(original, op);
   const x = crop?.x ?? 0, y = crop?.y ?? 0;
   const sourceWidth = crop?.width ?? original.width(), sourceHeight = crop?.height ?? original.height();
@@ -37,7 +38,9 @@ export function makeCanvasKitEffectImage(kit: CanvasKit, original: Image, op: La
     // Integer crops need no temporary surface. Fractional crops use the same bounded
     // native sampling as committed Skia before applying the tone/dither operation.
     if (exactRead) pixels = original.readPixels(x, y, info);
+    let route: 'direct' | 'surface' = 'direct';
     if (!pixels) {
+      route = 'surface';
       const surface = kit.MakeSurface?.(width, height);
       if (!surface) return null;
       try {
@@ -52,6 +55,7 @@ export function makeCanvasKitEffectImage(kit: CanvasKit, original: Image, op: La
       } finally { surface.delete(); }
     }
     if (!(pixels instanceof Uint8Array) || pixels.length !== width * height * 4) return null;
+    onReadback?.(route);
     applyLayerImageEffectPixels(pixels, width, op.effect, Math.floor(x), Math.floor(y), op.brightness ?? 0, op.contrast ?? 0);
     return kit.MakeImage(info, pixels, width * 4);
   } catch {
