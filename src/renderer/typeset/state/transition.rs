@@ -18,6 +18,7 @@ impl TypesetState {
             data: StateView {
                 pages: Vec::new(),
                 current_items: Vec::new(),
+                saved_empty_run: None,
                 paragraph_fragment_content_bottoms: Default::default(),
                 current_height: 0.0,
                 current_start_height: 0.0,
@@ -70,6 +71,8 @@ impl TypesetState {
                 deferred_next_page_square_pictures: Vec::new(),
                 page_start_square_pictures: Vec::new(),
                 deferred_next_page_stored_frames: Vec::new(),
+                deferred_next_column_stored_frames: Vec::new(),
+                deferred_source_frame_body_pages: std::collections::HashMap::new(),
                 page_start_stored_frames: Vec::new(),
                 fragment_queued_table_footnotes: std::collections::HashSet::new(),
                 reset_vpos_after_queued_table_footnote_page: false,
@@ -162,7 +165,9 @@ impl TypesetState {
     /// 사용 가능한 본문 높이 (각주, 존 오프셋 차감)
     pub(in crate::renderer::typeset) fn available_height(&self) -> f64 {
         let base = self.base_available_height();
-        let fn_margin = if self.data.current_footnote_height > 0.0 {
+        let fn_margin = if self.data.current_footnote_height > 0.0
+            && !self.data.current_footnote_body_bottom_reserved
+        {
             self.data.footnote_safety_margin
         } else {
             0.0
@@ -573,6 +578,7 @@ impl TypesetState {
             self.data.hangul2024_reclaimed = 0.0;
             self.data.column_had_compact_endnote_rewind = false;
             self.reset_vpos_cursor();
+            self.activate_next_column_stored_frames();
         } else {
             self.push_new_page();
         }
@@ -593,6 +599,7 @@ impl TypesetState {
 
     /// 새 페이지 push + 상태 리셋
     pub(in crate::renderer::typeset) fn push_new_page(&mut self) {
+        self.finish_next_column_stored_frames();
         self.data
             .layout
             .apply_column_page_number(self.data.pages.len() as u32 + 1);
@@ -641,14 +648,8 @@ impl TypesetState {
         self.data.current_column_overlay_continuations.extend(
             std::mem::take(&mut self.data.pending_overlay_continuations)
                 .into_iter()
-                .map(|(para_index, control_index, start_row, remaining_px)| {
-                    overlay_top_reserve = overlay_top_reserve.max(remaining_px);
-                    crate::renderer::pagination::OverlayContinuation {
-                        para_index,
-                        control_index,
-                        start_row,
-                        reserve_px: remaining_px,
-                    }
+                .inspect(|continuation| {
+                    overlay_top_reserve = overlay_top_reserve.max(continuation.reserve_px);
                 }),
         );
         // 잔여 높이를 새 쪽 흐름에 무조건 예약하면 안 된다 — #4514 기제에서 필러

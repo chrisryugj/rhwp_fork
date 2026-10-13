@@ -3,6 +3,10 @@
 //! 페이지네이션 전에 각 콘텐츠의 실제 렌더링 높이를 측정한다.
 //! LayoutEngine과 동일한 계산 로직을 사용하여 정확한 높이를 산출한다.
 
+mod rowspan_block;
+mod table_wrapper;
+pub(crate) use table_wrapper::{unrestricted_wrapper_frame, TableWrapperVerticalFrame};
+
 use super::composer::{compose_paragraph, ComposedParagraph, SingleLineOverflowCache};
 use super::float_placement::signed_hwpunit;
 use super::style_resolver::ResolvedStyleSet;
@@ -36,45 +40,6 @@ pub(crate) fn single_table_wrapper_has_vertical_alignment_space(
     i64::from(signed_hwpunit(cell.height)) > content_height
 }
 
-/// The wrapper owns its padding, the child's outer margins and its physical
-/// minimum independently of the child's row/content ledger.
-pub(crate) struct TableWrapperVerticalFrame {
-    pub(crate) child_top: f64,
-    child_bottom: f64,
-    minimum: f64,
-}
-
-impl TableWrapperVerticalFrame {
-    pub(crate) fn new(table: &Table, nested: &Table, dpi: f64, native_hwp5: bool) -> Self {
-        let cell = &table.cells[0];
-        let padding = cell.effective_padding(&table.padding);
-        let mut top = hwpunit_to_px(i32::from(padding.top), dpi);
-        let mut bottom = hwpunit_to_px(i32::from(padding.bottom), dpi);
-        let guard_height = cell.vertical_padding_guard_height_hu(table);
-        if guard_height < 0x80000000 {
-            let height = hwpunit_to_px(guard_height as i32, dpi);
-            if crate::model::table::Cell::vertical_padding_is_abnormal(height, top + bottom) {
-                let scale = height * 0.5 / (top + bottom);
-                top *= scale;
-                bottom *= scale;
-            }
-        }
-        Self {
-            child_top: top + hwpunit_to_px(i32::from(nested.outer_margin_top), dpi),
-            child_bottom: bottom + hwpunit_to_px(i32::from(nested.outer_margin_bottom), dpi),
-            minimum: if native_hwp5 {
-                hwpunit_to_px(signed_hwpunit(table.common.height).max(0), dpi)
-            } else {
-                0.0
-            },
-        }
-    }
-
-    pub(crate) fn height(&self, child_height: f64) -> f64 {
-        (self.child_top + child_height + self.child_bottom).max(self.minimum)
-    }
-}
-
 pub(crate) fn transparent_table_wrapper_child(table: &Table) -> Option<&Table> {
     let [cell] = table.cells.as_slice() else {
         return None;
@@ -95,7 +60,9 @@ pub(crate) fn transparent_table_wrapper_child(table: &Table) -> Option<&Table> {
         Control::Table(t) => Some(t.as_ref()),
         _ => None,
     })?;
-    if single_table_wrapper_has_vertical_alignment_space(table, nested) {
+    if unrestricted_wrapper_frame(table, nested, DEFAULT_DPI).is_none()
+        && single_table_wrapper_has_vertical_alignment_space(table, nested)
+    {
         return None;
     }
     Some(nested)
@@ -1816,6 +1783,13 @@ impl HeightMeasurer {
     }
 
     fn cell_wrap_objects_bottom_height(&self, paragraphs: &[Paragraph]) -> f64 {
+        let saved_picture_extent =
+            crate::renderer::float_placement::stored_cell_flow_picture_extent_hu(
+                paragraphs,
+                !self.session_edited && (self.is_native_hwp5 || self.hwpx_stored_layout),
+            )
+            .map(|hu| hwpunit_to_px(hu, self.dpi))
+            .unwrap_or(0.0);
         // [Task #2226] 같은 문단에 TopAndBottom flow 개체가 있으면 첫 seg vpos 는
         // 개체에 밀려난 줄 위치라 문단 시작이 아니다 — para_top 을 사다리(이전
         // 문단 extent, 첫 문단 0)로 잡아야 개체 오프셋(문단 기준)과 원점이 맞는다.
@@ -1899,7 +1873,7 @@ impl HeightMeasurer {
                     0.0
                 }
             })
-            .fold(0.0f64, f64::max)
+            .fold(saved_picture_extent, f64::max)
     }
 
     /// 구역의 모든 콘텐츠 높이를 측정한다.
@@ -2919,13 +2893,17 @@ impl HeightMeasurer {
                             None
                         }
                     }) {
-                        if !single_table_wrapper_has_vertical_alignment_space(table, nested) {
+                        if unrestricted_wrapper_frame(table, nested, self.dpi).is_some()
+                            || !single_table_wrapper_has_vertical_alignment_space(table, nested)
+                        {
                             return self.measure_table_impl(
                                 nested,
                                 para_index,
                                 control_index,
                                 styles,
-                                depth + 1,
+                                // 펼친 표는 실제 배치에서도 부모와 같은 깊이를 사용한다.
+                                // 셀 중첩 깊이를 늘리면 저장 줄의 안여백을 측정에서만 제외한다.
+                                depth,
                                 width_scale,
                             );
                         }
@@ -3090,9 +3068,9 @@ impl HeightMeasurer {
                             } else { 0.0 };
                             let para_style = styles.para_styles.get(p.para_shape_id as usize);
                             let is_last_para = pidx + 1 == cell_para_count;
-                            let spacing_before = crate::renderer::cell_paragraph_spacing_before(
-                                p, pidx, para_style.map(|s| s.spacing_before).unwrap_or(0.0),
-                            );
+                            let spacing_before = crate::renderer::cell_paragraph_spacing::paragraph_before(
+                                p, pidx, para_style.map(|s| s.spacing_before).unwrap_or(0.0), self.dpi,
+                            ).occupied_before();
                             let spacing_after = if !is_last_para {
                                 para_style.map(|s| s.spacing_after).unwrap_or(0.0)
                             } else {
@@ -4024,6 +4002,22 @@ impl HeightMeasurer {
             }
         }
 
+        // Shared source-frame content occupies its opening row, before the
+        // declared span remainder can be assigned to later rows.
+        for (row, height) in row_heights.iter_mut().enumerate() {
+            if let Some(frame) = crate::renderer::float_placement::stored_span_opening_frame(
+                table,
+                row,
+                self.is_native_hwp5 || self.hwpx_stored_layout,
+                self.session_edited,
+                self.render_normalization.table_text_reflowed(table),
+            ) {
+                let minimum = hwpunit_to_px(frame.height_hu, self.dpi);
+                *height = height.max(minimum);
+                content_row_floor[row] = content_row_floor[row].max(minimum);
+            }
+        }
+
         // 2-b단계: 병합 셀에서 미지 행 높이를 반복적으로 해결
         {
             let mut constraints: Vec<(usize, usize, f64)> = Vec::new();
@@ -4170,9 +4164,9 @@ impl HeightMeasurer {
                             } else { 0.0 };
                             let para_style = styles.para_styles.get(p.para_shape_id as usize);
                             let is_last_para = pidx + 1 == cell_para_count;
-                            let spacing_before = crate::renderer::cell_paragraph_spacing_before(
-                                p, pidx, para_style.map(|s| s.spacing_before).unwrap_or(0.0),
-                            );
+                            let spacing_before = crate::renderer::cell_paragraph_spacing::paragraph_before(
+                                p, pidx, para_style.map(|s| s.spacing_before).unwrap_or(0.0), self.dpi,
+                            ).occupied_before();
                             let spacing_after = if !is_last_para {
                                 para_style.map(|s| s.spacing_after).unwrap_or(0.0)
                             } else {
@@ -4856,9 +4850,9 @@ impl HeightMeasurer {
                         let is_last_para = pi + 1 == para_count;
                         // compute_cell_line_ranges와 동일 규칙:
                         // 첫 문단은 spacing_before 없음, 마지막 문단은 spacing_after 없음
-                        let spacing_before = crate::renderer::cell_paragraph_spacing_before(
-                            p, pi, para_style.map(|s| s.spacing_before).unwrap_or(0.0),
-                        );
+                        let spacing_before = crate::renderer::cell_paragraph_spacing::paragraph_before(
+                            p, pi, para_style.map(|s| s.spacing_before).unwrap_or(0.0), self.dpi,
+                        ).occupied_before();
                         let spacing_after = if !is_last_para {
                             para_style.map(|s| s.spacing_after).unwrap_or(0.0)
                         } else {

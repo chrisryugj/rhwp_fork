@@ -157,6 +157,7 @@ impl TypesetEngine {
                                         para_index: para_idx,
                                         control_index: ctrl_idx,
                                         placement,
+                                        following_body_para_index: None,
                                     },
                                 );
                                 continue;
@@ -624,9 +625,9 @@ impl TypesetEngine {
                         ctrl_idx,
                         fn_ctrl,
                         styles,
-                        has_table,
                         native_hwp5_footnote_break,
                     );
+                    self.reserve_current_body_note_area(st, paragraphs, styles);
                 }
                 Control::Endnote(en_ctrl) => {
                     // [Task #836] 미주 수집 — 문서 끝에 모아서 렌더

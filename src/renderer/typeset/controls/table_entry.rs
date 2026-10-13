@@ -11,6 +11,7 @@ use crate::renderer::{
 pub(in crate::renderer::typeset) struct TableControlPage {
     pub has_items: bool,
     pub col_count: u16,
+    pub profile: crate::model::provenance::LayoutCompatibilityProfile,
 }
 
 pub(super) fn needs_stored_line_advance(

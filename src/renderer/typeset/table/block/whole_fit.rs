@@ -363,7 +363,13 @@ impl TypesetEngine {
         resolved_origin: Option<crate::renderer::float_placement::ParagraphFloatPlacement>,
     ) -> Option<crate::renderer::float_placement::ParagraphFloatPlacement> {
         use crate::renderer::float_placement as placement;
-        let opens = placement::column_rowbreak_fragment_opens_outer_top(
+        let opens = placement::stored_hwpx_cut_owns_outer_frame(
+            st.profile.hwpx_stored_layout()
+                && !st.profile.hwp5_origin_hwpx()
+                && !st.profile.session_edited(),
+            para,
+            table,
+        ) || placement::column_rowbreak_fragment_opens_outer_top(
             st.profile.hwpx_stored_layout(),
             (st.profile.hwpx_stored_layout() || st.profile.hwp5_stored_pagination_layout())
                 .then_some(para),

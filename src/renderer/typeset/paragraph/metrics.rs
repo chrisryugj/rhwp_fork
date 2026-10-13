@@ -10,6 +10,8 @@ use crate::model::{paragraph::Paragraph, provenance::LayoutCompatibilityProfile}
 /// 문단 format() 결과: 문단의 실제 렌더링 높이 정보
 #[derive(Debug, Clone)]
 pub(in crate::renderer::typeset) struct FormattedParagraph {
+    /// 구역의 저장 사다리가 무효이면 문단 끝도 저장 좌표로 다시 투영하지 않는다.
+    pub(in crate::renderer::typeset) stored_ladder_is_filler: bool,
     /// Measured remaining inline space on the composed tail line. None means
     /// that this path has no reliable width result (not an implicit overflow).
     pub(in crate::renderer::typeset) tail_line_remaining_width: Option<f64>,
