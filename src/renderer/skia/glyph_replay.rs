@@ -564,6 +564,7 @@ pub(super) fn prepare_glyph_outline(
                 || diagnostics.max_residual_after_adjustment_px > 0.25))
         || !outline.paint_style.is_fill_only_glyph_replay()
         || !outline.has_exclusive_payload_family()
+        || !outline.has_portable_geometry()
         || !finite_scalar(outline.placement.baseline_y)
     {
         return None;
@@ -1091,5 +1092,91 @@ mod allocation_tests {
         let mut bytes = usize::MAX;
         assert!(reserve_gradient_stop_bytes(&mut bytes, 2).is_none());
         assert_eq!(bytes, usize::MAX);
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::prepare_glyph_outline;
+    use crate::paint::*;
+    use crate::renderer::render_tree::BoundingBox;
+    use crate::renderer::{PathCommand, TextStyle};
+
+    #[test]
+    fn native_outline_preparation_obeys_the_portable_command_limit() {
+        let mut commands = vec![
+            PathCommand::MoveTo(0.0, 0.0),
+            PathCommand::LineTo(10.0, 0.0),
+            PathCommand::LineTo(0.0, 10.0),
+        ];
+        commands.resize(4095, PathCommand::LineTo(0.0, 10.0));
+        commands.push(PathCommand::ClosePath);
+        let mut variant = PaintVariantMeta::text_run_default("text-0");
+        variant.variant_id = "glyphOutline".into();
+        variant.variant_kind = TextVariantKind::GlyphOutline;
+        variant.is_default_fallback = false;
+        variant.quality = Some(TextVariantQuality::Exact);
+        variant.anchor_op_id = Some("text-0".into());
+        let mut outline = LayerGlyphOutlinePaint {
+            source: TextSourceSpan {
+                id: TextSourceId(0),
+                utf8_range: TextSourceRange::new(0, 1),
+                utf16_range: TextSourceRange::new(0, 1),
+                stable_source_key: None,
+            },
+            variant,
+            payload_kind: GlyphOutlinePayloadKind::MonochromeFill,
+            color_layers: None,
+            bitmap_glyph: None,
+            svg_glyph: None,
+            paint_style: PaintTextStyle::from(&TextStyle {
+                font_size: 12.0,
+                shade_color: 0x00ff_ffff,
+                ..Default::default()
+            }),
+            placement: TextRunPlacement {
+                run_to_page: LayerAffineTransform {
+                    a: 1.0,
+                    b: 0.0,
+                    c: 0.0,
+                    d: 1.0,
+                    e: 0.0,
+                    f: 0.0,
+                },
+                baseline_y: 0.0,
+            },
+            paths: vec![LayerGlyphOutlinePath {
+                glyph_id: 1,
+                source_range_utf8: TextSourceRange::new(0, 1),
+                glyph_range: GlyphRange::new(0, 1),
+                commands,
+                fill_rule: GlyphOutlineFillRule::NonZero,
+            }],
+            stroke: None,
+            diagnostics: GlyphRunDiagnostics {
+                quality: TextVariantQuality::Exact,
+                replay_eligibility: GlyphRunReplayEligibility::Portable,
+                strict_visual_eligible: true,
+                max_origin_delta_px: 0.0,
+                max_advance_delta_px: 0.0,
+                max_residual_after_adjustment_px: 0.0,
+                cluster_mismatch_count: 0,
+                missing_glyph_count: 0,
+                used_fallback_font_count: 0,
+                reason: None,
+            },
+        };
+        let resources = ResourceArena::default();
+        let bbox = BoundingBox::new(0.0, 0.0, 12.0, 12.0);
+        assert!(outline.has_portable_geometry());
+        assert!(prepare_glyph_outline(&outline, bbox, &resources, 1.0).is_some());
+
+        // The command cap is inclusive. The same valid finite path with one
+        // extra command must be rejected before Native constructs resources.
+        outline.paths[0]
+            .commands
+            .push(PathCommand::LineTo(0.0, 0.0));
+        assert!(!outline.has_portable_geometry());
+        assert!(prepare_glyph_outline(&outline, bbox, &resources, 1.0).is_none());
     }
 }
