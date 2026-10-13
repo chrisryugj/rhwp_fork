@@ -184,7 +184,8 @@ impl SourceFrameQuery<'_> {
             || (row_start_cut.is_empty()
                 && !table_text_reflowed()
                 && (layout_engine.row_has_declared_stored_frame(table, r)
-                    || layout_engine.native_saved_two_line_row_frame(table, r, styles)));
+                    || layout_engine.native_saved_two_line_row_frame(table, r, styles)
+                    || layout_engine.row_has_saved_zero_origin_text_frame(table, r)));
         // HU-derived row sums can exceed the identical source frame by binary
         // summation error. Bound that error by the number of accumulated rows;
         // this does not grant any additional physical layout space.

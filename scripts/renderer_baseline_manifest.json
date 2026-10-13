@@ -1263,24 +1263,6 @@
       "baselineTier": "extended"
     },
     {
-      "id": "hwpctl-api",
-      "file": "hwpctl_API_v2.4.hwp",
-      "category": "control",
-      "page": 0,
-      "notes": "HWP control API reference sample for CanvasKit control-document parity.",
-      "browserParityThresholds": {
-        "maxDiffRatio": null,
-        "inkMaskNeighborhoodRadius": 3,
-        "inkMaskMaxDiffRatio": 0.002,
-        "nonInkMaxDiffPixels": 0,
-        "solidInkMaxDiffRatio": 0.015
-      },
-      "diagnosticAxes": [
-        "control"
-      ],
-      "baselineTier": "representative"
-    },
-    {
       "id": "hwpctl-action-table",
       "file": "hwpctl_Action_Table__v1.1.hwp",
       "category": "control",

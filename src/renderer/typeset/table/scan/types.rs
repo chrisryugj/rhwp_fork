@@ -36,6 +36,7 @@ pub(in crate::renderer::typeset) struct BlockRowScanVars {
     /// 저장된 첫 조각 프레임이 가장 가깝게 소유하는 행 끝. 프레임 여유로
     /// whole-row를 수용할 때 이 끝을 넘지 않도록 제한한다.
     pub(in crate::renderer::typeset) source_first_fragment_row_end: Option<usize>,
+    pub(in crate::renderer::typeset) start_cut_is_block: bool,
     pub(in crate::renderer::typeset) start_row_height_override: Option<f64>,
     pub(in crate::renderer::typeset) source_terminal_suffix_start: Option<usize>,
 }

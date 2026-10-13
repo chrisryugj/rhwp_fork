@@ -282,6 +282,12 @@ impl HeightCursor {
         if item_para == prev_pi {
             return y_offset;
         }
+        // 같은 프레임에 이미 수용한 빈 줄 뒤의 저장 reset은 새 쪽이 아니다.
+        // 원래 빈 줄을 단 원점으로 삼았다는 증거가 있을 때만, 뒤 저장 사다리를
+        // 실제로 이어받은 원점에서 다시 시작한다. 측정과 paint가 같은 조회를 쓴다.
+        if self.rebase_after_empty_prefix(y_offset, item_para, prev_pi, paragraphs) {
+            return y_offset;
+        }
         // 글앞으로/글뒤로/위아래 Shape·Picture 가 있는 문단: vpos 에 개체 높이 포함 → bypass
         // (#409, #1027 Stage B). 분할 표 직후 첫 문단도 sequential 신뢰 (#991).
         let prev_has_overlay_shape = paragraphs
@@ -2076,6 +2082,57 @@ impl HeightCursor {
             return y_offset;
         }
         result
+    }
+
+    fn rebase_after_empty_prefix(
+        &mut self,
+        y: f64,
+        current: usize,
+        previous: usize,
+        paragraphs: &[Paragraph],
+    ) -> bool {
+        let Some(para) = paragraphs.get(current) else {
+            return false;
+        };
+        if current != previous + 1
+            || para.column_type != crate::model::paragraph::ColumnBreakType::None
+            || para
+                .line_segs
+                .first()
+                .is_none_or(|seg| seg.vertical_pos != 0)
+            || y <= self.col_anchor_y
+        {
+            return false;
+        }
+        let Some(origin) = self
+            .stored_column_origin
+            .map(|(raw, _)| raw)
+            .or(self.vpos_page_base)
+            .or(self.vpos_lazy_base)
+            .filter(|raw| *raw > 0)
+        else {
+            return false;
+        };
+        let begins_at_empty = paragraphs[..current]
+            .iter()
+            .rev()
+            .take_while(|p| {
+                p.text.is_empty()
+                    && p.controls.is_empty()
+                    && p.column_type == crate::model::paragraph::ColumnBreakType::None
+            })
+            .any(|p| {
+                p.line_segs
+                    .first()
+                    .is_some_and(|seg| seg.vertical_pos == origin)
+            });
+        if !begins_at_empty {
+            return false;
+        }
+        let offset = crate::renderer::px_to_hwpunit(y - self.col_anchor_y, self.dpi);
+        self.vpos_page_base = Some(-offset);
+        self.vpos_lazy_base = None;
+        true
     }
 
     /// 활성 base 로 사영한 저장-사다리 기대 y. 렌더 점프가 사다리에 이미

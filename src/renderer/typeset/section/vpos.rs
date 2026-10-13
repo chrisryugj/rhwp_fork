@@ -35,7 +35,7 @@ impl TypesetEngine {
                             || st.profile.hwp5_stored_pagination_layout())
                             && !st.profile.session_edited()
                             && paragraphs.get(para_idx).is_some_and(|first| {
-                                crate::renderer::layout::stored_first_margin_is_page_relative(
+                                crate::renderer::stored_page_origin::stored_first_margin_is_page_relative(
                                     first,
                                     paragraphs.get(para_idx + 1),
                                     styles,

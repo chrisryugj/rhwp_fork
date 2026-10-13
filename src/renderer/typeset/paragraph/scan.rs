@@ -330,6 +330,28 @@ pub(in crate::renderer::typeset) fn stored_body_reset_fragment_matches_current_f
             current_page_vpos_base,
             dpi,
         );
+    // 뒤 프레임에 표시가 있는 각주는 앞 본문 조각의 글줄 흐름을 바꾸지 않는다.
+    // 문단 전체에 각주가 있다는 이유로 앞 조각의 원본 소속까지 버리지 않는다.
+    // 제어 슬롯의 실제 UTF-16 줄 소속과 현재 각주 영역 위의 잉크 끝을 함께 확인한다.
+    let notes_owned_by_following_frame = page.profile.hwp5_stored_pagination_layout()
+        && !page.profile.session_edited()
+        && !para.controls.is_empty()
+        && para.controls.iter().enumerate().all(|(index, control)| {
+            matches!(control, crate::model::control::Control::Footnote(_))
+                && crate::renderer::composer::control_slot_line_index(para, index)
+                    .is_some_and(|line| line >= break_line)
+        })
+        && break_line
+            .checked_sub(1)
+            .and_then(|line| para.line_segs.get(line))
+            .and_then(|line| line_seg_visible_bounds_px(line, current_page_vpos_base, dpi))
+            .is_some_and(|(_, bottom)| {
+                bottom
+                    <= page.body_height
+                        - page.current_footnote_height
+                        - page.current_zone_y_offset
+                        - page.current_bottom_fixed_exclusion
+            });
     // 먼저 검증된 이월 개체 상자의 하단에서 본문이 재개하는 비영 원점이다.
     // 이 경우 흐름을 밀지 않는 떠 있는 표가 있어도 앞 글줄의 소유는 보존한다.
     let stored_frame_reset = (page.profile.hwpx_stored_layout()
@@ -357,6 +379,7 @@ pub(in crate::renderer::typeset) fn stored_body_reset_fragment_matches_current_f
         || (!para.controls.is_empty()
             && !only_bodyless_notes
             && !only_suffix_controls
+            && !notes_owned_by_following_frame
             && !stored_frame_reset)
         || start_line >= break_line
         || break_line >= para.line_segs.len()

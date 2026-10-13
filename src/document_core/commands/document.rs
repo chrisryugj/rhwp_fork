@@ -21,6 +21,9 @@ use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+mod stored_table_tail;
+mod tac_cache_repair;
+
 /// HWP 내보내기 + 자기 재로드 검증 결과 (#178 Stage 6).
 ///
 /// `serialize_hwp_with_verify` 의 반환값. 호출자가 페이지 회복 여부를 확인하고
@@ -333,6 +336,7 @@ impl DocumentCore {
             validation_report,
         };
 
+        tac_cache_repair::repair(&mut doc.document, &doc.styles, DEFAULT_DPI);
         doc.rebuild_embedded_exact_font_sources();
         doc.recompose_all_with_horizontal_shaping();
         doc.paginate();
@@ -497,6 +501,9 @@ impl DocumentCore {
     ) {
         use crate::model::control::Control;
 
+        let profile = document.layout_profile();
+        let source_table_frames = !profile.session_edited()
+            && (profile.hwpx_stored_layout() || profile.hwp5_stored_pagination_layout());
         for section in &mut document.sections {
             // [#4898] 이 구역의 저장 lineseg 가 배치 권위를 갖는지 먼저 판정한다 —
             // 권위가 있으면 0높이 lineseg(한컴이 접어 둔 숨은 블록)를 재조판하지 않는다.
@@ -509,6 +516,23 @@ impl DocumentCore {
                 .first()
                 .map(|a| a.width)
                 .unwrap_or(layout.body_area.width);
+
+            // 합성/캐시 보정 전에 원본 TAC 상자가 소유한 내부 쪽 경계를 고정한다.
+            let body_height_hu = (layout.body_area.height * 7200.0 / dpi).round() as i32;
+            let source_tac_frames: Vec<_> = section
+                .paragraphs
+                .iter()
+                .map(|para| {
+                    source_table_frames
+                        .then(|| {
+                            crate::renderer::stored_control_frame::following_first_tac_frame(
+                                para,
+                                body_height_hu,
+                            )
+                        })
+                        .flatten()
+                })
+                .collect();
 
             let mut body_line_seg_changed = false;
             // [Issue #1920] vpos 재계산(아래) 시 저장 vpos 의 새 쪽 시작 신호를 보존하기
@@ -752,7 +776,6 @@ impl DocumentCore {
                     .map(|(i, para)| {
                         if reflowed_paras.contains(&i)
                             || para.stored_text_partition_dirty
-                            || !para.controls.is_empty()
                             || para.line_segs.iter().any(|line| {
                                 line.tag
                                     & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
@@ -760,6 +783,11 @@ impl DocumentCore {
                             })
                         {
                             return None;
+                        }
+                        if !para.controls.is_empty() {
+                            return source_table_frames
+                                .then(|| stored_table_tail::source_frame_tail(para))
+                                .flatten();
                         }
                         let last = para.line_segs.last()?;
                         let painted_end = last.vertical_pos.saturating_add(last.line_height);
@@ -773,7 +801,6 @@ impl DocumentCore {
                 // 끼워 넣더라도 뒤의 원본 앵커가 확보한 공간을 삭제하지 않는다.
                 // 합성 내용이 자랐으면 이미 소비한 끝점을 유지하여 되감지 않는다.
                 let mut source_anchor_end: Option<(i32, i32)> = None;
-                let body_height_hu = (layout.body_area.height * 7200.0 / dpi).round() as i32;
                 for (pi, para) in section.paragraphs.iter_mut().enumerate() {
                     let was_reflowed = reflowed_paras.contains(&pi);
                     // 필드는 저장 글줄 안의 텍스트 범위를 표시할 뿐 별도 높이를
@@ -994,7 +1021,7 @@ impl DocumentCore {
                         .map(|line| line.vertical_pos)
                         .collect();
                     let preserve_source_frames = !was_reflowed
-                        && para.controls.is_empty()
+                        && (para.controls.is_empty() || source_tac_frames[pi].is_some())
                         && !para.stored_text_partition_dirty
                         && para.line_segs.iter().all(|line| {
                             line.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
@@ -1012,6 +1039,9 @@ impl DocumentCore {
                         let source_vpos = source_positions[line_index];
                         if preserve_source_frames
                             && line_index > 0
+                            && (para.controls.is_empty()
+                                || source_tac_frames[pi]
+                                    .is_some_and(|frame| frame.line == line_index))
                             && source_vpos == 0
                             && previous_source_end.is_some_and(|end: i32| {
                                 end > 0 && end.saturating_add(seg.line_height) > body_height_hu
@@ -3183,8 +3213,7 @@ impl DocumentCore {
                 // 좌표 기준. 역순 처리라 오른쪽 removal 의 시프트가 왼쪽 utf16 좌표에 영향
                 // 없고, 삭제 폭(u_end−u_start)은 원본 스냅샷 불변량이다. 컨트롤/필드 마커의
                 // 8유닛 갭 구조는 기존 오프셋에 이미 올바르게 인코딩되어 있으므로 감산만으로
-                // 보존된다 (rebuild_char_offsets 의 선행-컨트롤 휴리스틱은 문단 서두 0-length
-                // 필드의 end 마커를 컨트롤로 오산해 begin 갭을 유실 — 필드쌍 교차 페어링 유발).
+                // 보존된다.
                 if offsets_valid && start < end && end <= orig_offsets.len() {
                     let u_start = orig_offsets[start];
                     // [#3545] 지워진 본문 run 을 HWPX 저장에서 되살리기 위한 잔재 기록.

@@ -81,6 +81,7 @@ impl TypesetEngine {
         // 행 컷 측정도 같은 렌더링의 일부이므로 조판기와 동일한 표 출처를 사용한다.
         layout_engine
             .set_render_normalization_overlay(std::sync::Arc::clone(&self.render_normalization));
+        layout_engine.remember_stored_frame_rows(row_geometry_table, &mt.row_heights);
         // [Task #993] rowspan(row_span>1) 셀이 걸친 행 — 컷 모델(advance_row_cut)은
         // row_span==1 셀만 다루므로 rowspan 셀 높이를 측정하지 못한다. 구현계획서
         // §4대로 rowspan 행은 MeasuredTable 행 높이를 권위로 쓴다(렌더러도 동일).
@@ -205,8 +206,13 @@ impl TypesetEngine {
                     // 온전한 행은 실제 배치가 소유한 측정 높이를 함께 예약한다.
                     // 재조판에서는 원본 저장 프레임이나 저장 안전 여유를 재사용하지 않는다.
                     cut.max(mt.row_heights[row])
-                } else if declared_whole_table_matches_paint
-                    && padding_explains_drift
+                } else if (declared_whole_table_matches_paint && padding_explains_drift
+                    || layout_engine.stored_whole_row_padding_frame(
+                        row_geometry_table,
+                        row,
+                        *cut,
+                        *painted,
+                    ))
                     && layout_engine
                         .whole_fragment_row_uses_measured_height(row_geometry_table, row)
                 {
@@ -467,7 +473,10 @@ impl TypesetEngine {
                     // 전체 개체 상자를 첫 조각으로 바꾸면서 빠진 바깥 위 여백도
                     // 예약·배치가 소비할 같은 원점에 한 번만 포함한다.
                     if !reflow_empty_host
-                        && (crate::renderer::float_placement::stored_body_filling_rowbreak_frame(
+                        && (crate::renderer::float_placement::stored_hwpx_cut_owns_outer_frame(
+                            st.profile.hwpx_stored_layout() && !st.profile.hwp5_origin_hwpx() && !st.profile.session_edited(),
+                            para, table,
+                        ) || crate::renderer::float_placement::stored_body_filling_rowbreak_frame(
                         para,
                         table,
                         st.layout.body_area.height,
@@ -486,7 +495,13 @@ impl TypesetEngine {
                     ) || crate::renderer::float_placement::empty_host_cellbreak_fragment_repeats_outer_margin(
                         st.profile.hwpx_stored_layout() || self.profile.get().hwp5_stored_pagination_layout(),
                         para, table,
-                    )) {
+                    ) || ((st.profile.hwp5_stored_pagination_layout()
+                        || st.profile.hwpx_stored_layout())
+                        && !st.profile.session_edited()
+                        && matches!(table.page_break, crate::model::table::TablePageBreak::RowBreak)
+                        && crate::renderer::float_placement::ParagraphFloatPlacement::stored_host_lines_are_valid(
+                            para, table, ctrl_idx,
+                        ))) {
                         let top_margin = hwpunit_to_px(table.outer_margin_top as i32, self.dpi);
                         fragment.table_top += top_margin;
                         fragment.occupied_bottom += top_margin;
@@ -586,8 +601,8 @@ impl TypesetEngine {
         };
         let first_block_size = first_block_end.saturating_sub(first_block_start);
         let first_block_is_single_row = first_block_size == 1;
-        let first_block_has_protectable_rowspan = first_block_size >= 2
-            && first_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS
+        let first_block_has_protectable_rowspan = mt
+            .rowspan_block_uses_whole_unit(first_block_start, first_block_end)
             && (first_block_start..first_block_end)
                 .any(|r| rowspan_touched.get(r).copied().unwrap_or(false));
         let first_rowbreak_block_has_hard_break =
@@ -605,7 +620,8 @@ impl TypesetEngine {
         // 없으면 중간 행에서 자르지 않는다. 일반 RowBreak 행 경계 분할은 유지한다.
         let first_block_protected = first_block_has_protectable_rowspan
             && (!mt.allows_row_break_split() || !first_rowbreak_block_has_hard_break);
-        // Task #398 v2: 보호 블록(2~3 rows)만 블록 전체 높이로 판정. 큰 rowspan(>3)은 행 단위 분할.
+        // CellBreak는 병합 셀 그룹 전체를 단위로 판정한다. 실제 page-larger는
+        // 아래 fresh-page fit과 scan의 블록 컷으로 구분한다.
         // [#2097] 이월 게이트는 스캔과 같은 측정 공간을 본다: 스캔은 cut_row_h
         // (콘텐츠)로 배치를 판정하는데 게이트가 선언(mt.row_heights)만 보면,
         // 내용이 선언을 크게 웃도는 첫 행(82802 pi67: 선언 40.3px vs 컷

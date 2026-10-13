@@ -43,6 +43,18 @@ pub(in crate::renderer::typeset) struct TableContinuationCursor {
     /// 다음 조각의 scan 과 paint 가 같은 행 높이 덜기(`straddle_page_band_relief`)를 쓴다.
     pub(in crate::renderer::typeset) straddle_page_bands:
         Vec<crate::renderer::pagination::StraddleCellCarry>,
+    /// Complete row boxes actually accepted in preceding stored fragments.
+    /// Repeated headers and content cuts are separate owners.
+    pub(in crate::renderer::typeset) accepted_row_boxes: Vec<Option<f64>>,
+    /// 원본 쪽 재시작 컷이 실제 수용한 미완료 행 상자. 내용 컷과 별도로
+    /// 보존하고 같은 행의 뒤 상자가 수용되면 완료 행 장부에 합산한다.
+    pub(in crate::renderer::typeset) stored_restart_row_box: Option<(usize, f64)>,
+    /// 인증된 첫 물리 조각을 실제 수용한 사실. 뒤 조각의 바깥 프레임을
+    /// 예산과 배치가 같은 원점에서 한 번만 다시 열도록 전달한다.
+    pub(in crate::renderer::typeset) stored_fragment_outer_frame: bool,
+    /// 실제 수용한 원본 첫 상자가 본문 아래를 닫았는지 여부.
+    /// 뒤 조각의 저장 내용 경계를 같은 본문 프레임과 대조한다.
+    pub(in crate::renderer::typeset) stored_fragment_closes_body: bool,
 }
 
 /// RowBreak 표 셀 각주가 HWP 저장 vpos reset에서 물리 page를 넘을 때의 tail 정보.

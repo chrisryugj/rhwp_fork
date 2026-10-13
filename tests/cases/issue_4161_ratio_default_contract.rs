@@ -5,10 +5,6 @@
 //!
 //! `RATIO` 자식이 없는 HML 을 배포 CLI 로 왕복시키면 장평이 0 으로 나간다:
 //!
-//! ```bash
-//! rhwp export-hml tests/fixtures/hml/exambank_math_equations_min.hml -o /tmp/rt.hml
-//! # → <RATIO Hangul="0" Latin="0" Hanja="0" Japanese="0" Other="0" Symbol="0" User="0"/>
-//! ```
 //!
 //! ## 근인
 //!
