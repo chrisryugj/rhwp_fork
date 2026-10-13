@@ -830,7 +830,7 @@ fn form_drawing_replay_rejection(
     bbox: &crate::renderer::render_tree::BoundingBox,
     form: &crate::renderer::render_tree::FormObjectNode,
 ) -> Option<&'static str> {
-    use crate::paint::paint_op::portable_scalar_is_finite as scalar;
+    use crate::paint::paint_op::portable_glyph_scalar as scalar;
     use crate::renderer::form_appearance::{form_drawing, FormPrimitive};
 
     let valid_rect = |bbox: &crate::renderer::render_tree::BoundingBox| {
