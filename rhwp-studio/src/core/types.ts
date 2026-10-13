@@ -1479,7 +1479,8 @@ export interface LayerFormObjectOp {
   text?: string;
   foreColor?: string;
   backColor?: string;
-  value?: boolean;
+  /** Producer i32 selection state; boolean remains accepted for legacy object callers. */
+  value?: number | boolean;
   enabled?: boolean;
   drawing?: {
     primitives: Array<

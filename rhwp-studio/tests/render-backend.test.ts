@@ -258,10 +258,11 @@ test('CanvasKit translates a present missing-picture op without a profile gate',
   assert.match(source, /\.every\(Number\.isFinite\)/);
 });
 
-test('CanvasKit form replay accepts the canonical LayerTree form type names', () => {
+test('CanvasKit form replay consumes validated producer drawing rather than deriving control geometry', () => {
   const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
-  assert.match(codeOnly(source), /op\.formType === 'checkBox'/);
-  assert.match(codeOnly(source), /op\.formType === 'radioButton'/);
+  assert.match(codeOnly(source), /formDrawingReplayRejection\(op\)/);
+  assert.match(codeOnly(source), /const drawing = op\.drawing!/);
+  assert.match(codeOnly(source), /x: label\.x, y: label\.baseline/);
 });
 
 test('PageLayerTree bridge verifies the returned profile instead of relabeling it', () => {

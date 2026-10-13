@@ -133,6 +133,8 @@ import { decodeBrowserImage } from './canvaskit/browser-image-decoder';
 import { BoundedNativeCache } from './canvaskit/bounded-native-cache';
 import { replayFingerprint } from './canvaskit/replay-fingerprint';
 import { CanvasKitSurfaceCache } from './canvaskit/surface-cache';
+import { formDrawingReplayRejection } from './canvaskit/form-replay';
+import { CanvasKitParagraphFonts } from './canvaskit/paragraph-fonts';
 
 type CanvasKitApi = CanvasKit;
 type SkCanvas = Canvas;
@@ -181,6 +183,7 @@ interface CanvasKitSurfaceTarget {
 
 interface CanvasKitLocalTypeface {
   bytes?: ArrayBuffer;
+  paragraphTypefaces?: readonly (Typeface | null)[];
   syntheticStyle?: { bold: boolean; italic: boolean };
   hostFace?: { weight?: number; slant?: string };
   typeface: Typeface | null;
@@ -274,6 +277,10 @@ export interface CanvasKitRenderDiagnostics {
   textBlobCacheHits: number;
   textBlobCacheMisses: number;
   fallbackFamilyCacheEntries: number;
+  paragraphFontEntries: number;
+  paragraphFontBytes: number;
+  paragraphProviderBuilds: number;
+  paragraphFontRejections: number;
   surfaceFallbackReason: string | null;
   lastRenderCompleted: boolean;
   lastUnsupportedOps: string[];
@@ -450,6 +457,7 @@ export class CanvasKitLayerRenderer {
   private currentOp: LayerPaintOp | null = null;
   private readonly bundledFontRequests = new Set<AbortController>();
   private readonly glyphRunFonts: CanvasKitGlyphRunFontCache;
+  private readonly paragraphFonts: CanvasKitParagraphFonts;
   private readonly unsupportedOps = new Set<string>();
   private surfaceBackend: 'default' | 'software' | 'webgpu' | null = null;
   private surfaceFallbackReason: string | null = null;
@@ -503,6 +511,7 @@ export class CanvasKitLayerRenderer {
     private readonly webgpuInitFailure: string | null = null,
   ) {
     this.glyphRunFonts = new CanvasKitGlyphRunFontCache(canvasKit);
+    this.paragraphFonts = new CanvasKitParagraphFonts(canvasKit);
     void this.webgpuDevice?.lost.then(() => {
       if (this.disposed) return;
       this.surfaceCache.clear();
@@ -550,6 +559,7 @@ export class CanvasKitLayerRenderer {
     let defaultFontBytes: ArrayBuffer | undefined;
     let defaultFontManager: FontMgr | null = null;
     let defaultFontFamily: string | null = null;
+    const paragraphFontSources: Array<{ face: Typeface; bytes: ArrayBuffer }> = [];
     const defaultFontUrl = options.defaultFontUrl ?? 'fonts/NotoSansKR-Regular.woff2';
     try {
       const response = await fetch(defaultFontUrl);
@@ -564,6 +574,7 @@ export class CanvasKitLayerRenderer {
         if (defaultFontManager && defaultFontManager.countFamilies() > 0) {
           defaultFontFamily = defaultFontManager.getFamilyName(0);
         }
+        if (defaultTypeface) paragraphFontSources.push({ face: defaultTypeface, bytes });
       }
     } catch (error) {
       console.warn('[CanvasKitLayerRenderer] 기본 CJK 폰트 로딩 실패:', error);
@@ -579,6 +590,7 @@ export class CanvasKitLayerRenderer {
         });
         symbolFallbackTypeface = canvasKit.Typeface.MakeFreeTypeFaceFromData(bytes)
           ?? canvasKit.Typeface.MakeTypefaceFromData(bytes);
+        if (symbolFallbackTypeface) paragraphFontSources.push({ face: symbolFallbackTypeface, bytes });
       }
     } catch (error) {
       console.warn('[CanvasKitLayerRenderer] 기호 폴백 폰트 로딩 실패:', error);
@@ -607,6 +619,7 @@ export class CanvasKitLayerRenderer {
             fontManager: oldHangulFontManager,
             fontFamily,
           };
+          if (oldHangulNativeTypeface) paragraphFontSources.push({ face: oldHangulNativeTypeface, bytes });
           oldHangulNativeTypeface = null;
           oldHangulFontManager = null;
         }
@@ -616,7 +629,7 @@ export class CanvasKitLayerRenderer {
       oldHangulFontManager?.delete?.();
       console.warn('[CanvasKitLayerRenderer] 옛한글 shaping 폰트 로딩 실패:', error);
     }
-    return new CanvasKitLayerRenderer(
+    const renderer = new CanvasKitLayerRenderer(
       canvasKit,
       renderMode,
       resolvedSurfaceRequest,
@@ -633,6 +646,8 @@ export class CanvasKitLayerRenderer {
       webgpuDevice,
       webgpuInitFailure,
     );
+    for (const source of paragraphFontSources) renderer.paragraphFonts.remember(source.face, source.bytes);
+    return renderer;
   }
 
   /** 선택된 문서 폰트를 첫 replay 전에 native Typeface로 등록한다. */
@@ -695,6 +710,7 @@ export class CanvasKitLayerRenderer {
           prepared = { bytes, typeface, fontManager, fontFamily };
           this.bundledTypefaces.set(source.url, prepared);
           this.invalidateFontCaches();
+          this.paragraphFonts.remember(typeface, bytes);
           registered += 1;
           typeface = null;
           fontManager = null;
@@ -795,6 +811,7 @@ export class CanvasKitLayerRenderer {
           previous?.typeface?.delete?.();
           previous?.fontManager?.delete?.();
           this.invalidateFontCaches();
+          this.paragraphFonts.remember(typeface, bytes);
           registered += 1;
         } catch (error) {
           typeface?.delete?.();
@@ -855,6 +872,7 @@ export class CanvasKitLayerRenderer {
             fontFamily: fontManager && fontManager.countFamilies() > 0 ? fontManager.getFamilyName(0) : record.family,
             hostFace: record.hostReference.face, record, bytes: bytes.slice(0) });
           this.invalidateFontCaches();
+          this.paragraphFonts.remember(typeface, bytes);
           registered++;
         } catch (error) {
           typeface?.delete?.(); fontManager?.delete?.();
@@ -1094,6 +1112,7 @@ export class CanvasKitLayerRenderer {
     for (const family of this.bundledFontFamilies.values()) family.dispose();
     this.bundledFontFamilies.clear();
     this.bundledTypefaceLoadFailures.clear();
+    this.retainPreparedParagraphFonts();
     this.imageCacheHits = 0;
     this.imageCacheMisses = 0;
     this.imageCacheEvictions = 0;
@@ -1144,6 +1163,10 @@ export class CanvasKitLayerRenderer {
       textBlobCacheHits: this.textBlobs.hits,
       textBlobCacheMisses: this.textBlobs.misses,
       fallbackFamilyCacheEntries: this.fallbackFamilyCache.size,
+      paragraphFontEntries: this.paragraphFonts.diagnostics().entries,
+      paragraphFontBytes: this.paragraphFonts.diagnostics().bytes,
+      paragraphProviderBuilds: this.paragraphFonts.diagnostics().builds,
+      paragraphFontRejections: this.paragraphFonts.diagnostics().rejections,
       pendingImageLoads: this.pendingImageLoads.size,
       mode: this.renderMode,
       surfacePreference: this.surfaceRequest.preference,
@@ -1389,6 +1412,7 @@ export class CanvasKitLayerRenderer {
     this.defaultFontManager?.delete();
     this.oldHangulTypeface?.typeface?.delete?.();
     this.oldHangulTypeface?.fontManager?.delete?.();
+    this.paragraphFonts.clear();
     this.webgpuDeviceContext?.delete();
     this.webgpuDevice?.destroy();
   }
@@ -3857,7 +3881,8 @@ export class CanvasKitLayerRenderer {
       family = new CanvasKitBundledFontFamily(this.canvasKit, key, bytes);
       this.bundledFontFamilies.set(key, family);
     }
-    return family.select(style?.bold === true, style?.italic === true);
+    return { ...family.select(style?.bold === true, style?.italic === true),
+      paragraphTypefaces: faces.map(face => face.typeface) };
   }
 
   private findPreparedTypeface(fontFamily: string | undefined, style?: LayerTextStyle): CanvasKitLocalTypeface | null {
@@ -3883,6 +3908,12 @@ export class CanvasKitLayerRenderer {
     this.textBlobs.clear();
     this.failedTextBlobKeys.clear();
     this.staticPictures.clear();
+    this.retainPreparedParagraphFonts();
+  }
+
+  private retainPreparedParagraphFonts(): void {
+    this.paragraphFonts.retain(new Set([this.defaultTypeface, this.symbolFallbackTypeface, this.oldHangulTypeface?.typeface ?? null,
+      ...[...this.localTypefaces.values(), ...this.bundledTypefaces.values()].map(face => face.typeface)]));
   }
 
   private textBlobFontKey(font: Font): string | null {
@@ -4147,37 +4178,46 @@ export class CanvasKitLayerRenderer {
 
   private drawStaticSvgTextLayer(canvas: SkCanvas, layer: StaticSvgTextLayer): boolean {
     if (layer.text.length > CanvasKitLayerRenderer.MAX_EQUATION_TEXT_LENGTH) return false;
-    const prepared = this.findPreparedTypeface(layer.fontFamily, {
-      bold: layer.fontWeight === 'bold', italic: layer.fontStyle === 'italic',
-    });
-    const candidates = [prepared, this.oldHangulTypeface, {
+    const candidates = [...[layer.fontFamily, 'Noto Sans KR', 'Noto Sans CJK KR', 'NanumGothic', 'D2Coding',
+      'NanumGothicCoding', 'Noto Serif KR', 'Noto Serif CJK KR'].map(family =>
+      this.findPreparedTypeface(family, {
+        bold: layer.fontWeight === 'bold', italic: layer.fontStyle === 'italic',
+      })), this.oldHangulTypeface, {
       typeface: this.defaultTypeface,
       fontManager: this.defaultFontManager,
       fontFamily: this.defaultFontFamily,
-    }].filter((face): face is CanvasKitLocalTypeface => !!face?.fontManager && !!face.typeface);
+    }, { typeface: this.symbolFallbackTypeface, fontManager: null, fontFamily: null }]
+      .filter((face): face is CanvasKitLocalTypeface => !!face?.typeface);
+    const combined = this.paragraphFonts.source(candidates.map(face => face.paragraphTypefaces ?? face.typeface));
+    let triedCombined = false;
     for (const candidate of candidates) {
       const font = this.makeFont(candidate.typeface, layer.fontSize);
       let builder: ReturnType<typeof this.canvasKit.ParagraphBuilder.Make> | null = null;
       let paragraph: Paragraph | null = null;
       try {
         const glyphs = font.getGlyphIDs(layer.text, Array.from(layer.text).length);
-        if (!glyphs || glyphs.some(id => id === 0)) continue;
+        const source = triedCombined ? null : combined;
+        triedCombined = true;
+        if (!source && (!candidate.fontManager || !glyphs || glyphs.some(id => id === 0))) continue;
         const style = new this.canvasKit.ParagraphStyle({
           maxLines: 1,
           textStyle: {
             color: this.color(layer.fill, layer.opacity),
             fontSize: layer.fontSize,
-            ...(candidate.fontFamily ? { fontFamilies: [candidate.fontFamily] } : {}),
+            ...(source ? { fontFamilies: source.families }
+              : candidate.fontFamily ? { fontFamilies: [candidate.fontFamily] } : {}),
             fontStyle: {
               weight: layer.fontWeight === 'bold' ? this.canvasKit.FontWeight.Bold : this.canvasKit.FontWeight.Normal,
               slant: layer.fontStyle === 'italic' ? this.canvasKit.FontSlant.Italic : this.canvasKit.FontSlant.Upright,
             },
           },
         });
-        builder = this.canvasKit.ParagraphBuilder.Make(style, candidate.fontManager!);
+        builder = source ? this.canvasKit.ParagraphBuilder.MakeFromFontProvider(style, source.provider)
+          : this.canvasKit.ParagraphBuilder.Make(style, candidate.fontManager!);
         builder.addText(layer.text);
         paragraph = builder.build();
         paragraph.layout(CanvasKitLayerRenderer.MAX_SHAPED_TEXT_WIDTH);
+        if (source && paragraph.unresolvedCodepoints().length > 0) continue;
         const width = paragraph.getLongestLine();
         const height = paragraph.getHeight();
         const baseline = paragraph.getAlphabeticBaseline();
@@ -4244,6 +4284,7 @@ export class CanvasKitLayerRenderer {
           bold,
           layout.width,
           layout.kind.type === 'symbol',
+          layout.kind.type === 'text' || layout.kind.type === 'number' ? '함초롬바탕' : 'Latin Modern Math',
         );
       case 'function':
         return this.drawEquationText(
@@ -4257,6 +4298,7 @@ export class CanvasKitLayerRenderer {
           bold,
           layout.width,
           false,
+          '함초롬바탕',
         );
       case 'fraction':
         return child(layout.kind.numer)
@@ -4335,6 +4377,7 @@ export class CanvasKitLayerRenderer {
           false,
           layout.width,
           false,
+          '함초롬바탕',
         );
         return limitDrawn && (layout.kind.sub
           ? child(layout.kind.sub, fontSize * 0.7, false, false)
@@ -4428,6 +4471,7 @@ export class CanvasKitLayerRenderer {
     bold: boolean,
     targetWidth: number,
     centered: boolean,
+    fontFamily = 'Latin Modern Math',
   ): boolean {
     if (
       !text
@@ -4436,31 +4480,87 @@ export class CanvasKitLayerRenderer {
     ) {
       return false;
     }
-    let font: Font | null = null;
-    let paint: SkPaint | null = null;
-    try {
-      font = this.makeFont(this.defaultTypeface, Math.max(1, fontSize));
-      paint = this.makeFillPaint(color);
-      const glyphIds = font.getGlyphIDs(text, Array.from(text).length);
-      if (!glyphIds || glyphIds.some((glyphId) => glyphId === 0)) return false;
-      const glyphWidths = font.getGlyphWidths(glyphIds) ?? [];
-      const measuredWidth = glyphWidths.reduce((sum, width) => sum + width, 0);
-      const drawWidth = targetWidth > 0 && measuredWidth > 0 ? targetWidth : measuredWidth;
-      if (targetWidth > 0 && measuredWidth > 0) {
-        font.setScaleX(targetWidth / measuredWidth);
-      }
-      const adjustableFont = font as Font & {
-        setEmbolden?: (enabled: boolean) => void;
-        setSkewX?: (skew: number) => void;
-      };
-      adjustableFont.setEmbolden?.(bold);
-      adjustableFont.setSkewX?.(italic ? -0.2 : 0);
-      this.drawCachedText(canvas, text, centered ? x + (targetWidth - drawWidth) / 2 : x, baselineY, paint, font);
-      return true;
-    } finally {
-      font?.delete?.();
-      paint?.delete?.();
+    return this.drawStaticControlText(canvas, text, { x, y: baselineY, fontSize: Math.max(1, fontSize),
+      color, italic, bold, targetWidth, centered,
+      fontFamilies: [/[\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7ff]/u.test(text) ? '함초롬바탕' : fontFamily,
+        'Latin Modern Math', '함초롬바탕', 'Noto Serif KR', 'Noto Serif CJK KR', 'Noto Sans KR', 'Noto Sans CJK KR'] });
+  }
+
+  /** Shape static labels without recomputing producer-owned positions or equation widths. */
+  private drawStaticControlText(canvas: SkCanvas, text: string, options: {
+    x: number; y: number; fontSize: number; color: string; fontFamilies: readonly string[];
+    centered?: boolean; verticalCenter?: boolean; targetWidth?: number; bold?: boolean; italic?: boolean;
+  }): boolean {
+    const { x, y, fontSize, color, bold = false, italic = false, targetWidth } = options;
+    const nativeFinite = (...values: number[]) => values.every(value => Number.isFinite(value) && Math.abs(value) <= 3.4028234663852886e38);
+    if (!text || text.length > CanvasKitLayerRenderer.MAX_EQUATION_TEXT_LENGTH
+      || !nativeFinite(x, y, fontSize, targetWidth ?? 0)
+      || fontSize <= 0 || (targetWidth !== undefined && targetWidth < 0)) return false;
+    const candidates = [...options.fontFamilies.map(family => this.findPreparedTypeface(family, { bold, italic })), this.oldHangulTypeface,
+      { typeface: this.defaultTypeface, fontManager: this.defaultFontManager, fontFamily: this.defaultFontFamily },
+      { typeface: this.symbolFallbackTypeface, fontManager: null, fontFamily: null }];
+    const seen = new Set<Typeface | null>();
+    const combined = this.paragraphFonts.source(candidates.map(candidate => candidate?.paragraphTypefaces ?? candidate?.typeface ?? null));
+    let triedCombined = false;
+    const needsShaping = textRequiresComplexShaping(text) || /[\u1100-\u11ff\ua960-\ua97f\ud7b0-\ud7ff]/u.test(text);
+    for (const candidate of candidates) {
+      if (!candidate || seen.has(candidate.typeface)) continue;
+      seen.add(candidate.typeface);
+      const font = this.makeFont(candidate.typeface, fontSize);
+      let builder: ReturnType<typeof this.canvasKit.ParagraphBuilder.Make> | null = null;
+      let paragraph: Paragraph | null = null;
+      let paint: SkPaint | null = null;
+      try {
+        const glyphs = font.getGlyphIDs(text, Array.from(text).length);
+        const source = triedCombined ? null : combined;
+        triedCombined = true;
+        const fullCoverage = glyphs && !glyphs.some(id => id === 0);
+        if (!source && !fullCoverage) continue;
+        const metrics = options.verticalCenter ? font.getMetrics() : null;
+        const baseline = options.verticalCenter
+          ? y - ((metrics?.ascent ?? -fontSize * 0.8) + (metrics?.descent ?? fontSize * 0.2)) / 2 : y;
+        if (!nativeFinite(baseline)) continue;
+        if ((source || candidate.fontManager) && this.canvasKit.ParagraphBuilder && this.canvasKit.ParagraphStyle) {
+          try {
+            const style = new this.canvasKit.ParagraphStyle({ maxLines: 1, textStyle: {
+              color: this.color(color), fontSize,
+              ...(source ? { fontFamilies: source.families }
+                : candidate.fontFamily ? { fontFamilies: [candidate.fontFamily] } : {}),
+              fontStyle: { weight: bold ? this.canvasKit.FontWeight.Bold : this.canvasKit.FontWeight.Normal,
+                slant: italic ? this.canvasKit.FontSlant.Italic : this.canvasKit.FontSlant.Upright },
+            } });
+            builder = source ? this.canvasKit.ParagraphBuilder.MakeFromFontProvider(style, source.provider)
+              : this.canvasKit.ParagraphBuilder.Make(style, candidate.fontManager!);
+            builder.addText(text); paragraph = builder.build();
+            paragraph.layout(CanvasKitLayerRenderer.MAX_SHAPED_TEXT_WIDTH);
+            if (source && paragraph.unresolvedCodepoints().length > 0) continue;
+            const width = paragraph.getLongestLine(), alphabeticBaseline = paragraph.getAlphabeticBaseline(), height = paragraph.getHeight();
+            const scale = targetWidth !== undefined && targetWidth > 0 && width > 0 ? targetWidth / width : 1;
+            const left = options.centered ? x + ((targetWidth ?? 0) - width * scale) / 2 : x;
+            if (!nativeFinite(width, height, alphabeticBaseline, scale, left) || width < 0 || height < 0 || scale <= 0) continue;
+            canvas.save();
+            try {
+              canvas.translate(left, baseline); canvas.scale(scale, 1);
+              canvas.drawParagraph(paragraph, 0, -alphabeticBaseline);
+            } finally { canvas.restore(); }
+            return true;
+          } catch { /* A nominal-safe label may still use the same prepared native font. */ }
+        }
+        if (needsShaping || !fullCoverage) continue;
+        const widths = font.getGlyphWidths(glyphs!) ?? [];
+        const width = widths.reduce((sum, advance) => sum + advance, 0);
+        const scale = targetWidth !== undefined && targetWidth > 0 && width > 0 ? targetWidth / width : 1;
+        const left = options.centered ? x + ((targetWidth ?? 0) - width * scale) / 2 : x;
+        if (!nativeFinite(width, scale, left) || width < 0 || scale <= 0) continue;
+        font.setScaleX(scale);
+        (font as Font & { setEmbolden?: (enabled: boolean) => void }).setEmbolden?.(bold);
+        (font as Font & { setSkewX?: (skew: number) => void }).setSkewX?.(italic ? -0.2 : 0);
+        paint = this.makeFillPaint(color);
+        this.drawCachedText(canvas, text, left, baseline, paint, font);
+        return true;
+      } finally { paragraph?.delete(); builder?.delete(); paint?.delete(); font.delete(); }
     }
+    return false;
   }
 
   private drawEquationLine(
@@ -4568,67 +4668,34 @@ export class CanvasKitLayerRenderer {
   }
 
   private renderFormObject(canvas: SkCanvas, op: LayerFormObjectOp): void {
-    if (op.drawing) {
-      for (const primitive of op.drawing.primitives) {
-        const paint = primitive.kind === 'polyline' && !primitive.closed
-          ? this.makeStrokePaint(primitive.color, primitive.width)
-          : this.makeFillPaint(primitive.color);
-        try {
-          if (primitive.kind === 'rect') {
-            canvas.drawRect(this.rect(primitive.bbox), paint);
-          } else if (primitive.kind === 'circle') {
-            canvas.drawCircle(primitive.x, primitive.y, primitive.radius, paint);
-          } else {
-            const path = this.canvasKit.Path.MakeFromSVGString(
-              `M ${primitive.points.map(point => point.join(' ')).join(' L ')}${primitive.closed ? ' Z' : ''}`,
-            );
-            if (path) {
-              try { canvas.drawPath(path, paint); } finally { path.delete?.(); }
-            }
-          }
-        } finally { paint.delete?.(); }
-      }
-      const label = op.drawing.label;
-      if (label) {
-        this.renderTextRun(canvas, {
-          type: 'textRun',
-          bbox: { x: label.x, y: label.baseline - label.fontSize, width: op.bbox.width, height: label.fontSize },
-          text: label.text,
-          baseline: label.fontSize,
-          style: { fontFamily: label.fontFamily, fontSize: label.fontSize, color: label.color, bold: label.bold, italic: label.italic },
-        });
-      }
-      return;
+    const rejection = formDrawingReplayRejection(op);
+    if (rejection) { this.unsupportedOps.add(`formObject:${rejection}`); return; }
+    const drawing = op.drawing!;
+    for (const primitive of drawing.primitives) {
+      const paint = primitive.kind === 'polyline' && !primitive.closed
+        ? this.makeStrokePaint(primitive.color, primitive.width)
+        : this.makeFillPaint(primitive.color);
+      try {
+        if (primitive.kind === 'rect') {
+          canvas.drawRect(this.rect(primitive.bbox), paint);
+        } else if (primitive.kind === 'circle') {
+          canvas.drawCircle(primitive.x, primitive.y, primitive.radius, paint);
+        } else if (primitive.points.length > 0) {
+          const path = this.pathFromCommands([
+            { type: 'moveTo', x: primitive.points[0][0], y: primitive.points[0][1] },
+            ...primitive.points.slice(1).map(([x, y]) => ({ type: 'lineTo' as const, x, y })),
+            ...(primitive.closed ? [{ type: 'closePath' as const }] : []),
+          ]);
+          try { canvas.drawPath(path, paint); } finally { path.delete(); }
+        }
+      } finally { paint.delete(); }
     }
-    const fill = op.backColor && op.backColor !== '#000000' ? op.backColor : '#f7f7f7';
-    this.drawStyledShape(canvas, op.bbox, {
-      fillColor: fill,
-      strokeColor: op.foreColor ?? '#555555',
-      strokeWidth: 1,
-      opacity: op.enabled === false ? 0.55 : 1,
-    }, (paint) => canvas.drawRect(this.rect(op.bbox), paint));
-    if (op.value && (
-      op.formType === 'checkBox'
-      || op.formType === 'radioButton'
-      || op.formType === 'checkbox'
-      || op.formType === 'radio'
-    )) {
-      const paint = this.makeStrokePaint(op.foreColor ?? '#111111', 1.5);
-      const b = op.bbox;
-      canvas.drawLine(b.x + b.width * 0.25, b.y + b.height * 0.55, b.x + b.width * 0.45, b.y + b.height * 0.75, paint);
-      canvas.drawLine(b.x + b.width * 0.45, b.y + b.height * 0.75, b.x + b.width * 0.78, b.y + b.height * 0.28, paint);
-      paint.delete?.();
-    }
-    const label = op.caption || op.text;
-    if (label) {
-      this.renderTextRun(canvas, {
-        type: 'textRun',
-        bbox: { ...op.bbox, x: op.bbox.x + 4, width: Math.max(0, op.bbox.width - 8) },
-        text: label,
-        baseline: Math.max(10, op.bbox.height * 0.68),
-        style: { fontSize: Math.max(9, Math.min(14, op.bbox.height * 0.55)), color: op.foreColor ?? '#111111' },
-      });
-    }
+    const label = drawing.label;
+    if (label?.text && !this.drawStaticControlText(canvas, label.text, {
+      x: label.x, y: label.baseline, fontSize: label.fontSize, color: label.color,
+      bold: label.bold, italic: label.italic,
+      fontFamilies: [label.fontFamily, 'Noto Sans KR', 'Noto Sans CJK KR'],
+    })) this.unsupportedOps.add('formObject:textReplayFailed');
   }
 
   private renderPlaceholder(canvas: SkCanvas, op: LayerPlaceholderOp): void {
