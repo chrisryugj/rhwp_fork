@@ -22,6 +22,8 @@ pub(crate) mod shaping_glyph;
 pub(crate) mod shaping_glyph_vertical;
 pub mod text_shape;
 pub mod text_v2;
+mod text_v2_export;
+mod text_v2_slots;
 pub mod text_variants;
 
 pub use builder::LayerBuilder;
@@ -84,6 +86,9 @@ pub use text_shape::{
 pub use text_v2::{
     TextV2CompatibilityProfile, TextV2Diagnostics, TextV2LineBreakRisk, TextV2LineBreakRiskLevel,
     TextV2SlotDiagnostic, TextV2ValidationIssue, TextV2ValidationSeverity, TextV2VariantDiagnostic,
+};
+pub use text_v2_slots::{
+    LayerTextPaintOpV2, LayerTextVariantPart, LayerTextVariantSet, TextFallbackPolicy,
 };
 pub use text_variants::{
     text_visual_replay_role, validate_text_variant_scope, TextVariantScopeError,

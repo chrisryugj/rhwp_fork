@@ -469,3 +469,17 @@ improvement rather than a Canvas2D compatibility match.
 
 합성 resolver 검사는 호출 수, 원래 배치 보존, 명시적 소속 집계와 문맥별 위험 보고를 검사한다.
 이 단계의 실행 검증은 파일 rustfmt·diff 확인까지이며 Cargo 실행은 대기 중이다.
+
+## P45 이관: 명시적 schema v2 내보내기와 borrowed slots
+
+기존 `to_json()`은 schema v1을 유지한다. `to_json_v2_compat()`는 원래 TextRun 자리에
+모든 대안을 묶고, `to_json_v2_strict_glyph_outline()`과 `to_json_v2_strict_glyph_run()`은
+공유 selector의 자원·geometry 검증을 통과한 대안만 내보낸다. 잘못된 공개 variant 메타데이터,
+불완전한 part와 남는 sidecar는 구조화된 오류로 거부한다. 진단 플래그만으로 엄격한 출력을
+허용하지 않는다. 엄격한 export는 fallback이 없으므로 schema v1 자동 downgrade를 금지한다.
+
+`LayerTextPaintOpV2`와 variant/part view는 원래 Rust PaintOp를 읽기 전용으로 빌린다.
+JSON 검증 경로를 공유하므로 직렬화 없는 API는 아니며, resource와 조상 clip은 원래 tree에 남는다.
+검사는 기존 bitmap/font producer를 사용한 자원 보존, source·paint order, 엄격한 거부와
+lossless compatibility downgrade에 한정한다. 새 font SVG producer 검사는 시각 증거 확보 후
+별도로 도입한다. 이관 파일의 rustfmt·diff 확인을 마쳤으며 실행 검증은 대기 중이다.
