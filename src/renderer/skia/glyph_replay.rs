@@ -124,7 +124,7 @@ impl PreparedGlyph {
         for draw in &self.draws {
             canvas.save();
             for clip in &draw.clips {
-                canvas.clip_path(clip, None, true);
+                canvas.clip_path(clip, None, antialias);
             }
             for transform in &draw.transforms {
                 canvas.concat(transform);
