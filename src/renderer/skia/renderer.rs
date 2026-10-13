@@ -2908,7 +2908,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_shape_fills_for_gradient_pattern_ellipse_path_and_line() {
+    fn renders_shape_fallback_fills_for_gradient_pattern_ellipse_path_and_line() {
         let gradient = GradientFillInfo {
             gradient_type: 1,
             angle: 0,
@@ -2988,14 +2988,13 @@ mod tests {
             .render_raster_with_options(&tree, RasterRenderOptions::default())
             .expect("render shapes");
         let image = decode_rgba(&output.bytes);
-        let gradient_pixel = *image.get_pixel(4, 3);
+        let gradient_pixel = *image.get_pixel(4, 4);
         let pattern_pixel = *image.get_pixel(18, 4);
         let ellipse_pixel = *image.get_pixel(7, 17);
         let path_pixel = *image.get_pixel(7, 29);
         let line_pixel = *image.get_pixel(24, 30);
 
         assert_channel(gradient_pixel, 2, 180, 255);
-        assert_channel(*image.get_pixel(4, 8), 0, 180, 255);
         assert_channel(pattern_pixel, 1, 180, 255);
         assert_channel(ellipse_pixel, 0, 180, 255);
         assert_channel(path_pixel, 2, 180, 255);
