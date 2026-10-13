@@ -1395,7 +1395,7 @@ fn write_text_source_entry(buf: &mut String, entry: &TextSourceEntry) {
     buf.push('}');
 }
 
-fn write_text_source_span(buf: &mut String, span: &TextSourceSpan) {
+pub(crate) fn write_text_source_span(buf: &mut String, span: &TextSourceSpan) {
     let _ = write!(buf, "{{\"id\":{},\"utf8Range\":", span.id.0);
     write_text_source_range(buf, span.utf8_range);
     buf.push_str(",\"utf16Range\":");
