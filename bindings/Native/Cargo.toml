@@ -8,5 +8,9 @@ publish = false
 name = "rhwp_native_ffi"
 crate-type = ["cdylib", "staticlib"]
 
+[features]
+default = []
+native-skia = ["rhwp_core/native-skia"]
+
 [dependencies]
 rhwp_core = { package = "rhwp", path = "../.." }

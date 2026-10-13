@@ -23,6 +23,16 @@ public static class RhwpNative
     }
 
     /// <summary>
+    /// Print-profile direct PDF export to a new file. Requires native-skia.
+    /// The native JSON result reports featureDisabled when unavailable.
+    /// </summary>
+    public static string ExportPdfDirect(string inputPath, string outputFile, int page = AllPages)
+    {
+        IntPtr result = rhwp_export_pdf_direct(ToUtf8NullTerminated(inputPath), ToUtf8NullTerminated(outputFile), page);
+        return TakeResultString(result);
+    }
+
+    /// <summary>
     /// 파일로 내보내지 않고 페이지 텍스트를 JSON 문자열로 돌려준다.
     /// </summary>
     /// <remarks>
@@ -40,6 +50,9 @@ public static class RhwpNative
 
     [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
     private static extern IntPtr rhwp_export_markdown(byte[] inputPath, byte[] outputDirectory, int page);
+
+    [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr rhwp_export_pdf_direct(byte[] inputPath, byte[] outputFile, int page);
 
     [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
     private static extern IntPtr rhwp_read_text(byte[] inputPath, int page);
