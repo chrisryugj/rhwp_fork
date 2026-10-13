@@ -133,13 +133,12 @@ impl PaintOp {
                 );
                 shape_bounds(bounds, logical, path.transform)
             }
-            Self::Image { image, .. } => shape_bounds(
-                image
+            Self::Image { image, .. } => {
+                let effective = image
                     .transform
-                    .effective_image_bbox(&image.paint_bbox(&logical)),
-                logical,
-                image.transform,
-            ),
+                    .effective_image_bbox(&image.paint_bbox(&logical));
+                shape_bounds(effective, effective, image.transform)
+            }
             Self::ControlLabel { .. }
             | Self::Equation { .. }
             | Self::FormObject { .. }
