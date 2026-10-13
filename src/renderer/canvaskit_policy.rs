@@ -824,6 +824,112 @@ fn text_visual_geometry_is_valid(
             .all(|position| position.is_finite())
 }
 
+// Validate the same producer-owned drawing serialized to the browser. Raw form
+// properties do not describe the final primitives or the selected display label.
+fn form_drawing_replay_rejection(
+    bbox: &crate::renderer::render_tree::BoundingBox,
+    form: &crate::renderer::render_tree::FormObjectNode,
+) -> Option<&'static str> {
+    use crate::paint::paint_op::portable_scalar_is_finite as scalar;
+    use crate::renderer::form_appearance::{form_drawing, FormPrimitive};
+
+    let valid_rect = |bbox: &crate::renderer::render_tree::BoundingBox| {
+        bbox.width >= 0.0
+            && bbox.height >= 0.0
+            && [
+                bbox.x,
+                bbox.y,
+                bbox.width,
+                bbox.height,
+                bbox.x + bbox.width,
+                bbox.y + bbox.height,
+            ]
+            .into_iter()
+            .all(scalar)
+    };
+    if bbox.width <= 0.0 || bbox.height <= 0.0 || !valid_rect(bbox) {
+        return Some("invalidGeometry");
+    }
+    let drawing = form_drawing(form, *bbox);
+    if drawing.primitives.len() > 512 {
+        return Some("formPrimitiveBudgetExceeded");
+    }
+    let mut point_count = 0usize;
+    for primitive in &drawing.primitives {
+        let (geometry_valid, color) = match primitive {
+            FormPrimitive::Rect { bbox, color } => (valid_rect(bbox), color),
+            FormPrimitive::Circle {
+                x,
+                y,
+                radius,
+                color,
+            } => (
+                *radius >= 0.0
+                    && [
+                        *x,
+                        *y,
+                        *radius,
+                        x - radius,
+                        x + radius,
+                        y - radius,
+                        y + radius,
+                    ]
+                    .into_iter()
+                    .all(scalar),
+                color,
+            ),
+            FormPrimitive::Polyline {
+                points,
+                color,
+                width,
+                ..
+            } => {
+                point_count = point_count.saturating_add(points.len());
+                if point_count > 4096 {
+                    return Some("formPrimitiveBudgetExceeded");
+                }
+                (
+                    *width >= 0.0 && scalar(*width) && points.iter().flatten().copied().all(scalar),
+                    color,
+                )
+            }
+        };
+        if !geometry_valid {
+            return Some("invalidGeometry");
+        }
+        if color.encode_utf16().take(129).count() > 128 {
+            return Some("formColorBudgetExceeded");
+        }
+    }
+    if let Some(label) = &drawing.label {
+        if [&label.text, &label.font_family]
+            .into_iter()
+            .any(|text| text.encode_utf16().take(4097).count() > 4096)
+        {
+            return Some("formTextBudgetExceeded");
+        }
+        if label.color.encode_utf16().take(129).count() > 128 {
+            return Some("formColorBudgetExceeded");
+        }
+        if label.font_size <= 0.0
+            || label.font_size > 4096.0
+            || ![
+                label.x,
+                label.baseline,
+                label.font_size,
+                label.baseline - label.font_size,
+            ]
+            .into_iter()
+            .all(scalar)
+        {
+            return Some("invalidGeometry");
+        }
+    }
+    // Font availability is an actual browser preparation result, not something
+    // the Rust structural preflight can claim from a font-family string.
+    None
+}
+
 fn minimum_work_exceeds_limit(
     work_units: usize,
     pending_nodes: usize,
@@ -1434,9 +1540,18 @@ impl CanvasKitReplayPlanBuilder {
                 item.detail = Some("unsupportedSemanticLayout".to_string());
                 item
             }
-            PaintOp::FormObject { .. } => {
-                let mut item = direct_item(path, "formObject", CanvasKitReplayFeature::FormObject);
-                item.detail = Some("basicStaticReplay".to_string());
+            PaintOp::FormObject { bbox, form } => {
+                let reason = form_drawing_replay_rejection(bbox, form);
+                let mut item = if reason.is_some() {
+                    self.transition_overlay_item(
+                        path,
+                        "formObject",
+                        CanvasKitReplayFeature::FormObject,
+                    )
+                } else {
+                    direct_item(path, "formObject", CanvasKitReplayFeature::FormObject)
+                };
+                item.detail = Some(reason.unwrap_or("basicStaticReplay").to_string());
                 item
             }
             PaintOp::RawSvg { .. } => {
