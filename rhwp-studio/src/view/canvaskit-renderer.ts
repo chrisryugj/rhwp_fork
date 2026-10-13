@@ -57,7 +57,9 @@ import type {
   LayerTextStyle,
   PageInfo,
   PageLayerTree,
+  PageLayerTreeV2,
 } from '@/core/types';
+import { normalizeTextV2Tree } from '@/core/text-v2-normalizer';
 import {
   DEFAULT_CANVASKIT_SURFACE_REQUEST,
   type CanvasKitRenderMode,
@@ -422,6 +424,7 @@ export class CanvasKitLayerRenderer {
   private imageFailureCacheHits = 0;
   private imageCachePixels = 0;
   private currentResources: LayerResources | undefined;
+  private currentImageBytesResolver: ((key: string) => Uint8Array | null) | undefined;
   private currentFontResources: LayerFontResources | undefined;
   private currentShowParagraphMarks = false;
   private currentShowControlCodes = false;
@@ -434,6 +437,7 @@ export class CanvasKitLayerRenderer {
   };
   private selectedTextVariantOps = new WeakSet<LayerPaintOp>();
   private documentGeneration = 0;
+  private sourceDocumentGeneration: number | undefined;
   private disposed = false;
 
   private constructor(
@@ -820,9 +824,17 @@ export class CanvasKitLayerRenderer {
   }
 
   /** 브라우저 image decode가 필요한 자원은 첫 surface replay 전에 준비한다. */
-  preparePageResources(tree: PageLayerTree): Promise<void> | null {
+  preparePageResources(
+    tree: PageLayerTree | PageLayerTreeV2,
+    resolveImageBytes?: (key: string) => Uint8Array | null,
+    documentGeneration?: number,
+  ): Promise<void> | null {
+    if (documentGeneration !== undefined) this.syncDocumentGeneration(documentGeneration);
+    tree = normalizeTextV2Tree(tree);
     const previousResources = this.currentResources;
+    const previousResolver = this.currentImageBytesResolver;
     this.currentResources = tree.resources;
+    this.currentImageBytesResolver = resolveImageBytes;
     const nodes = [tree.root];
     let work = 0;
     try {
@@ -839,22 +851,25 @@ export class CanvasKitLayerRenderer {
       }
     } finally {
       this.currentResources = previousResources;
+      this.currentImageBytesResolver = previousResolver;
     }
     const pending = [...this.pendingImageLoads.values()].map(load => load.promise);
     return pending.length === 0 ? null : Promise.all(pending).then(() => {});
   }
 
   renderPage(
-    tree: PageLayerTree,
+    inputTree: PageLayerTree | PageLayerTreeV2,
     targetCanvas: HTMLCanvasElement,
     scale: number,
     pageInfo?: PageInfo,
     resolveFontBytes?: FontBytesResolver,
     documentGeneration = 0,
+    resolveImageBytes?: (key: string) => Uint8Array | null,
   ): HTMLCanvasElement {
     if (this.disposed) {
       throw new Error('CanvasKit renderer가 이미 dispose되었습니다');
     }
+    this.syncDocumentGeneration(documentGeneration);
     this.unsupportedOps.clear();
     this.currentImageFailures.clear();
     this.currentFontSubstitutions.clear();
@@ -865,6 +880,7 @@ export class CanvasKitLayerRenderer {
     let renderedCanvas = targetCanvas;
     const renderStartedAt = performance.now();
     try {
+      const tree = normalizeTextV2Tree(inputTree);
       const pageExtent = { x: 0, y: 0, width: tree.pageWidth, height: tree.pageHeight };
       this.currentPageExtent = this.boundsAreDrawable(pageExtent) ? pageExtent : null;
       const surfaceTarget = this.surfaceCache.get(targetCanvas, () => {
@@ -877,6 +893,7 @@ export class CanvasKitLayerRenderer {
       renderedCanvas = surfaceTarget.canvas;
       const canvas = surface.getCanvas();
       this.currentResources = tree.resources;
+      this.currentImageBytesResolver = resolveImageBytes;
       this.currentFontResources = tree.fontResources;
       this.glyphRunFonts.registerResources(
         tree.fontResources,
@@ -897,14 +914,14 @@ export class CanvasKitLayerRenderer {
         ? `${this.currentTreeFingerprint}:${this.documentGeneration}:${this.localFontRevision}:${this.imageResourceRevision}:${JSON.stringify(this.glyphRunFonts.diagnostics())}`
         : null;
       if (this.currentTreeFingerprint) {
-        const fingerprints = this.treeFingerprints.get(tree) ?? new Set<string>();
+        const fingerprints = this.treeFingerprints.get(inputTree as PageLayerTree) ?? new Set<string>();
         if (!fingerprints.has(this.currentTreeFingerprint) && fingerprints.size >= 32) {
           const oldest = fingerprints.values().next().value!;
           this.staticPictures.deleteWhere((_key, entry) => entry.treeFingerprint === oldest);
           fingerprints.delete(oldest);
         }
         fingerprints.add(this.currentTreeFingerprint);
-        this.treeFingerprints.set(tree, fingerprints);
+        this.treeFingerprints.set(inputTree as PageLayerTree, fingerprints);
       }
       let hasPageBackground = false;
       const stack: LayerNode[] = [tree.root];
@@ -953,6 +970,7 @@ export class CanvasKitLayerRenderer {
       this.currentPictureContext = null;
       this.currentPageExtent = null;
       this.currentResources = undefined;
+      this.currentImageBytesResolver = undefined;
       this.currentFontResources = undefined;
       this.currentShowParagraphMarks = false;
       this.currentShowControlCodes = false;
@@ -963,14 +981,22 @@ export class CanvasKitLayerRenderer {
     return renderedCanvas;
   }
 
-  releaseLayerTree(tree: PageLayerTree): void {
-    const fingerprints = this.treeFingerprints.get(tree);
+  releaseLayerTree(tree: PageLayerTree | PageLayerTreeV2): void {
+    const fingerprints = this.treeFingerprints.get(tree as PageLayerTree);
     if (fingerprints) this.staticPictures.deleteWhere((_key, entry) => fingerprints.has(entry.treeFingerprint));
-    this.treeFingerprints.delete(tree);
+    this.treeFingerprints.delete(tree as PageLayerTree);
+  }
+
+  private syncDocumentGeneration(generation: number): void {
+    if (this.sourceDocumentGeneration !== undefined && this.sourceDocumentGeneration !== generation) {
+      this.resetDocumentResources();
+    }
+    this.sourceDocumentGeneration = generation;
   }
 
   resetDocumentResources(): void {
     this.documentGeneration += 1;
+    this.sourceDocumentGeneration = undefined;
     this.localFontPreparationEpoch += 1;
     this.localFontRevision += 1;
     this.surfaceCache.clear();
@@ -987,6 +1013,7 @@ export class CanvasKitLayerRenderer {
     this.svgGlyphPathCache.clear();
     this.svgGlyphParseFailures.clear();
     this.currentResources = undefined;
+    this.currentImageBytesResolver = undefined;
     this.currentFontResources = undefined;
     this.selectedTextVariantOps = new WeakSet<LayerPaintOp>();
     this.glyphRunFonts.clear();
@@ -1345,6 +1372,10 @@ export class CanvasKitLayerRenderer {
     for (const op of selected) {
       this.selectedTextVariantOps.add(op);
     }
+    const groups = new Set(node.ops.flatMap(op => 'variant' in op && op.variant?.equivalenceGroup
+      ? [op.variant.equivalenceGroup] : []));
+    for (const op of selected) if ('variant' in op && op.variant?.equivalenceGroup) groups.delete(op.variant.equivalenceGroup);
+    if (groups.size > 0) this.unsupportedOps.add('textVariant:noReplayableVariant');
   }
 
   private glyphRunVariantReplayable(op: LayerGlyphRunOp, canvas: SkCanvas): boolean {
@@ -1887,7 +1918,7 @@ export class CanvasKitLayerRenderer {
   }
 
   private renderImage(canvas: SkCanvas, op: LayerImageOp): void {
-    if (!op.base64 && op.imageRef === undefined) {
+    if (!op.base64 && op.imageRef === undefined && !op.sourceImageKey) {
       this.recordImageFailure(op, 'dataMissing', null);
       this.unsupportedOps.add('image:dataMissing');
       return;
@@ -4727,7 +4758,9 @@ export class CanvasKitLayerRenderer {
     let bytes: Uint8Array;
     try {
       const resource = resourceIndex === null ? undefined : this.currentResources?.images?.[resourceIndex];
-      const resolved = this.imageResourceBytes(resource ?? base64);
+      const sourceBytes = resource === undefined && !base64 && op.sourceImageKey
+        ? this.currentImageBytesResolver?.(op.sourceImageKey) : undefined;
+      const resolved = this.imageResourceBytes(resource ?? sourceBytes ?? base64);
       if (!resolved) {
         this.recordImageFailure(op, 'dataMissing', key);
         return null;

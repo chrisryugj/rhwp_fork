@@ -408,6 +408,8 @@ export class PageRenderer {
     if (this.backend !== 'canvaskit' || !this.canvaskitRenderer) return null;
     return this.canvaskitRenderer.preparePageResources(
       this.wasm.getPageLayerTreeObject(pageIdx, this.renderProfile),
+      key => this.wasm.getSourceImageBytes(key),
+      this.wasm.documentGeneration,
     );
   }
 
@@ -448,6 +450,7 @@ export class PageRenderer {
         pageInfo,
         key => this.wasm.getSourceFontBytes(key),
         this.wasm.documentGeneration,
+        key => this.wasm.getSourceImageBytes(key),
       );
       this.canvaskitDiagnosticsByPage.set(pageIdx, this.canvaskitRenderer.diagnostics());
       this.cancelReRender(pageIdx);
