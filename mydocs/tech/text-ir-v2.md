@@ -498,3 +498,12 @@ lossless compatibility downgrade에 한정한다. 새 font SVG producer 검사�
 
 hot boundary 등록 검사를 보완했다. rustfmt·정적 API 대조는 완료했으며 wasm32 빌드와 fresh
 WASM의 실제 object·편집 무효화 검사는 아직 실행하지 않았다. 직렬화 비용 감소를 주장하지 않는다.
+
+## P45 이관: COLRv0 producer helper
+
+`decode_colrv0_color_layers_payload`는 bounded COLR/CPAL 테이블에서 확정된 path·색상을 만들고
+CPAL digest를 resource identity에 포함한다. 전경색 palette entry, 선택 face와 palette, source
+범위를 검증하며 font 32 MiB, layer 256개, 전체 path command 65536개를 상한으로 둔다.
+이 helper는 일반 문서 lowerer에 자동 연결되어 있지 않다. 정상 문서의 COLRv0 출력 지원 완료를
+뜻하지 않는다. 합성 font producer 검사 패치는 독립 한컴 PDF 증거를 확보할 때까지 별도 보존하며,
+현재 source 확인·rustfmt 외 빌드와 출력 검증은 미실행이다.

@@ -8,6 +8,7 @@ pub(crate) const MAX_GLYPH_FONT_SIZE_PX: f64 = 4096.0;
 pub(crate) const MAX_PORTABLE_GLYPHS_PER_RUN: usize = 4096;
 
 pub mod builder;
+pub mod color_glyph;
 pub mod font;
 pub mod font_glyph;
 mod json;
@@ -27,6 +28,10 @@ mod text_v2_slots;
 pub mod text_variants;
 
 pub use builder::LayerBuilder;
+pub use color_glyph::{
+    decode_colrv0_color_layers_payload, Colrv0ColorLayersDecodeError,
+    Colrv0ColorLayersDecodeOptions,
+};
 pub use font::{
     BinaryResourceKind, BinaryResourceRef, FontBlobKey, FontBlobResource, FontDigest,
     FontExternalRef, FontFaceKey, FontFaceResource, FontFallbackPolicyId, FontInstanceKey,
