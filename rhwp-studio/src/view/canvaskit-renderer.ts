@@ -1938,14 +1938,37 @@ export class CanvasKitLayerRenderer {
       this.unsupportedOps.add('glyphRun:replayInvariant');
       return;
     }
-    const paint = this.makeFillPaint(op.paintStyle.color ?? '#000000');
+    const style = op.paintStyle;
+    const paint = this.makeFillPaint(style.color ?? '#000000');
+    const effects: SkPaint[] = [];
+    const draw = (current: SkPaint, x = 0, y = 0) => {
+      if (!drawCanvasKitGlyphRun(canvas, op, font, current, x, y)) throw new Error('glyphRun:replayFailed');
+    };
+    const effectPaint = (color: string) => {
+      const effect = this.makeFillPaint(color); effects.push(effect); return effect;
+    };
     try {
-      if (drawCanvasKitGlyphRun(canvas, op, font, paint)) {
-        this.currentReplayFeatureCounts.glyphRuns += 1;
+      const size = style.fontSize ?? op.shapeKey.fontInstance.sizePx;
+      if (style.emboss || style.engrave) {
+        const offset = Math.max(size / 20, 1);
+        draw(effectPaint(style.emboss ? '#ffffff' : '#808080'), -offset, -offset);
+        draw(effectPaint(style.emboss ? '#808080' : '#ffffff'), offset, offset);
+        draw(paint);
       } else {
-        this.unsupportedOps.add('glyphRun:replayFailed');
+        if ((style.shadowType ?? 0) > 0) {
+          draw(effectPaint(style.shadowColor || '#000000'), style.shadowOffsetX ?? 0, style.shadowOffsetY ?? 0);
+        }
+        if ((style.outlineType ?? 0) > 0) {
+          const stroke = this.makeStrokePaint(style.color ?? '#000000', Math.max(size / 25, 0.5));
+          effects.push(stroke); stroke.setStrokeJoin(this.canvasKit.StrokeJoin.Round);
+          draw(effectPaint('#ffffff')); draw(stroke);
+        } else draw(paint);
       }
+      this.currentReplayFeatureCounts.glyphRuns += 1;
+    } catch {
+      this.unsupportedOps.add('glyphRun:replayFailed');
     } finally {
+      for (const effect of effects) effect.delete();
       paint.delete?.();
     }
   }
