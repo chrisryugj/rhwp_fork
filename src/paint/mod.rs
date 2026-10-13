@@ -93,7 +93,8 @@ pub use text_v2::{
     TextV2SlotDiagnostic, TextV2ValidationIssue, TextV2ValidationSeverity, TextV2VariantDiagnostic,
 };
 pub use text_v2_slots::{
-    LayerTextPaintOpV2, LayerTextVariantPart, LayerTextVariantSet, TextFallbackPolicy,
+    downgrade_text_v2_op_to_v1_compat, LayerTextPaintOpV2, LayerTextVariantPart,
+    LayerTextVariantSet, TextFallbackPolicy,
 };
 pub use text_variants::{
     text_visual_replay_role, validate_text_variant_scope, TextVariantScopeError,
