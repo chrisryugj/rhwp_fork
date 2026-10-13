@@ -376,8 +376,10 @@ test('CanvasKit and comparison canvas bitmap extents preserve fractional page ed
   const pageRenderer = readFileSync(new URL('../src/view/page-renderer.ts', import.meta.url), 'utf8');
   const compareResult = readFileSync(new URL('../src/ui/compare-result-window.ts', import.meta.url), 'utf8');
 
-  assert.match(pageRenderer, /canvas\.width\s*=\s*Math\.max\(1,\s*Math\.ceil\(pageInfo\.width \* renderScale\)\)/);
-  assert.match(pageRenderer, /canvas\.height\s*=\s*Math\.max\(1,\s*Math\.ceil\(pageInfo\.height \* renderScale\)\)/);
+  assert.match(pageRenderer, /const width\s*=\s*Math\.max\(1,\s*Math\.ceil\(pageInfo\.width \* renderScale\)\)/);
+  assert.match(pageRenderer, /const height\s*=\s*Math\.max\(1,\s*Math\.ceil\(pageInfo\.height \* renderScale\)\)/);
+  assert.match(pageRenderer, /if \(canvas\.width !== width\) canvas\.width = width/);
+  assert.match(pageRenderer, /if \(canvas\.height !== height\) canvas\.height = height/);
   assert.match(compareResult, /canvas\.width\s*=\s*Math\.max\(1,\s*Math\.ceil\(info\.width \* scale\)\)/);
   assert.match(compareResult, /canvas\.height\s*=\s*Math\.max\(1,\s*Math\.ceil\(info\.height \* scale\)\)/);
 });

@@ -15,6 +15,8 @@ export function parseSvgImageHeader(bytes: Uint8Array): EncodedImageHeader | nul
   if (source.charCodeAt(0) === 0xfeff) {
     source = source.slice(1);
   }
+  source = source.replace(/<!--[\s\S]*?-->/g, '');
+  if (source.includes('<!--') || /<\?(?!xml\s)/i.test(source)) return null;
   let elements = 0;
   let depth = 0;
   for (const tag of source.matchAll(/<\s*(\/?)\s*[A-Za-z_][^>]*>/g)) {
@@ -29,7 +31,7 @@ export function parseSvgImageHeader(bytes: Uint8Array): EncodedImageHeader | nul
   if (source.toLowerCase().includes('<!doctype')
     || /<(?:[\w.-]+:)?(?:script|animate\w*|set|foreignObject|image|feImage)\b/i.test(source)
     || /\bon\w+\s*=/i.test(source)
-    || /@import|<!ENTITY/i.test(source)
+    || /@|\/\*|&|<!ENTITY/i.test(source)
     // CSS escapes / XML character references can hide url(), @import or a URI scheme.
     // The producer emits literal paths/colors; reject these spellings before browser decoding.
     || /\\|&#|\bxml:base\s*=/i.test(source)

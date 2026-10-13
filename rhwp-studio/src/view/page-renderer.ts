@@ -435,8 +435,10 @@ export class PageRenderer {
       // WASM Canvas2D 경로와 같은 bitmap 경계 규칙을 쓴다. A4처럼 분수 CSS px인
       // 페이지를 절사하면 CanvasKit 쪽만 우·하단 한 줄이 빠져 backend parity가
       // 깨진다. 콘텐츠 좌표의 scale은 유지하고 bitmap 크기만 올림한다.
-      canvas.width = Math.max(1, Math.ceil(pageInfo.width * renderScale));
-      canvas.height = Math.max(1, Math.ceil(pageInfo.height * renderScale));
+      const width = Math.max(1, Math.ceil(pageInfo.width * renderScale));
+      const height = Math.max(1, Math.ceil(pageInfo.height * renderScale));
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
       const tree = this.wasm.getPageLayerTreeObject(pageIdx, this.renderProfile);
       renderStarted = true;
       const renderedCanvas = this.canvaskitRenderer.renderPage(

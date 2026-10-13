@@ -1058,6 +1058,8 @@ export type LayerNode = LayerGroupNode | LayerClipNode | LayerLeafNode;
 export interface LayerGroupNode {
   kind: 'group';
   bounds: LayerBounds;
+  /** Conservative ink estimate; logical bounds remain independent. */
+  visualBounds?: LayerBounds;
   layer?: LayerInfo;
   groupKind?: { kind: string; [key: string]: unknown };
   cacheHint?: LayerCacheHint;
@@ -1067,6 +1069,7 @@ export interface LayerGroupNode {
 export interface LayerClipNode {
   kind: 'clipRect';
   bounds: LayerBounds;
+  visualBounds?: LayerBounds;
   layer?: LayerInfo;
   clip: LayerBounds;
   clipKind: 'body' | 'tableCell' | 'textBox' | 'generic';
@@ -1076,6 +1079,7 @@ export interface LayerClipNode {
 export interface LayerLeafNode {
   kind: 'leaf';
   bounds: LayerBounds;
+  visualBounds?: LayerBounds;
   layer?: LayerInfo;
   ops: LayerPaintOp[];
 }

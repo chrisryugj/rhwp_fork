@@ -14,7 +14,10 @@ import type {
   PathBuilder,
   Rect,
   Surface,
+  SkPicture,
+  TextBlob,
   Typeface,
+  WebGPUDeviceContext,
 } from 'canvaskit-wasm';
 import canvaskitWasmUrl from '@/view/canvaskit-wasm-url';
 
@@ -121,6 +124,9 @@ import { readBoundedResponseArrayBuffer } from './canvaskit/bounded-response';
 import { localFontFaceStyle } from './canvaskit/local-font-style';
 import { canvasKitImageEffectKey, makeCanvasKitEffectImage } from './canvaskit/image-effects';
 import { decodeBrowserImage } from './canvaskit/browser-image-decoder';
+import { BoundedNativeCache } from './canvaskit/bounded-native-cache';
+import { replayFingerprint } from './canvaskit/replay-fingerprint';
+import { CanvasKitSurfaceCache } from './canvaskit/surface-cache';
 
 type CanvasKitApi = CanvasKit;
 type SkCanvas = Canvas;
@@ -164,6 +170,7 @@ type LayerColorGraphNode = NonNullable<LayerColorGraph['nodes']>[number];
 interface CanvasKitSurfaceTarget {
   surface: SkSurface;
   canvas: HTMLCanvasElement;
+  releaseContext?: () => void;
 }
 
 interface CanvasKitLocalTypeface {
@@ -246,7 +253,19 @@ export interface CanvasKitRenderDiagnostics {
   pendingImageLoads: number;
   mode: CanvasKitRenderMode;
   surfacePreference: CanvasKitSurfacePreference;
-  surfaceBackend: 'default' | 'software' | null;
+  surfaceBackend: 'default' | 'software' | 'webgpu' | null;
+  surfaceCreated: number;
+  surfaceReused: number;
+  staticPictureCacheEntries: number;
+  staticPictureCacheBytes: number;
+  staticPictureCacheHits: number;
+  staticPictureCacheMisses: number;
+  staticPictureCacheEvictions: number;
+  textBlobCacheEntries: number;
+  textBlobCacheBytes: number;
+  textBlobCacheHits: number;
+  textBlobCacheMisses: number;
+  fallbackFamilyCacheEntries: number;
   surfaceFallbackReason: string | null;
   lastRenderCompleted: boolean;
   lastUnsupportedOps: string[];
@@ -316,6 +335,19 @@ export interface CanvasKitImageFailureDiagnostic {
   reason: CanvasKitImageFailureReason;
 }
 
+interface StaticPictureDiagnostics {
+  unsupported: string[];
+  images: Array<[string, CanvasKitImageFailureDiagnostic]>;
+  substitutions: CanvasKitFontSubstitutionDiagnostic[];
+  features: CanvasKitReplayFeatureCounts;
+}
+
+interface StaticPictureEntry {
+  picture: SkPicture;
+  treeFingerprint: string;
+  diagnostics: StaticPictureDiagnostics;
+}
+
 export type CanvasKitReadinessBlocker =
   | 'renderNotCompleted'
   | 'renderError'
@@ -346,6 +378,20 @@ export class CanvasKitLayerRenderer {
   private static readonly MAX_BUNDLED_FONT_BYTES = 32 * 1024 * 1024;
 
   private readonly imageCache = new Map<string, { image: SkImage; pixels: number }>();
+  private readonly surfaceCache = new CanvasKitSurfaceCache();
+  private readonly staticPictures = new BoundedNativeCache<StaticPictureEntry>(32, 64 * 1024 * 1024, entry => entry.picture.delete());
+  private readonly textBlobs = new BoundedNativeCache<TextBlob>(2048, 8 * 1024 * 1024, blob => blob.delete());
+  private readonly failedTextBlobKeys = new Set<string>();
+  private readonly typefaceIds = new WeakMap<Typeface, number>();
+  private readonly fontTypefaceIds = new WeakMap<Font, number>();
+  private nextTypefaceId = 1;
+  private readonly fallbackFamilyCache = new Map<string, CanvasKitLocalTypeface | null>();
+  private readonly treeFingerprints = new WeakMap<PageLayerTree, Set<string>>();
+  private currentTreeFingerprint: string | null = null;
+  private currentPictureContext: string | null = null;
+  private currentPageExtent: LayerBounds | null = null;
+  private recordingStaticPicture = false;
+  private imageResourceRevision = 0;
   private readonly imageDecodeFailures = new Map<string, CanvasKitImageFailureReason>();
   private readonly pendingImageLoads = new Map<string, { promise: Promise<void>; cancel(): void }>();
   private readonly currentImageFailures = new Map<string, CanvasKitImageFailureDiagnostic>();
@@ -364,7 +410,7 @@ export class CanvasKitLayerRenderer {
   private readonly bundledFontRequests = new Set<AbortController>();
   private readonly glyphRunFonts: CanvasKitGlyphRunFontCache;
   private readonly unsupportedOps = new Set<string>();
-  private surfaceBackend: 'default' | 'software' | null = null;
+  private surfaceBackend: 'default' | 'software' | 'webgpu' | null = null;
   private surfaceFallbackReason: string | null = null;
   private lastRenderError: string | null = null;
   private lastRenderCompleted = false;
@@ -403,8 +449,18 @@ export class CanvasKitLayerRenderer {
     private readonly oldHangulTypeface: CanvasKitLocalTypeface | null = null,
     private readonly oldHangulFontUrl: string = 'fonts/SourceHanSerifK-OldHangul-subset.woff2',
     private readonly defaultFontBytes?: ArrayBuffer,
+    private readonly webgpuDeviceContext: WebGPUDeviceContext | null = null,
+    private readonly webgpuDevice: GPUDevice | null = null,
+    private readonly webgpuInitFailure: string | null = null,
   ) {
     this.glyphRunFonts = new CanvasKitGlyphRunFontCache(canvasKit);
+    void this.webgpuDevice?.lost.then(() => {
+      if (this.disposed) return;
+      this.surfaceCache.clear();
+      this.staticPictures.clear();
+      this.surfaceFallbackReason = 'webgpuDeviceLost';
+      this.lastRenderCompleted = false;
+    });
   }
 
   static async create(
@@ -418,6 +474,28 @@ export class CanvasKitLayerRenderer {
     const resolvedSurfaceRequest = typeof surfaceRequest === 'string'
       ? { ...DEFAULT_CANVASKIT_SURFACE_REQUEST, preference: surfaceRequest, requested: surfaceRequest }
       : surfaceRequest;
+    let webgpuDeviceContext: WebGPUDeviceContext | null = null;
+    let webgpuDevice: GPUDevice | null = null;
+    let webgpuInitFailure: string | null = null;
+    if (resolvedSurfaceRequest.preference === 'webgpu') {
+      const gpu = typeof navigator === 'undefined' ? undefined : navigator.gpu;
+      if (!(canvasKit as CanvasKit & { webgpu?: boolean }).webgpu || typeof canvasKit.MakeGPUDeviceContext !== 'function') {
+        webgpuInitFailure = 'webgpuBuildUnavailable';
+      } else if (!gpu) webgpuInitFailure = 'webgpuNavigatorUnavailable';
+      else {
+        try {
+          const adapter = await gpu.requestAdapter();
+          if (!adapter) throw new Error('webgpuAdapterUnavailable');
+          webgpuDevice = await adapter.requestDevice();
+          webgpuDeviceContext = canvasKit.MakeGPUDeviceContext(webgpuDevice);
+          if (!webgpuDeviceContext) throw new Error('webgpuDeviceContextUnavailable');
+        } catch (error) {
+          webgpuDevice?.destroy();
+          webgpuDevice = null;
+          webgpuInitFailure = error instanceof Error ? error.message : String(error);
+        }
+      }
+    }
     // 기본 Noto는 local face가 없거나 등록에 실패한 text run의 안정적인 CJK fallback이다.
     let defaultTypeface: Typeface | null = null;
     let defaultFontBytes: ArrayBuffer | undefined;
@@ -502,6 +580,9 @@ export class CanvasKitLayerRenderer {
       oldHangulTypeface,
       oldHangulFontUrl,
       defaultFontBytes,
+      webgpuDeviceContext,
+      webgpuDevice,
+      webgpuInitFailure,
     );
   }
 
@@ -564,6 +645,7 @@ export class CanvasKitLayerRenderer {
             : source.aliases[0];
           prepared = { bytes, typeface, fontManager, fontFamily };
           this.bundledTypefaces.set(source.url, prepared);
+          this.invalidateFontCaches();
           registered += 1;
           typeface = null;
           fontManager = null;
@@ -588,6 +670,7 @@ export class CanvasKitLayerRenderer {
             this.bundledTypefaceAliases.set(key, faces);
             this.bundledFontFamilies.get(key)?.dispose();
             this.bundledFontFamilies.delete(key);
+            this.invalidateFontCaches();
           }
         }
       }
@@ -642,7 +725,7 @@ export class CanvasKitLayerRenderer {
         }
         const bytesDigest = Array.from(blake3(new Uint8Array(bytes))).join(',');
         if (previous?.bytesDigest === bytesDigest) {
-          if (JSON.stringify(previous.record) !== JSON.stringify(record)) this.localFontRevision += 1;
+          if (JSON.stringify(previous.record) !== JSON.stringify(record)) this.invalidateFontCaches();
           previous.record = record;
           continue;
         }
@@ -662,7 +745,7 @@ export class CanvasKitLayerRenderer {
           this.localTypefaces.set(faceKey, { typeface, fontManager, fontFamily, record, bytesDigest });
           previous?.typeface?.delete?.();
           previous?.fontManager?.delete?.();
-          this.localFontRevision += 1;
+          this.invalidateFontCaches();
           registered += 1;
         } catch (error) {
           typeface?.delete?.();
@@ -679,7 +762,7 @@ export class CanvasKitLayerRenderer {
           previous.typeface?.delete?.();
           previous.fontManager?.delete?.();
           this.localTypefaces.delete(faceKey);
-          this.localFontRevision += 1;
+          this.invalidateFontCaches();
         }
       }
     } finally {
@@ -722,7 +805,7 @@ export class CanvasKitLayerRenderer {
           this.localTypefaces.set(key, { typeface, fontManager,
             fontFamily: fontManager && fontManager.countFamilies() > 0 ? fontManager.getFamilyName(0) : record.family,
             hostFace: record.hostReference.face, record, bytes: bytes.slice(0) });
-          this.localFontRevision += 1;
+          this.invalidateFontCaches();
           registered++;
         } catch (error) {
           typeface?.delete?.(); fontManager?.delete?.();
@@ -782,7 +865,14 @@ export class CanvasKitLayerRenderer {
     let renderedCanvas = targetCanvas;
     const renderStartedAt = performance.now();
     try {
-      const surfaceTarget = this.makeSurface(targetCanvas);
+      const pageExtent = { x: 0, y: 0, width: tree.pageWidth, height: tree.pageHeight };
+      this.currentPageExtent = this.boundsAreDrawable(pageExtent) ? pageExtent : null;
+      const surfaceTarget = this.surfaceCache.get(targetCanvas, () => {
+        const created = this.makeSurface(targetCanvas);
+        return { ...created, backend: this.surfaceBackend ?? 'software', fallbackReason: this.surfaceFallbackReason };
+      });
+      this.surfaceBackend = surfaceTarget.backend;
+      this.surfaceFallbackReason = surfaceTarget.fallbackReason;
       surface = surfaceTarget.surface;
       renderedCanvas = surfaceTarget.canvas;
       const canvas = surface.getCanvas();
@@ -802,6 +892,20 @@ export class CanvasKitLayerRenderer {
       );
       this.selectedTextVariantOps = new WeakSet<LayerPaintOp>();
       this.selectTextVariants(tree.root, canvas);
+      this.currentTreeFingerprint = replayFingerprint(tree);
+      this.currentPictureContext = this.currentTreeFingerprint
+        ? `${this.currentTreeFingerprint}:${this.documentGeneration}:${this.localFontRevision}:${this.imageResourceRevision}:${JSON.stringify(this.glyphRunFonts.diagnostics())}`
+        : null;
+      if (this.currentTreeFingerprint) {
+        const fingerprints = this.treeFingerprints.get(tree) ?? new Set<string>();
+        if (!fingerprints.has(this.currentTreeFingerprint) && fingerprints.size >= 32) {
+          const oldest = fingerprints.values().next().value!;
+          this.staticPictures.deleteWhere((_key, entry) => entry.treeFingerprint === oldest);
+          fingerprints.delete(oldest);
+        }
+        fingerprints.add(this.currentTreeFingerprint);
+        this.treeFingerprints.set(tree, fingerprints);
+      }
       let hasPageBackground = false;
       const stack: LayerNode[] = [tree.root];
       while (stack.length > 0 && !hasPageBackground) {
@@ -841,10 +945,13 @@ export class CanvasKitLayerRenderer {
       surface.flush();
       this.lastRenderCompleted = true;
     } catch (error) {
+      this.surfaceCache.clear();
       this.recordRenderFailure(error);
       throw error;
     } finally {
-      surface?.delete();
+      this.currentTreeFingerprint = null;
+      this.currentPictureContext = null;
+      this.currentPageExtent = null;
       this.currentResources = undefined;
       this.currentFontResources = undefined;
       this.currentShowParagraphMarks = false;
@@ -856,14 +963,22 @@ export class CanvasKitLayerRenderer {
     return renderedCanvas;
   }
 
-  releaseLayerTree(_tree: PageLayerTree): void {
-    /* Per-tree native picture interning is not implemented yet. */
+  releaseLayerTree(tree: PageLayerTree): void {
+    const fingerprints = this.treeFingerprints.get(tree);
+    if (fingerprints) this.staticPictures.deleteWhere((_key, entry) => fingerprints.has(entry.treeFingerprint));
+    this.treeFingerprints.delete(tree);
   }
 
   resetDocumentResources(): void {
     this.documentGeneration += 1;
     this.localFontPreparationEpoch += 1;
     this.localFontRevision += 1;
+    this.surfaceCache.clear();
+    this.staticPictures.clear(true);
+    this.textBlobs.clear(true);
+    this.failedTextBlobKeys.clear();
+    this.fallbackFamilyCache.clear();
+    this.imageResourceRevision += 1;
     this.cancelDocumentPreparation();
     for (const entry of this.imageCache.values()) entry.image?.delete?.();
     this.imageCache.clear();
@@ -929,6 +1044,18 @@ export class CanvasKitLayerRenderer {
     if (this.localTypefacePending.size > 0) readinessBlockers.push('localFontsPending');
     if (this.pendingImageLoads.size > 0) readinessBlockers.push('imageReplayFailure');
     return {
+      surfaceCreated: this.surfaceCache.created,
+      surfaceReused: this.surfaceCache.reused,
+      staticPictureCacheEntries: this.staticPictures.size,
+      staticPictureCacheBytes: this.staticPictures.bytes,
+      staticPictureCacheHits: this.staticPictures.hits,
+      staticPictureCacheMisses: this.staticPictures.misses,
+      staticPictureCacheEvictions: this.staticPictures.evictions,
+      textBlobCacheEntries: this.textBlobs.size,
+      textBlobCacheBytes: this.textBlobs.bytes,
+      textBlobCacheHits: this.textBlobs.hits,
+      textBlobCacheMisses: this.textBlobs.misses,
+      fallbackFamilyCacheEntries: this.fallbackFamilyCache.size,
       pendingImageLoads: this.pendingImageLoads.size,
       mode: this.renderMode,
       surfacePreference: this.surfaceRequest.preference,
@@ -1034,7 +1161,7 @@ export class CanvasKitLayerRenderer {
     const codePointCount = Array.from(character).length;
     const observe = (typeface: Typeface | null, family: string, source: NonNullable<CanvasKitFontDecisionEvidence['source']>) => {
       if (!typeface || codePointCount !== 1) return null;
-      const font = new this.canvasKit.Font(typeface, 16);
+      const font = this.makeFont(typeface, 16);
       try {
         return (font.getGlyphIDs(character, 1)[0] ?? 0) !== 0
           ? { family, source }
@@ -1114,6 +1241,8 @@ export class CanvasKitLayerRenderer {
     this.defaultFontManager?.delete();
     this.oldHangulTypeface?.typeface?.delete?.();
     this.oldHangulTypeface?.fontManager?.delete?.();
+    this.webgpuDeviceContext?.delete();
+    this.webgpuDevice?.destroy();
   }
 
   private makeSurface(
@@ -1121,8 +1250,20 @@ export class CanvasKitLayerRenderer {
   ): CanvasKitSurfaceTarget {
     this.surfaceBackend = null;
     this.surfaceFallbackReason = this.surfaceRequest.unsupportedReason ?? null;
-    if (this.surfaceRequest.preference === 'webgpu' && this.surfaceFallbackReason === null) {
-      this.surfaceFallbackReason = 'webgpuSurfaceUnsupported';
+    if (this.surfaceRequest.preference === 'webgpu') {
+      this.surfaceFallbackReason ??= this.webgpuInitFailure;
+      if (this.webgpuDeviceContext) {
+        let context: ReturnType<typeof this.canvasKit.MakeGPUCanvasContext> | null = null;
+        try {
+          context = this.canvasKit.MakeGPUCanvasContext(this.webgpuDeviceContext, targetCanvas);
+          const surface = context && this.canvasKit.MakeGPUCanvasSurface(context, this.canvasKit.ColorSpace.SRGB, targetCanvas.width, targetCanvas.height);
+          if (surface) {
+            this.surfaceBackend = 'webgpu';
+            return { surface, canvas: targetCanvas };
+          }
+          this.surfaceFallbackReason = 'webgpuSurfaceUnavailable';
+        } catch { this.surfaceFallbackReason = 'webgpuSurfaceCreationFailed'; }
+      } else this.surfaceFallbackReason ??= 'webgpuSurfaceUnsupported';
     }
     const reuseSoftwareFallbackCanvas = targetCanvas.classList.contains('ck-replaced');
     if (this.surfaceRequest.preference === 'software' || reuseSoftwareFallbackCanvas) {
@@ -1307,31 +1448,34 @@ export class CanvasKitLayerRenderer {
     ) {
       return null;
     }
-    const cached = this.svgGlyphPathCache.get(resourceKey);
+    const currentColor = op.paintStyle?.color ?? '#000000';
+    if (currentColor.length > 256) return null;
+    const svgCacheKey = `${resourceKey}:${currentColor}`;
+    const cached = this.svgGlyphPathCache.get(svgCacheKey);
     if (cached) {
-      this.svgGlyphPathCache.delete(resourceKey);
-      this.svgGlyphPathCache.set(resourceKey, cached);
+      this.svgGlyphPathCache.delete(svgCacheKey);
+      this.svgGlyphPathCache.set(svgCacheKey, cached);
       return cached;
     }
-    if (this.svgGlyphParseFailures.has(resourceKey)) return null;
+    if (this.svgGlyphParseFailures.has(svgCacheKey)) return null;
 
-    const layers = parseStaticSvgPathLayers(fragment, op.paintStyle?.color ?? '#000000');
+    const layers = parseStaticSvgPathLayers(fragment, currentColor);
     if (layers.length === 0) {
-      this.rememberSvgGlyphParseFailure(resourceKey);
+      this.rememberSvgGlyphParseFailure(svgCacheKey);
       return null;
     }
     if (!staticSvgPathLayersAreReplayable(
       layers,
       pathData => this.canvasKit.Path.MakeFromSVGString(pathData),
     )) {
-      this.rememberSvgGlyphParseFailure(resourceKey);
+      this.rememberSvgGlyphParseFailure(svgCacheKey);
       return null;
     }
     if (this.svgGlyphPathCache.size >= CanvasKitLayerRenderer.MAX_SVG_GLYPH_CACHE_ENTRIES) {
       const oldestKey = this.svgGlyphPathCache.keys().next().value as string | undefined;
       if (oldestKey !== undefined) this.svgGlyphPathCache.delete(oldestKey);
     }
-    this.svgGlyphPathCache.set(resourceKey, layers);
+    this.svgGlyphPathCache.set(svgCacheKey, layers);
     return layers;
   }
 
@@ -1352,6 +1496,56 @@ export class CanvasKitLayerRenderer {
   ): void {
     const activeLayer = node.layer ?? inheritedLayer;
     if (node.kind === 'group') {
+      const recordingBounds = this.staticPictureBounds(node);
+      if (!this.recordingStaticPicture && this.currentPictureContext && this.currentTreeFingerprint
+        && (node.cacheHint === 'staticSubtree' || node.cacheHint === 'preferVectorRecording')
+        && recordingBounds) {
+        const nodeKey = replayFingerprint([node, activeLayer]);
+        if (nodeKey) {
+          const key = `${this.currentPictureContext}:${profile}:${replayPlane}:${nodeKey}`;
+          const cached = this.staticPictures.get(key);
+          if (cached) {
+            canvas.drawPicture(cached.picture);
+            this.restoreStaticPictureDiagnostics(cached.diagnostics);
+            return;
+          }
+          const recorder = new this.canvasKit.PictureRecorder();
+          let picture: SkPicture | null = null;
+          let finished = false;
+          const before = { ...this.currentReplayFeatureCounts };
+          this.recordingStaticPicture = true;
+          try {
+            const recording = recorder.beginRecording(this.rect(recordingBounds));
+            for (const child of node.children) this.renderNode(recording, child, profile, replayPlane, activeLayer);
+            picture = recorder.finishRecordingAsPicture();
+            finished = true;
+            canvas.drawPicture(picture);
+            const metadata: StaticPictureDiagnostics = {
+              unsupported: [...this.unsupportedOps],
+              images: [...this.currentImageFailures],
+              substitutions: [...this.currentFontSubstitutions.values()],
+              features: {
+                dashedStrokes: this.currentReplayFeatureCounts.dashedStrokes - before.dashedStrokes,
+                glyphRuns: this.currentReplayFeatureCounts.glyphRuns - before.glyphRuns,
+                verticalPresentationPunctuation: this.currentReplayFeatureCounts.verticalPresentationPunctuation - before.verticalPresentationPunctuation,
+                verticalTextRuns: this.currentReplayFeatureCounts.verticalTextRuns - before.verticalTextRuns,
+              },
+            };
+            // SkPicture's own estimate excludes retained images/fonts, so charge those as well.
+            const bytes = Math.ceil(picture.approximateBytesUsed() + this.imageCachePixels * 4 + this.glyphRunFonts.diagnostics().bytes);
+            if (this.pendingImageLoads.size === 0 && this.localTypefacePending.size === 0
+              && this.staticPictures.set(key, { picture, treeFingerprint: this.currentTreeFingerprint, diagnostics: metadata }, bytes)) {
+              picture = null;
+            }
+          } finally {
+            this.recordingStaticPicture = false;
+            if (!finished) { try { picture = recorder.finishRecordingAsPicture(); } catch { /* failed recording */ } }
+            picture?.delete();
+            recorder.delete();
+          }
+          return;
+        }
+      }
       for (const child of node.children) {
         this.renderNode(canvas, child, profile, replayPlane, activeLayer);
       }
@@ -1366,6 +1560,30 @@ export class CanvasKitLayerRenderer {
       return;
     }
     this.renderLeaf(canvas, node, profile, replayPlane, activeLayer);
+  }
+
+  private staticPictureBounds(node: LayerNode): LayerBounds | null {
+    const page = this.currentPageExtent;
+    if (!page) return null;
+    const visual = node.visualBounds;
+    // Font-size-derived ink estimates are not proof of every glyph's outline.
+    // Always retain the page extent, including legacy trees without visualBounds.
+    if (!visual || !this.boundsAreDrawable(visual)) return page;
+    const x = Math.min(page.x, visual.x), y = Math.min(page.y, visual.y);
+    const width = Math.max(page.x + page.width, visual.x + visual.width) - x;
+    const height = Math.max(page.y + page.height, visual.y + visual.height) - y;
+    const union = { x, y, width, height };
+    return this.boundsAreDrawable(union) ? union : page;
+  }
+
+  private restoreStaticPictureDiagnostics(diagnostics: StaticPictureDiagnostics): void {
+    for (const op of diagnostics.unsupported) this.unsupportedOps.add(op);
+    for (const [key, failure] of diagnostics.images) this.currentImageFailures.set(key, failure);
+    for (const substitution of diagnostics.substitutions) this.recordFontSubstitution(substitution);
+    this.currentReplayFeatureCounts.dashedStrokes += diagnostics.features.dashedStrokes;
+    this.currentReplayFeatureCounts.glyphRuns += diagnostics.features.glyphRuns;
+    this.currentReplayFeatureCounts.verticalPresentationPunctuation += diagnostics.features.verticalPresentationPunctuation;
+    this.currentReplayFeatureCounts.verticalTextRuns += diagnostics.features.verticalTextRuns;
   }
 
   private renderClipNode(
@@ -2417,7 +2635,7 @@ export class CanvasKitLayerRenderer {
           adjustable.setSkewX?.((selected?.syntheticStyle?.italic ?? (style.italic === true && !physicalItalic)) ? -0.2 : 0);
           adjustable.setScaleX?.(ratio);
         };
-        font = new this.canvasKit.Font(typeface, fontSize);
+        font = this.makeFont(typeface, fontSize);
         adjustFont(font);
         const candidateFonts = [font];
         const candidateFontSources: CanvasKitFontSubstitutionDiagnostic['source'][] = [
@@ -2438,7 +2656,7 @@ export class CanvasKitLayerRenderer {
           if (primaryGlyphIds.some(glyphId => glyphId === 0)
             && this.defaultTypeface !== null
             && typeface !== this.defaultTypeface) {
-            const defaultFont = new this.canvasKit.Font(this.defaultTypeface, fontSize);
+            const defaultFont = this.makeFont(this.defaultTypeface, fontSize);
             adjustFont(defaultFont, null);
             fallbackFonts.push(defaultFont);
             candidateFonts.push(defaultFont);
@@ -2450,7 +2668,7 @@ export class CanvasKitLayerRenderer {
             && this.symbolFallbackTypeface !== null
             && typeface !== this.symbolFallbackTypeface
             && this.defaultTypeface !== this.symbolFallbackTypeface) {
-            const symbolFont = new this.canvasKit.Font(this.symbolFallbackTypeface, fontSize);
+            const symbolFont = this.makeFont(this.symbolFallbackTypeface, fontSize);
             adjustFont(symbolFont, null);
             fallbackFonts.push(symbolFont);
             candidateFonts.push(symbolFont);
@@ -2534,7 +2752,7 @@ export class CanvasKitLayerRenderer {
             try {
               canvas.translate(targetCenterX + offsetX, targetCenterY + offsetY);
               canvas.rotate(90, 0, 0);
-              canvas.drawText(
+              this.drawCachedText(canvas,
                 verticalPresentationText,
                 -(left + right) / 2,
                 -(top + bottom) / 2,
@@ -2542,7 +2760,7 @@ export class CanvasKitLayerRenderer {
                 selectedFont,
               );
               if (strokePaint) {
-                canvas.drawText(
+                this.drawCachedText(canvas,
                   verticalPresentationText,
                   -(left + right) / 2,
                   -(top + bottom) / 2,
@@ -2558,9 +2776,9 @@ export class CanvasKitLayerRenderer {
 
           if (!hasLayoutPositions) {
             const y = originY + baselineShift + offsetY;
-            canvas.drawText(glyphReplayText, originX + offsetX, y, fillPaint, font!);
+            this.drawCachedText(canvas, glyphReplayText, originX + offsetX, y, fillPaint, font!);
             if (strokePaint) {
-              canvas.drawText(glyphReplayText, originX + offsetX, y, strokePaint, font!);
+              this.drawCachedText(canvas, glyphReplayText, originX + offsetX, y, strokePaint, font!);
             }
             return;
           }
@@ -2595,7 +2813,7 @@ export class CanvasKitLayerRenderer {
                 style.color ?? '#000000',
                 Math.max(0.6, fontSize * 0.04),
               );
-              boxedPuaFont ??= new this.canvasKit.Font(
+              boxedPuaFont ??= this.makeFont(
                 this.symbolFallbackTypeface ?? this.defaultTypeface ?? typeface,
                 Math.max(1, fontSize * 0.5),
               );
@@ -2615,7 +2833,7 @@ export class CanvasKitLayerRenderer {
                 ),
                 boxedPuaStrokePaint,
               );
-              canvas.drawText(
+              this.drawCachedText(canvas,
                 displayNumber,
                 boxX + (boxSize - numberWidth) / 2 + offsetX,
                 boxY + boxSize * 0.72 + offsetY,
@@ -2633,7 +2851,7 @@ export class CanvasKitLayerRenderer {
               runPositions[(index - runStart) * 2 + 1] = baselineShift;
               hasMissingGlyph ||= glyphId === 0;
             }
-            canvas.drawGlyphs(
+            this.drawCachedGlyphs(canvas,
               runGlyphIds,
               runPositions,
               originX + offsetX,
@@ -2642,7 +2860,7 @@ export class CanvasKitLayerRenderer {
               fillPaint,
             );
             if (strokePaint) {
-              canvas.drawGlyphs(
+              this.drawCachedGlyphs(canvas,
                 runGlyphIds,
                 runPositions,
                 originX + offsetX,
@@ -2859,7 +3077,7 @@ export class CanvasKitLayerRenderer {
           }
         }
 
-        let textFont = new this.canvasKit.Font(primaryTypeface, innerFontSize);
+        let textFont = this.makeFont(primaryTypeface, innerFontSize);
         let fallbackCandidate: Font | null = null;
         let paint: SkPaint | null = null;
         const adjustFont = (target: Font, selected: CanvasKitLocalTypeface | null = preparedTypeface) => {
@@ -2876,7 +3094,7 @@ export class CanvasKitLayerRenderer {
           if (glyphIds.some(glyphId => glyphId === 0)) {
             for (const fallbackTypeface of [this.defaultTypeface, this.symbolFallbackTypeface]) {
               if (!fallbackTypeface || fallbackTypeface === primaryTypeface) continue;
-              fallbackCandidate = new this.canvasKit.Font(fallbackTypeface, innerFontSize);
+              fallbackCandidate = this.makeFont(fallbackTypeface, innerFontSize);
               adjustFont(fallbackCandidate, null);
               const fallbackGlyphIds = fallbackCandidate.getGlyphIDs(
                 displayText,
@@ -2906,7 +3124,7 @@ export class CanvasKitLayerRenderer {
           paint = this.makeFillPaint(textColor);
           const textY = (horizontalScale !== undefined ? centerY - fontSize * 0.08 : centerY)
             + innerFontSize * 0.35;
-          canvas.drawText(displayText, centerX - Math.max(drawWidth, 1) / 2, textY, paint, textFont);
+          this.drawCachedText(canvas, displayText, centerX - Math.max(drawWidth, 1) / 2, textY, paint, textFont);
         } finally {
           paint?.delete?.();
           fallbackCandidate?.delete?.();
@@ -3370,6 +3588,104 @@ export class CanvasKitLayerRenderer {
   }
 
   private findPreparedTypeface(fontFamily: string | undefined, style?: LayerTextStyle): CanvasKitLocalTypeface | null {
+    const key = `${normalizedFontFamily(fontFamily)}:${style?.bold === true}:${style?.italic === true}:${getHostFontState().generation}`;
+    if (this.fallbackFamilyCache.has(key)) {
+      const cached = this.fallbackFamilyCache.get(key)!;
+      this.fallbackFamilyCache.delete(key);
+      this.fallbackFamilyCache.set(key, cached);
+      return cached;
+    }
+    const result = this.resolvePreparedTypeface(fontFamily, style);
+    if (this.fallbackFamilyCache.size >= 256) {
+      const oldest = this.fallbackFamilyCache.keys().next().value;
+      if (oldest !== undefined) this.fallbackFamilyCache.delete(oldest);
+    }
+    this.fallbackFamilyCache.set(key, result);
+    return result;
+  }
+
+  private invalidateFontCaches(): void {
+    this.localFontRevision += 1;
+    this.fallbackFamilyCache.clear();
+    this.textBlobs.clear();
+    this.failedTextBlobKeys.clear();
+    this.staticPictures.clear();
+  }
+
+  private textBlobFontKey(font: Font): string | null {
+    try {
+      const faceId = this.fontTypefaceIds.get(font);
+      return faceId === undefined ? null : [faceId, font.getSize(), font.getScaleX(), font.getSkewX(), font.isEmbolden()].join(':');
+    } catch { return null; }
+  }
+
+  private makeFont(typeface: Typeface | null, size: number): Font {
+    const font = new this.canvasKit.Font(typeface, size);
+    let faceId = typeface ? this.typefaceIds.get(typeface) : 0;
+    if (faceId === undefined && typeface) {
+      faceId = this.nextTypefaceId++;
+      this.typefaceIds.set(typeface, faceId);
+    }
+    this.fontTypefaceIds.set(font, faceId ?? 0);
+    return font;
+  }
+
+  private rememberTextBlobFailure(key: string): void {
+    if (this.failedTextBlobKeys.size >= 2048) {
+      const oldest = this.failedTextBlobKeys.values().next().value;
+      if (oldest !== undefined) this.failedTextBlobKeys.delete(oldest);
+    }
+    this.failedTextBlobKeys.add(key);
+  }
+
+  private drawCachedText(canvas: SkCanvas, text: string, x: number, y: number, paint: SkPaint, font: Font): void {
+    const fontKey = this.textBlobFontKey(font);
+    if (!fontKey || !this.canvasKit.TextBlob || typeof canvas.drawTextBlob !== 'function') {
+      canvas.drawText(text, x, y, paint, font);
+      return;
+    }
+    const key = `text:${fontKey}:${text}`;
+    let blob = this.textBlobs.get(key);
+    let retained = !!blob;
+    if (!blob && !this.failedTextBlobKeys.has(key)) {
+      try { blob = this.canvasKit.TextBlob.MakeFromText(text, font) ?? undefined; } catch { /* optimization unavailable */ }
+      if (blob) retained = this.textBlobs.set(key, blob, key.length * 2 + text.length * 32);
+      else this.rememberTextBlobFailure(key);
+    }
+    try {
+      if (blob) canvas.drawTextBlob(blob, x, y, paint);
+      else canvas.drawText(text, x, y, paint, font);
+    } finally { if (blob && !retained) blob.delete(); }
+  }
+
+  private drawCachedGlyphs(canvas: SkCanvas, glyphs: Uint16Array, positions: Float32Array, x: number, y: number, font: Font, paint: SkPaint): void {
+    const fontKey = this.textBlobFontKey(font);
+    const runKey = fontKey ? replayFingerprint([glyphs, positions]) : null;
+    if (!fontKey || !runKey || !this.canvasKit.TextBlob?.MakeFromRSXformGlyphs || typeof canvas.drawTextBlob !== 'function') {
+      canvas.drawGlyphs(glyphs, positions, x, y, font, paint);
+      return;
+    }
+    const key = `glyphs:${fontKey}:${runKey}`;
+    let blob = this.textBlobs.get(key);
+    let retained = !!blob;
+    if (!blob && !this.failedTextBlobKeys.has(key)) {
+      const transforms = new Float32Array(glyphs.length * 4);
+      for (let index = 0; index < glyphs.length; index++) {
+        transforms[index * 4] = 1;
+        transforms[index * 4 + 2] = positions[index * 2];
+        transforms[index * 4 + 3] = positions[index * 2 + 1];
+      }
+      try { blob = this.canvasKit.TextBlob.MakeFromRSXformGlyphs(glyphs, transforms, font) ?? undefined; } catch { /* original glyph replay remains available */ }
+      if (blob) retained = this.textBlobs.set(key, blob, key.length * 2 + glyphs.length * 48);
+      else this.rememberTextBlobFailure(key);
+    }
+    try {
+      if (blob) canvas.drawTextBlob(blob, x, y, paint);
+      else canvas.drawGlyphs(glyphs, positions, x, y, font, paint);
+    } finally { if (blob && !retained) blob.delete(); }
+  }
+
+  private resolvePreparedTypeface(fontFamily: string | undefined, style?: LayerTextStyle): CanvasKitLocalTypeface | null {
     const key = normalizedFontFamily(fontFamily);
     if (!key) return null;
     const record = resolveRendererLocalFont(primaryFontFamily(fontFamily), hostFontStyle(style));
@@ -3484,7 +3800,7 @@ export class CanvasKitLayerRenderer {
     const paths = parseStaticSvgPathLayers(fragment, op.color ?? '#000000');
     const texts = parseStaticSvgTextLayers(fragment);
     if (paths.length + texts.length === 0 || paths.length + texts.length > 4096
-      || !staticSvgPathLayersAreReplayable(paths, data => this.canvasKit.Path.MakeFromSVGString(data))) {
+      || (paths.length > 0 && !staticSvgPathLayersAreReplayable(paths, data => this.canvasKit.Path.MakeFromSVGString(data)))) {
       return false;
     }
     const recorder = new this.canvasKit.PictureRecorder();
@@ -3528,7 +3844,7 @@ export class CanvasKitLayerRenderer {
       fontFamily: this.defaultFontFamily,
     }].filter((face): face is CanvasKitLocalTypeface => !!face?.fontManager && !!face.typeface);
     for (const candidate of candidates) {
-      const font = new this.canvasKit.Font(candidate.typeface, layer.fontSize);
+      const font = this.makeFont(candidate.typeface, layer.fontSize);
       let builder: ReturnType<typeof this.canvasKit.ParagraphBuilder.Make> | null = null;
       let paragraph: Paragraph | null = null;
       try {
@@ -3811,7 +4127,7 @@ export class CanvasKitLayerRenderer {
     let font: Font | null = null;
     let paint: SkPaint | null = null;
     try {
-      font = new this.canvasKit.Font(this.defaultTypeface, Math.max(1, fontSize));
+      font = this.makeFont(this.defaultTypeface, Math.max(1, fontSize));
       paint = this.makeFillPaint(color);
       const glyphIds = font.getGlyphIDs(text, Array.from(text).length);
       if (!glyphIds || glyphIds.some((glyphId) => glyphId === 0)) return false;
@@ -3827,7 +4143,7 @@ export class CanvasKitLayerRenderer {
       };
       adjustableFont.setEmbolden?.(bold);
       adjustableFont.setSkewX?.(italic ? -0.2 : 0);
-      canvas.drawText(text, centered ? x + (targetWidth - drawWidth) / 2 : x, baselineY, paint, font);
+      this.drawCachedText(canvas, text, centered ? x + (targetWidth - drawWidth) / 2 : x, baselineY, paint, font);
       return true;
     } finally {
       font?.delete?.();
@@ -4500,6 +4816,7 @@ export class CanvasKitLayerRenderer {
   }
 
   private retainImage(key: string, image: SkImage, decodedPixels: number): SkImage {
+    this.imageResourceRevision += 1;
     while (this.imageCache.size >= CanvasKitLayerRenderer.MAX_IMAGE_CACHE_ENTRIES
       || this.imageCachePixels + decodedPixels > CanvasKitLayerRenderer.MAX_IMAGE_CACHE_PIXELS) {
       const oldestKey = this.imageCache.keys().next().value as string | undefined;
