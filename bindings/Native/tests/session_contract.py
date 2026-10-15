@@ -226,7 +226,8 @@ def run(host, expected_native_skia):
         require(accepted(host.request(a, op="pageSize", page=0))["size"]["width"] > 0,
                 "blank page has no width")
         rejected(host.request(a, op="pageSize", page=2**32 - 1), "invalidArgument")
-        rejected(host.request(a, op="info", unexpected=True), "invalidArgument")
+        for operation in ("info", "fontState", "clearCaches", "cacheStats"):
+            rejected(host.request(a, op=operation, unexpected=True), "invalidArgument")
         rejected(host.request(a, op="render", page=0, scale=-1), "invalidArgument")
         rejected(host.call("request", a, None, 1), "invalidArgument")
         rejected(host.call("request", a, None, caps["maxRequestBytes"] + 1), "limitExceeded")
