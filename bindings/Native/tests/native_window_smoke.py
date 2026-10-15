@@ -10,8 +10,8 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples"))
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QImage, QInputMethodEvent
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QImage, QInputMethodEvent, QKeyEvent
 from PySide6.QtWidgets import QApplication
 from qt_native_host import NativeWindow, scalar_from_utf16, utf16_length
 
@@ -147,6 +147,58 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(worker.released)
         self.assertTrue(window.finished)
 
+    def test_info_request_has_no_revision_target(self):
+        worker = IdleWorker()
+        window = NativeWindow(None, worker=worker)
+        window.timer.stop()
+        window.actions.clear()
+        window.info = {"documentId": 7, "revision": 2}
+        window.send({"op": "info"}, lambda _: None)
+        self.assertEqual(worker.requests, [{"op": "info"}])
+        window.finished = True
+        window.io.shutdown(wait=True)
+        window.close()
+
+    def test_preedit_cancel_drops_queued_old_underline_range(self):
+        worker = IdleWorker()
+        window = NativeWindow(None, worker=worker)
+        window.timer.stop()
+        window.actions.clear()
+        window.refresh = lambda: None
+        position = {"section": 0, "paragraph": 0, "scalarOffset": 0, "cellPath": []}
+        window.info = {"documentId": 7, "revision": 0, "compositionId": None,
+                       "selection": {"anchor": position, "focus": position}}
+        window.ime("", "ㄱ", 1)
+        window.ime("", "", 0)
+        window.pump()
+        for revision, composition_id in ((0, 1), (1, 1), (2, None)):
+            window.pending = None
+            window.step_done({"ok": True, "outcome": {"revision": revision, "compositionId": composition_id}})
+            window.pump()
+        self.assertEqual([request["op"] for request in worker.requests],
+                         ["beginComposition", "updateComposition", "cancelComposition"])
+        self.assertEqual(window.preedit, "")
+        self.assertFalse(window.preedit_rects)
+        window.finished = True
+        window.io.shutdown(wait=True)
+        window.close()
+
+    def test_surrounding_window_removes_partial_long_preedit(self):
+        window = NativeWindow(None, worker=IdleWorker())
+        window.timer.stop()
+        window.actions.clear()
+        window.preedit = "가" * 5000
+        window.preedit_start = {"section": 0, "paragraph": 0, "scalarOffset": 0, "cellPath": []}
+        window.got_context({"context": {
+            "text": "가" * 2048 + "😀뒤", "absoluteStartScalar": 2952,
+            "cursorScalar": 2048, "anchorScalar": 2048, "selectedText": "",
+            "position": {"section": 0, "paragraph": 0, "scalarOffset": 5000, "cellPath": []}}})
+        self.assertEqual(window.canvas.inputMethodQuery(Qt.InputMethodQuery.ImSurroundingText), "😀뒤")
+        self.assertEqual(window.canvas.inputMethodQuery(Qt.InputMethodQuery.ImCursorPosition), 0)
+        window.finished = True
+        window.io.shutdown(wait=True)
+        window.close()
+
     def test_pending_actions_are_bounded_without_claiming_cancellation(self):
         worker = IdleWorker()
         window = NativeWindow(None, worker=worker)
@@ -190,6 +242,9 @@ def actual_smoke(library):
         QApplication.sendEvent(window.canvas, commit)
         pump(app, lambda: idle() and window.info.get("compositionId") is None)
         assert window.context["text"] == "각"
+        for key, expected in ((Qt.Key.Key_Left, 0), (Qt.Key.Key_Right, 1)):
+            QApplication.sendEvent(window.canvas, QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
+            pump(app, lambda: idle() and window.info["selection"]["focus"]["scalarOffset"] == expected)
         window.command("undo")
         pump(app, lambda: idle() and window.context.get("text") == "")
         window.command("redo")

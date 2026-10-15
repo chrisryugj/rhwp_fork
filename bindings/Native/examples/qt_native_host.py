@@ -262,7 +262,7 @@ class NativeWindow(QMainWindow):
         if "_open" in request:
             request_id = self.worker.open_bytes(request["_open"], replace=self.target() if self.info else None)
         else:
-            if request["op"] not in ("new", "acknowledgeSave", "cancelSave"):
+            if request["op"] not in ("new", "info", "acknowledgeSave", "cancelSave"):
                 request.setdefault("target", self.target())
             request_id = self.worker.submit(request)
         self.pending = (request_id, callback)
@@ -299,6 +299,8 @@ class NativeWindow(QMainWindow):
             if "outcome" in outcome:
                 self.preferred_x = outcome.get("preferredX")
                 outcome = outcome["outcome"]
+            elif "preferredX" not in result:
+                self.preferred_x = None
             for key in ("revision", "selection", "compositionId"):
                 if key in outcome:
                     self.info[key] = outcome[key]
@@ -356,12 +358,14 @@ class NativeWindow(QMainWindow):
         self.context = dict(result["context"])
         # Qt's surrounding document excludes its separate preedit string. Native
         # preview is real temporary document text, so remove it from this query.
-        if self.preedit and self.preedit_start and self.context.get("position", {}).get("paragraph") == self.preedit_start["paragraph"]:
+        position = self.context.get("position", {})
+        if self.preedit and self.preedit_start and all(position.get(key) == self.preedit_start[key] for key in ("section", "paragraph")):
             start = self.preedit_start["scalarOffset"] - self.context.get("absoluteStartScalar", 0)
             text = self.context["text"]
-            if 0 <= start <= len(text) and text[start:start + len(self.preedit)] == self.preedit:
-                self.context.update(text=text[:start] + text[start + len(self.preedit):],
-                                    cursorScalar=start, anchorScalar=start, selectedText="")
+            left, right = max(0, start), min(len(text), start + len(self.preedit))
+            if left <= right and text[left:right] == self.preedit[left - start:right - start]:
+                self.context.update(text=text[:left] + text[right:],
+                                    cursorScalar=left, anchorScalar=left, selectedText="")
         QApplication.inputMethod().update(Qt.InputMethodQuery.ImQueryAll)
 
     def ime_caret_position(self):
@@ -555,10 +559,15 @@ class NativeWindow(QMainWindow):
             self.preedit_cursor_visible = cursor_visible
             self.preedit_rects = []
             if preedit and self.preedit_start:
-                focus = dict(self.preedit_start)
+                anchor = dict(self.preedit_start)
+                focus = dict(anchor)
                 focus["scalarOffset"] += len(preedit)
-                self.enqueue([lambda _: {"op": "selectionRects", "selection": {"anchor": self.preedit_start, "focus": focus}}],
-                             lambda reply: self.set_preedit_rects(reply["rects"]))
+                target, composition_id = self.target(), self.info.get("compositionId")
+                def current_preedit(_):
+                    if target == self.target() and composition_id == self.info.get("compositionId"):
+                        return {"op": "selectionRects", "selection": {"anchor": anchor, "focus": focus}}
+                self.enqueue([current_preedit],
+                             lambda reply: self.set_preedit_rects(reply["rects"]) if reply else None)
             self.refresh()
         self.enqueue(steps, done)
 
