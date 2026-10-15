@@ -278,7 +278,7 @@ fn issue_536_native_editor_rejects_invalid_ranges_cells_and_control_input() {
 #[test]
 fn issue_536_native_editor_cross_paragraph_replacement_is_one_action() {
     let mut core = core_with_text("가나다라마");
-    core.split_paragraph_native(0, 0, 2).unwrap();
+    core.split_paragraph_native(0, 0, 2, None).unwrap();
     let range = NativeTextSelection {
         anchor: position(0, 1),
         focus: position(1, 2),
