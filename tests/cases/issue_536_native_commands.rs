@@ -487,9 +487,12 @@ fn native_commands_floating_middle_object_rejects_all_body_mutations() {
     assert_eq!(editor.selection(), &range);
     assert_eq!(editor.session().revision(), revision);
     assert_eq!(editor.composition_id(), Some(id));
-    assert!(editor.can_redo());
+    // History actions are unavailable while preedit owns the transaction.
+    assert!(!editor.can_redo());
     assert!(!editor.can_undo());
     editor.cancel_composition(revision, id).unwrap();
+    assert!(editor.can_redo());
+    assert!(!editor.can_undo());
 }
 
 #[test]
