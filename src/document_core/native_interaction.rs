@@ -80,7 +80,8 @@ pub struct NativeHitTest {
     pub caret: Option<NativeCaretRect>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum NativeVerticalDirection {
     Up,
     Down,

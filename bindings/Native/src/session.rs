@@ -6,6 +6,9 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use rhwp_core::document_core::native_interaction::{
+    NativeTextPosition, NativeTextSelection, NativeVerticalDirection,
+};
 use rhwp_core::native_host::{NativeDocumentSession, NativeHostError, MAX_DOCUMENT_BYTES};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -36,6 +39,22 @@ thread_local! {
 )]
 enum Request {
     Info,
+    HitTest {
+        page: u32,
+        x: f64,
+        y: f64,
+    },
+    Caret {
+        position: NativeTextPosition,
+    },
+    SelectionRects {
+        selection: NativeTextSelection,
+    },
+    MoveVertical {
+        position: NativeTextPosition,
+        direction: NativeVerticalDirection,
+        preferred_x: Option<f64>,
+    },
     FontState,
     SetFonts {
         paths: Vec<std::path::PathBuf>,
@@ -212,6 +231,10 @@ pub unsafe extern "C" fn rhwp_session_request(
             let mut host = host.borrow_mut();
             let session = host.sessions.get_mut(&handle).ok_or_else(invalid_handle)?;
             match request {
+                Request::HitTest { page, x, y } => Ok(json!({"ok":true,"hit":session.document().native_hit_test(page,x,y)?})),
+                Request::Caret { position } => Ok(json!({"ok":true,"caret":session.document().native_caret_rect(&position)?})),
+                Request::SelectionRects { selection } => Ok(json!({"ok":true,"rects":session.document().native_selection_rects(&selection)?})),
+                Request::MoveVertical { position, direction, preferred_x } => Ok(json!({"ok":true,"movement":session.document().native_move_vertical(&position,direction,preferred_x)?})),
                 Request::FontState => Ok(json!({"ok":true,"state":session.font_state(),"fontGeneration":session.font_generation()})),
                 Request::SetFonts { paths, environment } => {
                     let changed = session.set_font_sources(&paths, environment)?;

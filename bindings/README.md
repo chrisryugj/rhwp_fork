@@ -98,3 +98,17 @@ frame의 `revision`과 `fontGeneration`을 함께 보관하고 `isFrameCurrent`�
 폰트 변경은 문서 revision을 올리지 않고 fontGeneration을 올린다. `clearCaches`는 보관한 Skia
 리소스와 통계를 비우며 `cacheStats`는 picture/glyph/image별 사용량을 반환한다. 각 cache는
 64항목/8 MiB 한도이며 전체 process 메모리 상한은 아니다.
+
+## 입력 위치와 좌표 (P54)
+
+위치는 `{section, paragraph, scalarOffset, cellPath}`다. section/paragraph는 0부터 시작하고
+scalarOffset은 Unicode scalar 수이며 UTF-8 byte나 UTF-16 code unit 수가 아니다.
+cellPath의 `{control, cell, paragraph}` 항목은 바깥 문단에서 안쪽 표 셀까지 차례로 내려간다.
+선택은 `{anchor: position, focus: position}`이며 역방향도 보존한다.
+
+`hitTest{page,x,y}`, `caret{position}`, `selectionRects{selection}`은 기존 core의 페이지 좌표를
+반환한다. `moveVertical{position,direction:"up"|"down",preferredX}`는 다음 위치와 preferredX를
+반환한다. 화면 위치는 P52 원점/scale 식으로 먼저 페이지 좌표로 변환한다. 유효한 위치만 있고
+실제 caret geometry가 없으면 null이며, 임의의 (0,0) 사각형을 만들어내지 않는다.
+본문·중첩 표 셀을 조회하며 textbox/caption/note/header/footer, inline control affinity와
+서로 다른 container를 가로지르는 선택은 명시적으로 unsupported 오류를 반환한다.

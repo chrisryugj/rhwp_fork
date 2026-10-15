@@ -27,6 +27,21 @@ pub enum NativeHostError {
     Core(HwpError),
 }
 
+impl From<crate::document_core::native_interaction::NativeInteractionError> for NativeHostError {
+    fn from(error: crate::document_core::native_interaction::NativeInteractionError) -> Self {
+        use crate::document_core::native_interaction::NativeInteractionError;
+        match error {
+            NativeInteractionError::InvalidInput(message) => Self::InvalidArgument(message.into()),
+            NativeInteractionError::InvalidPosition(message) => Self::InvalidArgument(message),
+            NativeInteractionError::Unsupported(message) => Self::Unsupported(message.into()),
+            NativeInteractionError::InvalidCoreResult(message) => {
+                Self::Core(HwpError::RenderError(message))
+            }
+            NativeInteractionError::Core(error) => Self::Core(error),
+        }
+    }
+}
+
 impl From<HwpError> for NativeHostError {
     fn from(error: HwpError) -> Self {
         Self::Core(error)
