@@ -22,7 +22,9 @@ use crate::renderer::layer_renderer::{
     LayerRasterRenderer, LayerRenderDiagnostics, LayerRenderResult, RasterOutputFormat,
     RasterRenderOptions, RasterRenderOutput, TextVariantSelectionReport,
 };
-use crate::renderer::raster_pixels::{RasterPixelFormat, RasterPixels};
+use crate::renderer::raster_pixels::{
+    RasterPixelFormat, RasterPixels, RasterRegion, RasterRegionPixels,
+};
 use crate::renderer::render_tree::RenderLayerInfo;
 use crate::renderer::{svg_arc_to_beziers, LineStyle, PathCommand, ShapeStyle, StrokeDash};
 
@@ -402,6 +404,14 @@ struct PageReplayOutput {
     replay_time: Duration,
 }
 
+#[derive(Clone, Copy)]
+struct RasterRegionWindow {
+    origin_x: i32,
+    origin_y: i32,
+    page_width: i32,
+    page_height: i32,
+}
+
 pub struct SkiaLayerRenderer {
     font_mgr: FontMgr,
     text_shaper: OnceCell<Option<Shaper>>,
@@ -610,13 +620,86 @@ impl SkiaLayerRenderer {
             .map(|(pixels, _)| pixels)
     }
 
-    fn render_pixels_with_target_width(
+    /// Render only an enclosing integer pixel window on the full-page grid.
+    ///
+    /// Only this window allocates a bitmap. Negative/off-page origins are
+    /// padded with the normal clear color; page ink is clipped to the same
+    /// ceil(page size * scale) bounds as a full render. This replays the same
+    /// layer tree and does not implement subtree culling or a GPU surface.
+    /// Page extents and window endpoints must fit the exact f32 integer range
+    /// [-2^24, 2^24], so the device-space origin translation loses no pixels.
+    pub fn render_region_pixels_with_options(
         &self,
         tree: &PageLayerTree,
+        region: RasterRegion,
         options: RasterRenderOptions,
-        target_width: Option<i32>,
-    ) -> LayerRenderResult<(RasterPixels, LayerRenderDiagnostics)> {
-        let total_start = Instant::now();
+    ) -> LayerRenderResult<RasterRegionPixels> {
+        Self::validate_raster_options(options)?;
+        const MAX_EXACT_PIXEL: f64 = 16_777_216.0;
+        let invalid = || HwpError::RenderError("invalid raster region geometry".into());
+        let page_extent = |value: f64| -> LayerRenderResult<i32> {
+            let pixels = (value * options.scale).ceil();
+            if !value.is_finite()
+                || value <= 0.0
+                || !pixels.is_finite()
+                || pixels <= 0.0
+                || pixels > MAX_EXACT_PIXEL
+            {
+                return Err(invalid());
+            }
+            Ok(pixels as i32)
+        };
+        let page_width = page_extent(tree.page_width)?;
+        let page_height = page_extent(tree.page_height)?;
+        let right = region.x + region.width;
+        let bottom = region.y + region.height;
+        if [
+            region.x,
+            region.y,
+            region.width,
+            region.height,
+            right,
+            bottom,
+        ]
+        .into_iter()
+        .any(|value| !value.is_finite())
+            || region.width <= 0.0
+            || region.height <= 0.0
+            || right <= region.x
+            || bottom <= region.y
+        {
+            return Err(invalid());
+        }
+        let endpoints = [
+            (region.x * options.scale).floor(),
+            (region.y * options.scale).floor(),
+            (right * options.scale).ceil(),
+            (bottom * options.scale).ceil(),
+        ];
+        if endpoints.iter().any(|value| {
+            !value.is_finite() || !(-MAX_EXACT_PIXEL..=MAX_EXACT_PIXEL).contains(value)
+        }) {
+            return Err(invalid());
+        }
+        let [left, top, right, bottom] = endpoints.map(|value| value as i32);
+        let width = right.checked_sub(left).ok_or_else(invalid)?;
+        let height = bottom.checked_sub(top).ok_or_else(invalid)?;
+        let window = RasterRegionWindow {
+            origin_x: left,
+            origin_y: top,
+            page_width,
+            page_height,
+        };
+        let (pixels, _) =
+            self.render_pixels_in_window(tree, options, (width, height), Some(window))?;
+        Ok(RasterRegionPixels {
+            pixels,
+            origin_x: left,
+            origin_y: top,
+        })
+    }
+
+    fn validate_raster_options(options: RasterRenderOptions) -> LayerRenderResult<()> {
         if let Some(dpi) = options.dpi {
             if !dpi.is_finite() || dpi <= 0.0 {
                 return Err(HwpError::RenderError(format!("invalid raster dpi: {dpi}")));
@@ -627,23 +710,41 @@ impl SkiaLayerRenderer {
                 "Skia raster renderer currently supports PNG output".to_string(),
             ));
         }
+        if !options.scale.is_finite()
+            || options.scale <= 0.0
+            || !(options.scale as f32).is_finite()
+            || options.scale as f32 <= 0.0
+        {
+            return Err(HwpError::RenderError(format!(
+                "invalid raster scale: {}",
+                options.scale
+            )));
+        }
+        if options.max_dimension <= 0 {
+            return Err(HwpError::RenderError(format!(
+                "invalid raster max dimension: {}",
+                options.max_dimension
+            )));
+        }
+        if options.max_pixels == 0 {
+            return Err(HwpError::RenderError(
+                "invalid raster max pixel count: 0".into(),
+            ));
+        }
+        Ok(())
+    }
 
+    fn render_pixels_with_target_width(
+        &self,
+        tree: &PageLayerTree,
+        options: RasterRenderOptions,
+        target_width: Option<i32>,
+    ) -> LayerRenderResult<(RasterPixels, LayerRenderDiagnostics)> {
+        Self::validate_raster_options(options)?;
         let raster_dimension = |value: f64, label: &str| -> LayerRenderResult<i32> {
             if !value.is_finite() || value <= 0.0 {
                 return Err(HwpError::RenderError(format!(
                     "invalid page {label}: {value}"
-                )));
-            }
-            if !options.scale.is_finite() || options.scale <= 0.0 {
-                return Err(HwpError::RenderError(format!(
-                    "invalid raster scale: {}",
-                    options.scale
-                )));
-            }
-            if options.max_dimension <= 0 {
-                return Err(HwpError::RenderError(format!(
-                    "invalid raster max dimension: {}",
-                    options.max_dimension
                 )));
             }
             let scaled = match (label, target_width) {
@@ -659,14 +760,29 @@ impl SkiaLayerRenderer {
         };
         let width = raster_dimension(tree.page_width, "width")?;
         let height = raster_dimension(tree.page_height, "height")?;
-        if options.max_pixels == 0 {
+        self.render_pixels_in_window(tree, options, (width, height), None)
+    }
+
+    fn render_pixels_in_window(
+        &self,
+        tree: &PageLayerTree,
+        options: RasterRenderOptions,
+        (width, height): (i32, i32),
+        region: Option<RasterRegionWindow>,
+    ) -> LayerRenderResult<(RasterPixels, LayerRenderDiagnostics)> {
+        let total_start = Instant::now();
+        if width <= 0
+            || height <= 0
+            || width > options.max_dimension
+            || height > options.max_dimension
+        {
             return Err(HwpError::RenderError(
-                "invalid raster max pixel count: 0".to_string(),
+                "raster window dimensions out of range".into(),
             ));
         }
         let pixel_count = (width as u64)
             .checked_mul(height as u64)
-            .ok_or_else(|| HwpError::RenderError("raster pixel count overflow".to_string()))?;
+            .ok_or_else(|| HwpError::RenderError("raster pixel count overflow".into()))?;
         if pixel_count > options.max_pixels {
             return Err(HwpError::RenderError(format!(
                 "raster pixel count out of range: {pixel_count}"
@@ -684,6 +800,17 @@ impl SkiaLayerRenderer {
             Color::WHITE
         };
         canvas.clear(clear_color);
+        if let Some(region) = region {
+            canvas.translate((-(region.origin_x as f32), -(region.origin_y as f32)));
+            // Clip in scaled page pixels before applying logical-page scale.
+            // Clipping to the logical page rectangle would change fractional
+            // right/bottom edge pixels compared with the full raster surface.
+            canvas.clip_rect(
+                Rect::from_wh(region.page_width as f32, region.page_height as f32),
+                skia_safe::ClipOp::Intersect,
+                false,
+            );
+        }
         if options.scale != 1.0 {
             canvas.scale((options.scale as f32, options.scale as f32));
         }
