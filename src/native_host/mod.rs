@@ -71,6 +71,9 @@ pub struct NativePageSize {
 pub struct NativeFrame {
     pub pixels: crate::renderer::raster_pixels::RasterPixels,
     pub revision: u64,
+    /// 확대된 전체 페이지 픽셀 격자에서 이 버퍼의 왼쪽 위 원점.
+    pub origin_x: i32,
+    pub origin_y: i32,
 }
 
 pub struct NativeDocumentSession {
@@ -155,22 +158,14 @@ impl NativeDocumentSession {
 
     pub fn render_page(&self, page: u32, scale: f64) -> Result<NativeFrame, NativeHostError> {
         self.check_page(page)?;
-        if !scale.is_finite() || scale <= 0.0 || scale > 64.0 {
-            return Err(NativeHostError::InvalidArgument(
-                "scale must be finite and in (0, 64]".into(),
-            ));
-        }
+        Self::check_scale(scale)?;
         #[cfg(feature = "native-skia")]
         {
             use crate::renderer::layer_renderer::RasterRenderOptions;
             let tree = self
                 .core
                 .build_page_layer_tree_with_profile(page, crate::paint::RenderProfile::Screen)?;
-            let renderer = self.renderer.get_or_init(|| {
-                crate::renderer::skia::SkiaLayerRenderer::new()
-                    .with_cache_limits(64, 8 * 1024 * 1024)
-            });
-            let pixels = renderer.render_pixels_with_options(
+            let pixels = self.renderer().render_pixels_with_options(
                 &tree,
                 RasterRenderOptions {
                     scale,
@@ -182,9 +177,64 @@ impl NativeDocumentSession {
             Ok(NativeFrame {
                 pixels,
                 revision: self.revision,
+                origin_x: 0,
+                origin_y: 0,
             })
         }
         #[cfg(not(feature = "native-skia"))]
         Err(NativeHostError::FeatureDisabled)
+    }
+
+    pub fn render_region(
+        &self,
+        page: u32,
+        region: crate::renderer::raster_pixels::RasterRegion,
+        scale: f64,
+    ) -> Result<NativeFrame, NativeHostError> {
+        self.check_page(page)?;
+        Self::check_scale(scale)?;
+        #[cfg(feature = "native-skia")]
+        {
+            let tree = self
+                .core
+                .build_page_layer_tree_with_profile(page, crate::paint::RenderProfile::Screen)?;
+            let output = self.renderer().render_region_pixels_with_options(
+                &tree,
+                region,
+                crate::renderer::layer_renderer::RasterRenderOptions {
+                    scale,
+                    max_pixels: MAX_FRAME_PIXELS,
+                    transparent: false,
+                    ..Default::default()
+                },
+            )?;
+            Ok(NativeFrame {
+                pixels: output.pixels,
+                revision: self.revision,
+                origin_x: output.origin_x,
+                origin_y: output.origin_y,
+            })
+        }
+        #[cfg(not(feature = "native-skia"))]
+        {
+            let _ = region;
+            Err(NativeHostError::FeatureDisabled)
+        }
+    }
+
+    #[cfg(feature = "native-skia")]
+    fn renderer(&self) -> &crate::renderer::skia::SkiaLayerRenderer {
+        self.renderer.get_or_init(|| {
+            crate::renderer::skia::SkiaLayerRenderer::new().with_cache_limits(64, 8 * 1024 * 1024)
+        })
+    }
+
+    fn check_scale(scale: f64) -> Result<(), NativeHostError> {
+        if !scale.is_finite() || scale <= 0.0 || scale > 64.0 {
+            return Err(NativeHostError::InvalidArgument(
+                "scale must be finite and in (0, 64]".into(),
+            ));
+        }
+        Ok(())
     }
 }

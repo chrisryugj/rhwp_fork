@@ -75,3 +75,13 @@ python3 bindings/Native/tests/session_contract.py /path/to/librhwp_native_ffi.so
 ```
 
 이 프로브의 Linux 통과는 Apple/Windows 패키지 실행이나 한컴 시각 정합 검증을 대신하지 않는다.
+
+## 화면 영역 출력 (P52)
+
+`{"op":"renderRegion","page":0,"x":20.5,"y":40,"width":320,"height":240,"scale":1.5}`는
+해당 영역 크기의 surface에 직접 그린다. `scale`은 host의 zoom × device pixel ratio다.
+왼쪽/위는 floor, 오른쪽/아래는 ceil로 전체 페이지 픽셀 격자에 맞추며 `originX/originY`를 반환한다.
+버퍼 픽셀 `(px, py)`의 페이지 좌표는 `((originX+px)/scale, (originY+py)/scale)`다.
+음수/페이지 밖 영역은 허용하고 원본 페이지 픽셀 경계 밖은 배경색으로 채운다.
+좌표는 ±2²⁴픽셀, 출력 크기·픽셀 수는 기존 frame 한도로 제한한다.
+전체 페이지 bitmap을 만든 뒤 잘라내지 않지만, 화면 밖 subtree의 replay 생략이나 GPU 렌더링은 하지 않는다.

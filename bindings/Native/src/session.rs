@@ -31,8 +31,21 @@ thread_local! {
 #[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
 enum Request {
     Info,
-    PageSize { page: u32 },
-    Render { page: u32, scale: f64 },
+    PageSize {
+        page: u32,
+    },
+    Render {
+        page: u32,
+        scale: f64,
+    },
+    RenderRegion {
+        page: u32,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        scale: f64,
+    },
 }
 
 fn next_handle() -> Result<u64, NativeHostError> {
@@ -92,6 +105,26 @@ fn retain_buffer(host: &mut Host, bytes: Vec<u8>) -> Result<u64, NativeHostError
     host.buffer_bytes = total;
     host.buffers.insert(id, bytes);
     Ok(id)
+}
+
+fn frame_result(
+    host: &mut Host,
+    frame: rhwp_core::native_host::NativeFrame,
+) -> Result<Value, NativeHostError> {
+    let pixels = frame.pixels;
+    let metadata = (
+        pixels.width,
+        pixels.height,
+        pixels.stride,
+        pixels.bytes.len(),
+    );
+    let buffer = retain_buffer(host, pixels.bytes)?;
+    Ok(
+        json!({"ok":true,"buffer":buffer,"width":metadata.0,"height":metadata.1,
+        "stride":metadata.2,"byteLength":metadata.3,"revision":frame.revision,
+        "originX":frame.origin_x,"originY":frame.origin_y,
+        "pixelFormat":"rgba8Premultiplied","colorSpace":"srgb"}),
+    )
 }
 
 #[no_mangle]
@@ -167,12 +200,12 @@ pub unsafe extern "C" fn rhwp_session_request(
                 Request::PageSize { page } => Ok(json!({"ok":true,"page":page,"size":session.page_size(page)?})),
                 Request::Render { page, scale } => {
                     let frame = session.render_page(page, scale)?;
-                    let pixels = frame.pixels;
-                    let metadata = (pixels.width, pixels.height, pixels.stride, pixels.bytes.len());
-                    let buffer = retain_buffer(&mut host, pixels.bytes)?;
-                    Ok(json!({"ok":true,"buffer":buffer,"width":metadata.0,"height":metadata.1,
-                        "stride":metadata.2,"byteLength":metadata.3,"revision":frame.revision,
-                        "pixelFormat":"rgba8Premultiplied","colorSpace":"srgb"}))
+                    frame_result(&mut host, frame)
+                }
+                Request::RenderRegion { page, x, y, width, height, scale } => {
+                    let frame = session.render_region(page,
+                        rhwp_core::renderer::raster_pixels::RasterRegion { x, y, width, height }, scale)?;
+                    frame_result(&mut host, frame)
                 }
             }
         })
