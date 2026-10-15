@@ -314,7 +314,7 @@ fn prepare_body_html(html: &str) -> Result<Cow<'_, str>, NativeHostError> {
             Event::Start(tag) | Event::Empty(tag) => {
                 let name = tag.local_name().as_ref().to_ascii_lowercase();
                 if matches!(
-                    name.as_slice(),
+                    name.as_bytes(),
                     b"img"
                         | b"picture"
                         | b"source"
