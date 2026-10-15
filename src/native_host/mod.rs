@@ -3,6 +3,8 @@
 //! 문서 엔진의 편집 정책은 바꾸지 않는다. 세션은 생성한 스레드에서 사용하며
 //! 페이지 좌표는 기존 layer tree의 96-DPI 논리 좌표를 그대로 사용한다.
 
+pub mod fonts;
+
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -12,6 +14,8 @@ use crate::{DocumentCore, HwpError};
 
 pub const MAX_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_FRAME_PIXELS: u64 = 16 * 1024 * 1024;
+pub const MAX_RENDER_CACHE_ENTRIES: usize = 64;
+pub const MAX_RENDER_CACHE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum NativeHostError {
@@ -71,6 +75,7 @@ pub struct NativePageSize {
 pub struct NativeFrame {
     pub pixels: crate::renderer::raster_pixels::RasterPixels,
     pub revision: u64,
+    pub font_generation: u64,
     /// 확대된 전체 페이지 픽셀 격자에서 이 버퍼의 왼쪽 위 원점.
     pub origin_x: i32,
     pub origin_y: i32,
@@ -79,6 +84,8 @@ pub struct NativeFrame {
 pub struct NativeDocumentSession {
     pub(super) core: DocumentCore,
     revision: u64,
+    font_generation: u64,
+    fonts: fonts::NativeFontState,
     #[cfg(feature = "native-skia")]
     renderer: std::cell::OnceCell<crate::renderer::skia::SkiaLayerRenderer>,
     // feature가 꺼진 빌드도 같은 스레드 소유권 계약을 지킨다.
@@ -87,9 +94,12 @@ pub struct NativeDocumentSession {
 
 impl NativeDocumentSession {
     pub fn from_core(core: DocumentCore) -> Self {
+        let fonts = fonts::NativeFontState::from_environment(core.font_environment().cloned());
         Self {
             core,
             revision: 0,
+            font_generation: 0,
+            fonts,
             #[cfg(feature = "native-skia")]
             renderer: std::cell::OnceCell::new(),
             _thread_affinity: PhantomData,
@@ -124,6 +134,29 @@ impl NativeDocumentSession {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub fn font_generation(&self) -> u64 {
+        self.font_generation
+    }
+
+    pub fn is_frame_current(&self, revision: u64, font_generation: u64) -> bool {
+        self.revision == revision && self.font_generation == font_generation
+    }
+
+    pub fn clear_caches(&self) {
+        #[cfg(feature = "native-skia")]
+        if let Some(renderer) = self.renderer.get() {
+            renderer.clear_caches();
+        }
+    }
+
+    #[cfg(feature = "native-skia")]
+    pub fn cache_stats(&self) -> crate::renderer::skia::NativeSkiaCacheStats {
+        self.renderer
+            .get()
+            .map(|renderer| renderer.cache_stats())
+            .unwrap_or_default()
     }
 
     pub fn check_revision(&self, expected: u64) -> Result<(), NativeHostError> {
@@ -177,6 +210,7 @@ impl NativeDocumentSession {
             Ok(NativeFrame {
                 pixels,
                 revision: self.revision,
+                font_generation: self.font_generation,
                 origin_x: 0,
                 origin_y: 0,
             })
@@ -211,6 +245,7 @@ impl NativeDocumentSession {
             Ok(NativeFrame {
                 pixels: output.pixels,
                 revision: self.revision,
+                font_generation: self.font_generation,
                 origin_x: output.origin_x,
                 origin_y: output.origin_y,
             })
@@ -225,7 +260,8 @@ impl NativeDocumentSession {
     #[cfg(feature = "native-skia")]
     fn renderer(&self) -> &crate::renderer::skia::SkiaLayerRenderer {
         self.renderer.get_or_init(|| {
-            crate::renderer::skia::SkiaLayerRenderer::new().with_cache_limits(64, 8 * 1024 * 1024)
+            crate::renderer::skia::SkiaLayerRenderer::new()
+                .with_cache_limits(MAX_RENDER_CACHE_ENTRIES, MAX_RENDER_CACHE_BYTES)
         })
     }
 

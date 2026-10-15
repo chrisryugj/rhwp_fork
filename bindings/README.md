@@ -85,3 +85,16 @@ python3 bindings/Native/tests/session_contract.py /path/to/librhwp_native_ffi.so
 음수/페이지 밖 영역은 허용하고 원본 페이지 픽셀 경계 밖은 배경색으로 채운다.
 좌표는 ±2²⁴픽셀, 출력 크기·픽셀 수는 기존 frame 한도로 제한한다.
 전체 페이지 bitmap을 만든 뒤 잘라내지 않지만, 화면 밖 subtree의 replay 생략이나 GPU 렌더링은 하지 않는다.
+
+## 폰트와 frame 유효성 (P53)
+
+`setFonts`는 `paths`의 TTF/OTF/TTC 파일과 선택적 `environment` 선언을 함께 교체한다.
+파일당 32 MiB, 입력 합계·보관 복사본 각각 64 MiB, 256파일/collection당 64 face로 제한한다.
+검증한 바이트를 직접 renderer에 전달하고 실패하면 이전 설정을 보존한다. 경로가 달라도 같은
+바이트·순서·선언이면 no-op이다. `fontState`는 내용 fingerprint와 공급 source metadata를 반환한다.
+이는 시스템 fallback 설치·실제 글리프 coverage를 증명하지 않는다.
+
+frame의 `revision`과 `fontGeneration`을 함께 보관하고 `isFrameCurrent`에 전달해 폐기 여부를 판단한다.
+폰트 변경은 문서 revision을 올리지 않고 fontGeneration을 올린다. `clearCaches`는 보관한 Skia
+리소스와 통계를 비우며 `cacheStats`는 picture/glyph/image별 사용량을 반환한다. 각 cache는
+64항목/8 MiB 한도이며 전체 process 메모리 상한은 아니다.

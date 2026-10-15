@@ -19,7 +19,8 @@ pub(super) const DEFAULT_CACHE_ENTRIES: usize = 64;
 pub(super) const DEFAULT_CACHE_BYTES: usize = 32 * 1024 * 1024;
 
 /// Cumulative lookups and current retained estimates for one native cache.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NativeSkiaCacheUsage {
     pub entries: usize,
     pub approximate_bytes: usize,
@@ -30,7 +31,8 @@ pub struct NativeSkiaCacheUsage {
 }
 
 /// Native cache diagnostics are observational and do not change replay policy.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NativeSkiaCacheStats {
     pub pictures: NativeSkiaCacheUsage,
     pub glyphs: NativeSkiaCacheUsage,

@@ -28,9 +28,25 @@ thread_local! {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "op",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 enum Request {
     Info,
+    FontState,
+    SetFonts {
+        paths: Vec<std::path::PathBuf>,
+        environment: Option<rhwp_core::renderer::font_environment::FontEnvironment>,
+    },
+    IsFrameCurrent {
+        revision: u64,
+        font_generation: u64,
+    },
+    ClearCaches,
+    CacheStats,
     PageSize {
         page: u32,
     },
@@ -122,7 +138,7 @@ fn frame_result(
     Ok(
         json!({"ok":true,"buffer":buffer,"width":metadata.0,"height":metadata.1,
         "stride":metadata.2,"byteLength":metadata.3,"revision":frame.revision,
-        "originX":frame.origin_x,"originY":frame.origin_y,
+        "fontGeneration":frame.font_generation,"originX":frame.origin_x,"originY":frame.origin_y,
         "pixelFormat":"rgba8Premultiplied","colorSpace":"srgb"}),
     )
 }
@@ -194,8 +210,21 @@ pub unsafe extern "C" fn rhwp_session_request(
             .map_err(|_| NativeHostError::InvalidArgument("invalid native request JSON".into()))?;
         HOST.with(|host| {
             let mut host = host.borrow_mut();
-            let session = host.sessions.get(&handle).ok_or_else(invalid_handle)?;
+            let session = host.sessions.get_mut(&handle).ok_or_else(invalid_handle)?;
             match request {
+                Request::FontState => Ok(json!({"ok":true,"state":session.font_state(),"fontGeneration":session.font_generation()})),
+                Request::SetFonts { paths, environment } => {
+                    let changed = session.set_font_sources(&paths, environment)?;
+                    Ok(json!({"ok":true,"changed":changed,"state":session.font_state(),"fontGeneration":session.font_generation()}))
+                }
+                Request::IsFrameCurrent { revision, font_generation } => Ok(json!({"ok":true,"current":session.is_frame_current(revision, font_generation)})),
+                Request::ClearCaches => { session.clear_caches(); Ok(json!({"ok":true})) }
+                Request::CacheStats => {
+                    #[cfg(feature = "native-skia")]
+                    { Ok(json!({"ok":true,"stats":session.cache_stats()})) }
+                    #[cfg(not(feature = "native-skia"))]
+                    { Err(NativeHostError::FeatureDisabled) }
+                }
                 Request::Info => Ok(json!({"ok":true,"pageCount":session.document().page_count(),"revision":session.revision()})),
                 Request::PageSize { page } => Ok(json!({"ok":true,"page":page,"size":session.page_size(page)?})),
                 Request::Render { page, scale } => {
