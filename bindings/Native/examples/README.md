@@ -9,7 +9,7 @@ Run the blank-document flow from any working directory:
 
 ```sh
 python3 /path/to/rhwp/bindings/Native/examples/native_host.py \
-  --library /path/to/librhwp_native.so \
+  --library /path/to/librhwp_native_ffi.so \
   --output /path/to/new-document.hwpx
 ```
 
@@ -32,7 +32,7 @@ To view/query a supplied document and save a copy:
 
 ```sh
 python3 /path/to/rhwp/bindings/Native/examples/native_host.py \
-  --library /path/to/librhwp_native.so \
+  --library /path/to/librhwp_native_ffi.so \
   --input /path/to/source.hwp \
   --output /path/to/new-copy.hwpx
 ```
@@ -75,7 +75,7 @@ python3 /path/to/rhwp/bindings/Native/tests/native_host_smoke.py --mock
 
 # Actual native ABI: blank edit/save/reopen and read-only input/save-copy flow.
 python3 /path/to/rhwp/bindings/Native/tests/native_host_smoke.py \
-  --library /path/to/librhwp_native.so
+  --library /path/to/librhwp_native_ffi.so
 ```
 
 Mock success does not validate native compilation, rendering, platform SDKs or OS

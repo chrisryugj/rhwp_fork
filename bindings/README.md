@@ -71,7 +71,7 @@ Swift는 `Rhwp.session*`, C#은 `RhwpNative.Session*` 메서드를 제공한다.
 앱 event loop는 host가 소유한다. native 실제 수명 검사는 빌드한 library를 지정해 실행한다.
 
 ```sh
-python3 bindings/Native/tests/session_contract.py /path/to/librhwp_native_ffi.so
+python3 bindings/Native/tests/session_contract.py /path/to/librhwp_native_ffi.so --native-skia enabled
 ```
 
 이 프로브의 Linux 통과는 Apple/Windows 패키지 실행이나 한컴 시각 정합 검증을 대신하지 않는다.
@@ -149,3 +149,11 @@ snapshot에만 기록한다. HWPX는 기존 serializer의 source settings.xml �
 현재 focus 저장을 보장하지 않는다. `caretSaved`, `caretPreservedFromSource`, `caretPolicy`로
 실제 경로를 확인한다. caretPreservedFromSource는 원본 settings.xml 바이트가 있을 때만 true이며,
 그 안의 CaretPosition 존재나 현재 focus 저장까지 증명하지 않는다. 저장 확인은 편집 history를 지우지 않으며 undo 후에는 revision 기준 dirty다.
+
+## Reference host (P57)
+
+[Python reference host](Native/examples/README.md)는 표준 라이브러리만으로
+open → region render → hit/caret → 한글 IME → undo/redo → save → reopen를 실행한다.
+기존 입력을 지정하면 편집 데모를 적용하지 않고 읽기·조회·새 파일 저장만 수행한다.
+이는 headless 경로이며 실제 window/event loop, OS IME와 각 플랫폼 packaging 검증은 별도다.
+기능을 끈 library의 ABI 검사는 위 session_contract 명령에 `--native-skia disabled`를 사용한다.
