@@ -333,7 +333,7 @@ fn native_commands_stale_revision_and_preedit_reject_without_mutation() {
     let mut editor = editor(&["가"]);
     let id = editor.begin_composition(0).unwrap().composition_id.unwrap();
     editor.update_composition(0, id, "각").unwrap();
-    let before = serde_json::to_value(editor.session().document().document()).unwrap();
+    let before = format!("{:?}", editor.session().document().document());
     let selection = editor.selection().clone();
     for command in [
         Command::SplitParagraph {},
@@ -352,7 +352,7 @@ fn native_commands_stale_revision_and_preedit_reject_without_mutation() {
         ));
     }
     assert_eq!(
-        serde_json::to_value(editor.session().document().document()).unwrap(),
+        format!("{:?}", editor.session().document().document()),
         before
     );
     assert_eq!(editor.selection(), &selection);
@@ -399,7 +399,7 @@ fn native_commands_unsupported_adjacent_inline_target_preserves_document_and_his
     editor.replace_selection(0, "x").unwrap();
     editor.undo(1).unwrap();
     let revision = editor.session().revision();
-    let before = serde_json::to_value(editor.session().document().document()).unwrap();
+    let before = format!("{:?}", editor.session().document().document());
     for command in [
         Command::DeleteForward {},
         Command::MoveRight {
@@ -416,7 +416,7 @@ fn native_commands_unsupported_adjacent_inline_target_preserves_document_and_his
         assert!(editor.can_redo());
     }
     assert_eq!(
-        serde_json::to_value(editor.session().document().document()).unwrap(),
+        format!("{:?}", editor.session().document().document()),
         before
     );
 }
