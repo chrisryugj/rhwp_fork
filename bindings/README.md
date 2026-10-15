@@ -233,3 +233,12 @@ vertical 입력에 전달하고 다른 명령 뒤에는 초기화한다.
 본문 section의 텍스트만 지원하며 출력 payload와 입력은 1 MiB, 한 번의 붙여넣기는 256 문단으로 제한합니다. CRLF/CR을 LF로 정규화하며 하나의 undo로 복원합니다. HTML은 기존 core importer/exporter를 사용하고 object/control/table의 미지원 결과는 rollback합니다. HTML parser의 peak RSS까지 제한하는 계약은 아닙니다. 빈 문단을 HTML exporter가 생략하는 선택은 정확한 plain text와 `html:null`을 반환합니다.
 
 P61의 텍스트 편집·clipboard는 전체 대상 문단에 floating object나 필드/책갈피 등 semantic control이 있으면 명시적으로 거절합니다(구조용 SectionDef/ColumnDef는 예외). 문단 합치기와 IME에도 같은 guard를 적용하며 선택 조회와 동일 텍스트 no-op는 보존합니다. HTML은 lexical preflight로 객체 태그를 거절하고 주석을 제거한 뒤 기존 importer에 전달합니다. 일반 HTML sanitizer나 객체/필드 복사 기능은 아닙니다.
+
+
+### Native 파일 저장·복구 예제 (P62)
+
+`Native/examples/native_file_store.py`의 `NativeFileStore`는 기존 동기 session ABI를 사용하는 host adapter입니다. `open(host, path)`가 읽은 파일 stamp를 기억하고, `save()`는 같은 경로의 외부 변경을 전후 확인한 뒤 같은 파일시스템의 private 임시 파일을 flush/fsync·교체하고 checkpoint를 ack합니다. `save(new_path)`는 이미 있는 다른 파일을 덮어쓰지 않습니다. 손실 보고가 있으면 `accept_loss=True`를 명시해야 합니다.
+
+`autosave(directory)`는 revision/시간 간격을 확인하여 별도 recovery artifact를 쓰고 save token은 취소하므로 원본과 dirty를 유지합니다. `read_recovery(path)`로 길이·버전·digest를 검증한 바이트를 읽어 별도 문서로 열 수 있습니다. 문서 128 MiB, recovery JSON header 64 KiB로 제한합니다. recovery 삭제·목록·사용자 확인 정책은 앱에서 결정합니다.
+
+`PublicationError`의 `published=True`와 `path`는 완성된 파일을 게시한 뒤 directory flush/정리/ack 등이 실패했음을 뜻합니다. 게시된 파일을 삭제하거나 저장 성공으로 표시하지 않고 확인해야 합니다. 외부 변경 검사는 다른 프로세스와의 원자적 compare-and-swap이 아니므로 앱 내부 저장을 직렬화해야 하며 Windows directory durability와 네트워크 파일시스템 보장은 별도 검증 대상입니다.
