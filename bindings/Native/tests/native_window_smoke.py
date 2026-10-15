@@ -223,7 +223,7 @@ def pump(app, predicate, timeout=45):
     raise TimeoutError("Qt/native flow remains pending; no cancellation was inferred")
 
 
-def actual_smoke(library):
+def actual_smoke(library, screenshot=None):
     app = QApplication.instance() or QApplication([])
     window = NativeWindow(library)
     window.show()
@@ -251,6 +251,11 @@ def actual_smoke(library):
         pump(app, lambda: idle() and window.context.get("text") == "각")
         window.zoom_at(1.25)
         pump(app, lambda: bool(window.frames) and idle())
+        if screenshot is not None:
+            if screenshot.exists():
+                raise FileExistsError(screenshot)
+            if not window.grab().save(str(screenshot), "PNG"):
+                raise RuntimeError("Qt window screenshot could not be saved")
         with tempfile.TemporaryDirectory(prefix="rhwp-native-window-") as directory:
             output = Path(directory) / "saved.hwpx"
             window.save_new(output)
@@ -271,9 +276,10 @@ def actual_smoke(library):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--library", type=Path)
+    parser.add_argument("--screenshot", type=Path)
     args = parser.parse_args()
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(AdapterTests))
     if not result.wasSuccessful():
         raise SystemExit(1)
     if args.library:
-        actual_smoke(args.library)
+        actual_smoke(args.library, args.screenshot)

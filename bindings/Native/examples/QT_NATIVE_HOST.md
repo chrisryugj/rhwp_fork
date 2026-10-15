@@ -9,7 +9,7 @@ WASM·DOM·브라우저를 사용하지 않는다. Rust worker가 문서 core를
 python3 -m venv .venv-qt
 .venv-qt/bin/python -m pip install -r bindings/Native/examples/qt-requirements.txt
 .venv-qt/bin/python bindings/Native/examples/qt_native_host.py \
-  --library /absolute/path/to/librhwp_native.so
+  --library /absolute/path/to/librhwp_native_ffi.so
 ```
 
 `--input sample.hwpx`로 기존 문서를 열 수 있다. 입력 파일을 자동 수정하거나 저장하지 않는다.
@@ -41,13 +41,16 @@ executor를 사용한다. 파일 쓰기가 실패하면 cancel하며, 이미 성
 ```bash
 QT_QPA_PLATFORM=offscreen .venv-qt/bin/python -B bindings/Native/tests/native_window_smoke.py
 QT_QPA_PLATFORM=offscreen .venv-qt/bin/python -B bindings/Native/tests/native_window_smoke.py \
-  --library /absolute/path/to/librhwp_native.so
+  --library /absolute/path/to/librhwp_native_ffi.so \
+  --screenshot /new/path/qt-window.png
 ```
 
 첫 명령은 UTF-16 경계, QImage 소유권, IME replacement 거절, 큐 상한의 Qt adapter 검사다.
-라이브러리를 지정하면 실제 blank→region 표시→합성 Qt 조합 ㄱ/가/각→commit→undo/redo→HWPX 새 파일
+라이브러리를 지정하면 실제 blank→region 표시→합성 Qt 조합 ㄱ/가/각→commit→좌우 키 이동→undo/redo→HWPX 새 파일
 저장→재열기를 검사한다. 이 검사는 OS 한글 입력기·후보창, 한컴 시각 일치 또는 플랫폼 배포 패키지 검증을
-대체하지 않는다. P59–P62 worker/editor/clipboard/save ABI가 포함된 native-skia 라이브러리가 필요하다.
+대체하지 않는다. `--screenshot`은 선택 사항이며 실행 중인 QWidget을 새 PNG 파일로 남긴다.
+실제 스모크에는 P60까지의 worker/editor/IME 문맥 ABI가 포함된 native-skia 라이브러리가 필요하다.
+창의 복사·잘라내기·붙여넣기 기능에는 P61 clipboard ABI도 필요하며 위 스모크는 그 기능을 검사하지 않는다.
 
 근거: [QInputMethodEvent](https://doc.qt.io/qtforpython-6/PySide6/QtGui/QInputMethodEvent.html),
 [QImage](https://doc.qt.io/qtforpython-6/PySide6/QtGui/QImage.html),
