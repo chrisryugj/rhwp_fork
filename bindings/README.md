@@ -242,3 +242,8 @@ P61의 텍스트 편집·clipboard는 전체 대상 문단에 floating object나
 `autosave(directory)`는 revision/시간 간격을 확인하여 별도 recovery artifact를 쓰고 save token은 취소하므로 원본과 dirty를 유지합니다. `read_recovery(path)`로 길이·버전·digest를 검증한 바이트를 읽어 별도 문서로 열 수 있습니다. 문서 128 MiB, recovery JSON header 64 KiB로 제한합니다. recovery 삭제·목록·사용자 확인 정책은 앱에서 결정합니다.
 
 `PublicationError`의 `published=True`와 `path`는 완성된 파일을 게시한 뒤 directory flush/정리/ack 등이 실패했음을 뜻합니다. 게시된 파일을 삭제하거나 저장 성공으로 표시하지 않고 확인해야 합니다. 외부 변경 검사는 다른 프로세스와의 원자적 compare-and-swap이 아니므로 앱 내부 저장을 직렬화해야 하며 Windows directory durability와 네트워크 파일시스템 보장은 별도 검증 대상입니다.
+
+
+### Native Qt 창 예제 (P63)
+
+[Qt 실행 안내](Native/examples/QT_NATIVE_HOST.md)는 선택 설치하는 PySide6 창과 기존 NativeWorker·Skia RGBA 경로를 연결합니다. Linux에서 실제 QWidget offscreen 렌더·한글 QInputMethodEvent·키보드 이동·undo/redo·새 파일 저장/재열기를 확인했습니다. 실제 OS IME 후보창·compositor와 macOS/Windows 실행은 별도 검증 대상입니다.
