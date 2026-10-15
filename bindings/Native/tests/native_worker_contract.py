@@ -2,6 +2,7 @@
 """Actual-library worker queue, ownership and delayed-save contracts."""
 
 import argparse
+from contextlib import ExitStack
 from pathlib import Path
 import sys
 import threading
@@ -19,6 +20,86 @@ def accepted(worker, command):
 
 def position(offset=0):
     return {"section": 0, "paragraph": 0, "scalarOffset": offset, "cellPath": []}
+
+
+def buffer_quota_contract(library):
+    # Exercise the handle-count limit using only 256 retained pixel bytes. Each
+    # completion is received before another render, so coalescing cannot hide it.
+    with NativeWorker(library, {"maxOutstanding": 1}) as worker:
+        with ExitStack() as buffers:
+            info = accepted(worker, {"op": "new", "replace": None})["info"]
+            target = {"documentId": info["documentId"], "revision": info["revision"]}
+            selection = {"anchor": position(), "focus": position()}
+            accepted(worker, {"op": "beginEdit", "target": target, "selection": selection})
+            outcome = accepted(worker, {"op": "replace", "target": target,
+                                        "text": "버퍼 한도"})["outcome"]
+            target["revision"] = outcome["revision"]
+            retained = set()
+            for _ in range(64):
+                frame = accepted(worker, {
+                    "op": "renderRegion", "target": target, "fontGeneration": 0,
+                    "page": 0, "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "scale": 1,
+                })
+                buffers.callback(worker.host.call, "buffer_release", frame["buffer"])
+                assert frame["kind"] == "frame", frame
+                assert (frame["width"], frame["height"], frame["byteLength"]) == (1, 1, 4), frame
+                assert frame["buffer"] not in retained, "retained buffer handles were reused"
+                retained.add(frame["buffer"])
+
+            request = worker.submit({"op": "prepareSave", "target": target, "format": "hwpx"})
+            failed = worker.wait(request)
+            if "buffer" in failed:
+                buffers.callback(worker.host.call, "buffer_release", failed["buffer"])
+            assert failed["requestId"] == request, "quota failure lost the accepted save request ID"
+            assert not failed["ok"] and failed.get("code") == "limitExceeded", failed
+            assert "buffer" not in failed and "token" not in failed, failed
+            cleanup = failed.get("saveCleanup")
+            assert isinstance(cleanup, dict) and cleanup.get("ok") is True, (
+                "retaining save bytes failed without an accepted token cleanup", failed
+            )
+            cleanup_id = cleanup.get("requestId")
+            assert type(cleanup_id) is int and cleanup_id > 0 and cleanup_id != request, cleanup
+            cleaned = worker.wait(cleanup_id)
+            assert cleaned["ok"] and cleaned.get("kind") == "saveStatus", (
+                "automatic save-token cleanup did not complete successfully", cleaned
+            )
+            assert cleaned["requestId"] == cleanup_id, cleaned
+            assert cleaned["documentId"] == target["documentId"], cleaned
+            assert cleaned["isDirty"] and cleaned["status"] == {
+                "revision": target["revision"], "savedRevision": None, "dirty": True,
+            }, cleaned
+            dirty = accepted(worker, {"op": "info"})["info"]
+            assert dirty["isDirty"] and dirty["revision"] == target["revision"], dirty
+
+            # Release after receiving cleanup, even if any assertion above fails.
+            # ExitStack also runs every release if another release raises.
+            buffers.close()
+            prepared = accepted(worker, {"op": "prepareSave", "target": target,
+                                         "format": "hwpx"})
+            data = worker.copy_buffer(prepared)
+            assert data.startswith(b"PK") and prepared["report"]["count"] == 0, prepared
+            assert prepared["revision"] == target["revision"], prepared
+            dirty = accepted(worker, {"op": "info"})["info"]
+            assert dirty["isDirty"], "preparing/copying bytes falsely marked the document clean"
+            outcome = accepted(worker, {"op": "replace", "target": target,
+                                        "text": " 이후 변경"})["outcome"]
+            target["revision"] = outcome["revision"]
+            saved = accepted(worker, {"op": "acknowledgeSave",
+                                      "documentId": target["documentId"],
+                                      "token": prepared["token"]})
+            assert saved["isDirty"] and saved["status"] == {
+                "revision": target["revision"], "savedRevision": prepared["revision"],
+                "dirty": True,
+            }, saved
+
+    assert worker.is_finished()
+    try:
+        worker.host.host_request(op="workerStatus", worker=worker.worker)
+    except NativeCallError as error:
+        assert error.code == "invalidArgument", error.response
+    else:
+        raise AssertionError("closed worker handle remained registered after release")
 
 
 def run(library):
@@ -81,7 +162,8 @@ def run(library):
         pixels = viewer.copy_buffer(frame)
         assert len(pixels) == frame["height"] * frame["stride"]
         viewer.wait_closed()
-    print('{"ok":true,"contract":"native-worker","queueCredit":true,"saveRevision":true,"threadOwnership":true}')
+    buffer_quota_contract(library)
+    print('{"ok":true,"contract":"native-worker","queueCredit":true,"saveRevision":true,"threadOwnership":true,"saveBufferQuotaCleanup":true}')
 
 
 if __name__ == "__main__":
