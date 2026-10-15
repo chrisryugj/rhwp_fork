@@ -410,6 +410,7 @@ pub unsafe extern "C" fn rhwp_session_request(
                     let caret_preserved = prepared.caret_preserved_from_source();
                     let caret_policy = prepared.caret_policy();
                     let (bytes,report,revision,token) = prepared.into_parts();
+                    let report: Value = serde_json::from_str(&report.to_json()).expect("content-loss report is valid JSON");
                     let byte_length = bytes.len();
                     let buffer = match retain_buffer(&mut host, bytes) {
                         Ok(buffer) => buffer,
