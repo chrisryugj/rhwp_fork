@@ -481,7 +481,15 @@ fn worker_output(host: &mut Host, worker: u64, output: NativeRuntimeOutput) -> V
     };
     let result: Result<Value, NativeHostError> = (|| {
         Ok(match output {
-            NativeRuntimeOutput::Info(info) => json!({"ok":true,"kind":"info","info":info}),
+            NativeRuntimeOutput::Info(info) => {
+                let mut encoded = json!(info);
+                if let Some(fields) = encoded.as_object_mut() {
+                    if let Some(dirty) = fields.remove("dirty") {
+                        fields.insert("isDirty".into(), dirty);
+                    }
+                }
+                json!({"ok":true,"kind":"info","info":encoded})
+            }
             NativeRuntimeOutput::DocumentClosed => json!({"ok":true,"kind":"documentClosed"}),
             NativeRuntimeOutput::PageSize { target, page, size } => {
                 json!({"ok":true,"kind":"pageSize","target":target,"page":page,"size":size})
