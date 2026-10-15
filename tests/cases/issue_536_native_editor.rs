@@ -1,4 +1,5 @@
 //! Native editor state/undo contracts; these tests do not assert visual parity.
+#![cfg(not(target_arch = "wasm32"))]
 
 use rhwp::document_core::native_interaction::{
     NativeCellPathEntry, NativeTextPosition, NativeTextSelection,
@@ -509,4 +510,40 @@ fn issue_536_native_editor_inline_first_paragraph_keeps_viewer_open() {
         before
     );
     assert!(!session.document().get_document_info().is_empty());
+}
+
+#[cfg(feature = "native-skia")]
+#[test]
+fn issue_536_native_editor_font_changes_preserve_history_and_reject_preedit() {
+    use rhwp::renderer::font_environment::FontEnvironment;
+    let mut editor = editor("가");
+    editor.replace_selection(0, "나").unwrap();
+    let environment =
+        FontEnvironment::from_json(r#"{"id":"native-editor-fonts","substitutions":{}}"#).unwrap();
+    assert!(editor
+        .set_font_sources(revision(&editor), &[], Some(environment.clone()))
+        .unwrap());
+    assert!(editor.can_undo());
+    editor.undo(revision(&editor)).unwrap();
+    assert_eq!(
+        editor.session().document().font_environment(),
+        Some(&environment)
+    );
+    editor.redo(revision(&editor)).unwrap();
+    assert_eq!(
+        editor.session().document().font_environment(),
+        Some(&environment)
+    );
+    let composition = editor
+        .begin_composition(revision(&editor))
+        .unwrap()
+        .composition_id
+        .unwrap();
+    assert!(editor
+        .set_font_sources(revision(&editor), &[], None)
+        .is_err());
+    editor
+        .cancel_composition(revision(&editor), composition)
+        .unwrap();
+    assert_eq!(editor.session().font_generation(), 1);
 }

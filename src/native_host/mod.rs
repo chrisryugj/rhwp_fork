@@ -3,6 +3,7 @@
 //! 문서 엔진의 편집 정책은 바꾸지 않는다. 세션은 생성한 스레드에서 사용하며
 //! 페이지 좌표는 기존 layer tree의 96-DPI 논리 좌표를 그대로 사용한다.
 
+pub mod editor;
 pub mod fonts;
 
 use std::marker::PhantomData;
@@ -172,6 +173,15 @@ impl NativeDocumentSession {
             .get()
             .map(|renderer| renderer.cache_stats())
             .unwrap_or_default()
+    }
+
+    pub(super) fn did_mutate(&mut self) -> Result<u64, NativeHostError> {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| NativeHostError::LimitExceeded("document revision exhausted".into()))?;
+        self.clear_caches();
+        Ok(self.revision)
     }
 
     pub fn check_revision(&self, expected: u64) -> Result<(), NativeHostError> {

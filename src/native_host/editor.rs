@@ -15,13 +15,15 @@ use super::{NativeDocumentSession, NativeHostError};
 const DEFAULT_HISTORY_CAPACITY: usize = 16;
 
 /// The host must choose what losing input focus does to an active composition.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum NativeCompositionFocusLoss {
     Commit,
     Cancel,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NativeEditOutcome {
     pub revision: u64,
     pub selection: NativeTextSelection,
@@ -139,6 +141,18 @@ impl NativeEditor {
 
     pub fn session(&self) -> &NativeDocumentSession {
         &self.session
+    }
+
+    /// Keep history and selection while replacing fonts; finish IME first.
+    pub fn set_font_sources(
+        &mut self,
+        expected_revision: u64,
+        paths: &[std::path::PathBuf],
+        environment: Option<crate::renderer::font_environment::FontEnvironment>,
+    ) -> Result<bool, NativeHostError> {
+        self.session.check_revision(expected_revision)?;
+        self.require_no_composition()?;
+        self.session.set_font_sources(paths, environment)
     }
 
     pub fn selection(&self) -> &NativeTextSelection {

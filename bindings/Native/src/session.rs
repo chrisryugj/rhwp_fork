@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rhwp_core::document_core::native_interaction::{
     NativeTextPosition, NativeTextSelection, NativeVerticalDirection,
 };
+use rhwp_core::native_host::editor::{NativeCompositionFocusLoss, NativeEditOutcome, NativeEditor};
 use rhwp_core::native_host::{NativeDocumentSession, NativeHostError, MAX_DOCUMENT_BYTES};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -21,9 +22,102 @@ static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default)]
 struct Host {
-    sessions: HashMap<u64, NativeDocumentSession>,
+    sessions: HashMap<u64, ManagedSession>,
     buffers: HashMap<u64, Vec<u8>>,
     buffer_bytes: usize,
+}
+
+enum ManagedSession {
+    View(Box<NativeDocumentSession>),
+    Edit(Box<NativeEditor>),
+}
+
+impl ManagedSession {
+    fn session(&self) -> &NativeDocumentSession {
+        match self {
+            Self::View(session) => session,
+            Self::Edit(editor) => editor.session(),
+        }
+    }
+    fn editor_mut(&mut self) -> Result<&mut NativeEditor, NativeHostError> {
+        match self {
+            Self::Edit(editor) => Ok(editor),
+            Self::View(_) => Err(NativeHostError::InvalidArgument(
+                "beginEdit is required".into(),
+            )),
+        }
+    }
+    fn set_fonts(
+        &mut self,
+        paths: &[std::path::PathBuf],
+        environment: Option<rhwp_core::renderer::font_environment::FontEnvironment>,
+    ) -> Result<bool, NativeHostError> {
+        match self {
+            Self::View(session) => session.set_font_sources(paths, environment),
+            Self::Edit(editor) => {
+                editor.set_font_sources(editor.session().revision(), paths, environment)
+            }
+        }
+    }
+    fn editing_info(&self) -> (bool, bool, Option<u64>) {
+        match self {
+            Self::View(_) => (false, false, None),
+            Self::Edit(editor) => (
+                editor.can_undo(),
+                editor.can_redo(),
+                editor.composition_id(),
+            ),
+        }
+    }
+}
+
+fn edit_result(outcome: NativeEditOutcome) -> Value {
+    json!({"ok":true,"outcome":outcome})
+}
+
+impl Host {
+    fn begin_edit(
+        &mut self,
+        handle: u64,
+        expected_revision: u64,
+        selection: NativeTextSelection,
+    ) -> Result<Value, NativeHostError> {
+        self.sessions
+            .get(&handle)
+            .ok_or_else(invalid_handle)?
+            .session()
+            .check_revision(expected_revision)?;
+        let record = self.sessions.remove(&handle).ok_or_else(invalid_handle)?;
+        match record {
+            ManagedSession::View(session) => match NativeEditor::try_new(*session, selection) {
+                Ok(editor) => {
+                    let result = edit_result(NativeEditOutcome {
+                        revision: editor.session().revision(),
+                        selection: editor.selection().clone(),
+                        document_changed: false,
+                        history_changed: false,
+                        composition_id: None,
+                    });
+                    self.sessions
+                        .insert(handle, ManagedSession::Edit(Box::new(editor)));
+                    Ok(result)
+                }
+                Err(failed) => {
+                    let (session, error) = *failed;
+                    self.sessions
+                        .insert(handle, ManagedSession::View(Box::new(session)));
+                    Err(error)
+                }
+            },
+            ManagedSession::Edit(mut editor) => {
+                let result = editor
+                    .set_selection(expected_revision, selection)
+                    .map(edit_result);
+                self.sessions.insert(handle, ManagedSession::Edit(editor));
+                result
+            }
+        }
+    }
 }
 
 thread_local! {
@@ -39,6 +133,47 @@ thread_local! {
 )]
 enum Request {
     Info,
+    BeginEdit {
+        selection: NativeTextSelection,
+        expected_revision: u64,
+    },
+    SetSelection {
+        selection: NativeTextSelection,
+        expected_revision: u64,
+    },
+    ReplaceSelection {
+        text: String,
+        expected_revision: u64,
+    },
+    BeginComposition {
+        expected_revision: u64,
+    },
+    UpdateComposition {
+        composition_id: u64,
+        text: String,
+        expected_revision: u64,
+    },
+    CommitComposition {
+        composition_id: u64,
+        expected_revision: u64,
+    },
+    CancelComposition {
+        composition_id: u64,
+        expected_revision: u64,
+    },
+    FocusLost {
+        policy: NativeCompositionFocusLoss,
+        expected_revision: u64,
+    },
+    Undo {
+        expected_revision: u64,
+    },
+    Redo {
+        expected_revision: u64,
+    },
+    ClearHistory {
+        expected_revision: u64,
+    },
     HitTest {
         page: u32,
         x: f64,
@@ -209,7 +344,8 @@ pub unsafe extern "C" fn rhwp_session_open(
             };
             let id = next_handle()?;
             let page_count = session.document().page_count();
-            host.sessions.insert(id, session);
+            host.sessions
+                .insert(id, ManagedSession::View(Box::new(session)));
             Ok(json!({"ok":true,"handle":id,"pageCount":page_count,"revision":0}))
         })
     })
@@ -229,15 +365,31 @@ pub unsafe extern "C" fn rhwp_session_request(
             .map_err(|_| NativeHostError::InvalidArgument("invalid native request JSON".into()))?;
         HOST.with(|host| {
             let mut host = host.borrow_mut();
-            let session = host.sessions.get_mut(&handle).ok_or_else(invalid_handle)?;
+            if let Request::BeginEdit { selection, expected_revision } = request {
+                return host.begin_edit(handle, expected_revision, selection);
+            }
+            let record = host.sessions.get_mut(&handle).ok_or_else(invalid_handle)?;
+            let session = record.session();
             match request {
+                Request::BeginEdit { .. } => unreachable!("handled before borrowing session"),
+                Request::SetSelection { selection, expected_revision } => Ok(edit_result(record.editor_mut()?.set_selection(expected_revision,selection)?)),
+                Request::ReplaceSelection { text, expected_revision } => Ok(edit_result(record.editor_mut()?.replace_selection(expected_revision,&text)?)),
+                Request::BeginComposition { expected_revision } => Ok(edit_result(record.editor_mut()?.begin_composition(expected_revision)?)),
+                Request::UpdateComposition { composition_id, text, expected_revision } => Ok(edit_result(record.editor_mut()?.update_composition(expected_revision,composition_id,&text)?)),
+                Request::CommitComposition { composition_id, expected_revision } => Ok(edit_result(record.editor_mut()?.commit_composition(expected_revision,composition_id)?)),
+                Request::CancelComposition { composition_id, expected_revision } => Ok(edit_result(record.editor_mut()?.cancel_composition(expected_revision,composition_id)?)),
+                Request::FocusLost { policy, expected_revision } => Ok(edit_result(record.editor_mut()?.focus_lost(expected_revision,policy)?)),
+                Request::Undo { expected_revision } => Ok(edit_result(record.editor_mut()?.undo(expected_revision)?)),
+                Request::Redo { expected_revision } => Ok(edit_result(record.editor_mut()?.redo(expected_revision)?)),
+                Request::ClearHistory { expected_revision } => Ok(edit_result(record.editor_mut()?.clear_history(expected_revision)?)),
                 Request::HitTest { page, x, y } => Ok(json!({"ok":true,"hit":session.document().native_hit_test(page,x,y)?})),
                 Request::Caret { position } => Ok(json!({"ok":true,"caret":session.document().native_caret_rect(&position)?})),
                 Request::SelectionRects { selection } => Ok(json!({"ok":true,"rects":session.document().native_selection_rects(&selection)?})),
                 Request::MoveVertical { position, direction, preferred_x } => Ok(json!({"ok":true,"movement":session.document().native_move_vertical(&position,direction,preferred_x)?})),
                 Request::FontState => Ok(json!({"ok":true,"state":session.font_state(),"fontGeneration":session.font_generation()})),
                 Request::SetFonts { paths, environment } => {
-                    let changed = session.set_font_sources(&paths, environment)?;
+                    let changed = record.set_fonts(&paths, environment)?;
+                    let session = record.session();
                     Ok(json!({"ok":true,"changed":changed,"state":session.font_state(),"fontGeneration":session.font_generation()}))
                 }
                 Request::IsFrameCurrent { revision, font_generation } => Ok(json!({"ok":true,"current":session.is_frame_current(revision, font_generation)})),
@@ -248,7 +400,10 @@ pub unsafe extern "C" fn rhwp_session_request(
                     #[cfg(not(feature = "native-skia"))]
                     { Err(NativeHostError::FeatureDisabled) }
                 }
-                Request::Info => Ok(json!({"ok":true,"pageCount":session.document().page_count(),"revision":session.revision()})),
+                Request::Info => {
+                    let (can_undo,can_redo,composition_id) = record.editing_info();
+                    Ok(json!({"ok":true,"pageCount":session.document().page_count(),"revision":session.revision(),"fontGeneration":session.font_generation(),"canUndo":can_undo,"canRedo":can_redo,"compositionId":composition_id}))
+                },
                 Request::PageSize { page } => Ok(json!({"ok":true,"page":page,"size":session.page_size(page)?})),
                 Request::Render { page, scale } => {
                     let frame = session.render_page(page, scale)?;

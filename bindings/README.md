@@ -112,3 +112,22 @@ cellPath의 `{control, cell, paragraph}` 항목은 바깥 문단에서 안쪽 �
 실제 caret geometry가 없으면 null이며, 임의의 (0,0) 사각형을 만들어내지 않는다.
 본문·중첩 표 셀을 조회하며 textbox/caption/note/header/footer, inline control affinity와
 서로 다른 container를 가로지르는 선택은 명시적으로 unsupported 오류를 반환한다.
+
+## 본문 편집, IME와 undo (P55)
+
+`beginEdit{selection,expectedRevision}`로 기존 viewer 세션을 편집 세션으로 전환한다.
+지원하지 않는 위치로 전환에 실패해도 열린 문서는 유지된다. 편집 요청은 expectedRevision을
+필수로 받고 오래된 요청을 거절한다. `setSelection`, `replaceSelection{text}`와 `undo`, `redo`,
+`clearHistory`는 모두 같은 revision 계약을 사용한다. 반환 `outcome`에 다음 revision, selection,
+compositionId, documentChanged/historyChanged가 있다.
+
+`beginComposition` → `updateComposition{compositionId,text}` 반복 → `commitComposition` 또는
+`cancelComposition` 순서로 호출한다. 각 요청에 최신 expectedRevision도 전달한다. preedit는
+같은 원본 선택을 대체하고 commit은 한 undo 단위다. 취소된 과거 조합의 이벤트는 ID로 거절한다.
+`focusLost{policy:"commit"|"cancel",expectedRevision}`로 앱의 focus 정책을 명시한다.
+조합 중 선택 이동·일반 편집·undo·폰트 교체는 먼저 commit/cancel해야 한다.
+
+이 단계는 본문 scalar 텍스트만 편집한다. 셀 편집·inline object affinity·줄/문단 삽입·탭은
+별도 명령이 필요하며 거절한다. history는 기본 16작업의 snapshot pair이고 caller의 기존
+snapshot을 지우지 않는다. snapshot 수 제한은 전체 메모리 상한이 아니다. core의 event log
+정책은 유지하며 OS 키보드/IME 후보창은 앱이 caret geometry를 이용해 연결한다.
