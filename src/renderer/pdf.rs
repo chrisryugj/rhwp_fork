@@ -144,8 +144,8 @@ fn validate_direct_pdf_tree(
             ));
         }
         // Empty positions explicitly request evenly spaced colors. Every
-        // supplied position must be usable unchanged: Native's convenience
-        // clamping/even-spacing fallback is not lossless PDF admission.
+        // supplied position must be usable unchanged before the shared
+        // source-center expansion; malformed stops are not PDF admission.
         if !gradient.positions.is_empty()
             && (gradient.positions.len() != gradient.colors.len()
                 || gradient
@@ -161,7 +161,8 @@ fn validate_direct_pdf_tree(
             ));
         }
 
-        // Validate the same f32 rectangle and common axis consumed by Native.
+        // Validate the same f32 rectangle consumed by Native. The shader's
+        // common axis and source-center expansion use the original f64 bbox.
         // Finite f64 components alone do not prove finite edges, nonempty
         // replay bounds, or distinct shader endpoints after conversion.
         let bounds = skia_safe::Rect::from_xywh(
@@ -181,12 +182,35 @@ fn validate_direct_pdf_tree(
                 "invalid gradient replay bounds",
             ));
         }
+        let (colors, positions) = crate::renderer::linear_gradient_color_stops(
+            gradient,
+            bbox.x,
+            bbox.y,
+            bbox.width,
+            bbox.height,
+        );
+        // Keep the 4096-source-color contract. A center inside the box can
+        // produce two ramps, so the actual shader is bounded to 8192 stops.
+        if colors.len() < 2
+            || colors.len() > 8192
+            || colors.len() != positions.len()
+            || positions
+                .iter()
+                .any(|position| !position.is_finite() || !(0.0..=1.0).contains(position))
+            || positions.windows(2).any(|pair| pair[0] > pair[1])
+        {
+            return Err(unsupported(
+                page_index,
+                op,
+                "invalid expanded gradient stop positions",
+            ));
+        }
         let (x1, y1, x2, y2) = crate::renderer::linear_gradient_axis(
             gradient.angle,
-            f64::from(bounds.left),
-            f64::from(bounds.top),
-            f64::from(bounds.width()),
-            f64::from(bounds.height()),
+            bbox.x,
+            bbox.y,
+            bbox.width,
+            bbox.height,
         );
         if [x1, y1, x2, y2]
             .into_iter()

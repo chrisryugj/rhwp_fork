@@ -24,7 +24,9 @@ use super::utils::{
     expand_numbering_format, extract_shape_transform, find_bin_data_bytes,
     numbering_format_to_number_format, picture_display_size_hu, resolve_numbering_id,
 };
-use super::{CellContext, LayoutEngine, ParagraphVerticalSpacing};
+use super::{
+    fill_background::ParagraphFillBand, CellContext, LayoutEngine, ParagraphVerticalSpacing,
+};
 use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
 use crate::model::paragraph::{LineSeg, MarkerHead, NumberingMarker, Paragraph};
@@ -2891,6 +2893,7 @@ impl LayoutEngine {
             return;
         }
         let chars: Vec<_> = para.text.chars().collect();
+        let mut paragraph_fill_bands = Vec::new();
         // Physical rows and per-character positions are the measurement
         // result. Preserve them in the render tree and coalesce compatible
         // adjacent characters without measuring their advances again.
@@ -2972,6 +2975,30 @@ impl LayoutEngine {
                     BoundingBox::new(x, y, item.width, item.height),
                 ));
             }
+            let anchor = (!line.children.is_empty()).then_some((line.id, line.bbox.y));
+            let top = col_area.y + row.y;
+            let bottom = col_area.y
+                + plan.rows.get(line_index + 1).map_or_else(
+                    || {
+                        let style = styles.para_styles.get(para.para_shape_id as usize);
+                        if crate::renderer::paragraph_outline_reserves_line_spacing(
+                            style.map_or(0, |s| s.border_fill_id),
+                            styles,
+                        ) && !style.is_some_and(|s| s.border_ignore_margin)
+                        {
+                            plan.end - style.map_or(0.0, |s| s.spacing_after)
+                        } else {
+                            row.y + row.height
+                        }
+                    },
+                    |next| next.y.max(row.y + row.height),
+                );
+            paragraph_fill_bands.push(ParagraphFillBand {
+                line_index: Some(line_index),
+                anchor,
+                top,
+                bottom,
+            });
             if !line.children.is_empty() {
                 col_node.children.push(line);
             }
@@ -3088,6 +3115,44 @@ impl LayoutEngine {
                         Self::standalone_table_char_border_fill(Some(para), table, styles),
                     );
                 }
+            }
+        }
+        if let Some(style) = styles
+            .para_styles
+            .get(para.para_shape_id as usize)
+            .filter(|style| style.border_fill_id > 0)
+        {
+            if let (Some(first), Some(last)) =
+                (paragraph_fill_bands.first(), paragraph_fill_bands.last())
+            {
+                let (left, width) = self.border_box_override.get().unwrap_or({
+                    if style.border_ignore_margin {
+                        (
+                            col_area.x + style.margin_left,
+                            col_area.width - style.margin_left - style.margin_right,
+                        )
+                    } else {
+                        (col_area.x, col_area.width)
+                    }
+                });
+                let top = if style.border_ignore_margin {
+                    first.top
+                } else {
+                    col_area.y + plan.start
+                };
+                self.para_border_ranges.borrow_mut().push((
+                    style.border_fill_id,
+                    left - style.border_spacing[0],
+                    top,
+                    width + style.border_spacing[0] + style.border_spacing[1],
+                    last.bottom,
+                    style.border_spacing[2],
+                    style.border_spacing[3],
+                    false,
+                    false,
+                    para_index,
+                    paragraph_fill_bands,
+                ));
             }
         }
     }
@@ -5415,7 +5480,12 @@ impl LayoutEngine {
 
         // 배경/테두리 렌더링을 위한 시작 위치 기록
         // 문단 경계 = 이전 문단 끝 = y_start (spacing_before 적용 전)
-        let bg_y_start = if para_border_fill_id > 0 { y_start } else { y };
+        let border_uses_text_area = para_style.is_some_and(|style| style.border_ignore_margin);
+        let bg_y_start = if para_border_fill_id > 0 && !border_uses_text_area {
+            y_start
+        } else {
+            y
+        };
         let bg_insert_idx = col_node.children.len();
 
         // start_line까지의 누적 문자 오프셋 계산 (편집용 문서 좌표)
@@ -5591,6 +5661,7 @@ impl LayoutEngine {
         // 162.0px, 실제로 그려진 선 159.7/163.7).
         let mut last_line_box_bottom: Option<f64> = None;
         let mut last_line_border_bottom: Option<f64> = None;
+        let mut paragraph_fill_bands = Vec::new();
         let stored_tac_assignment =
             para.and_then(|p| crate::renderer::composer::composed_tac_line_assignment(p, composed));
         for line_idx in start_line..end {
@@ -7376,6 +7447,7 @@ impl LayoutEngine {
                             })
                     })
                 });
+            let fill_anchor = (line_node.id, line_node.bbox.y);
             if !unused_frame_lane {
                 col_node.children.push(line_node);
             }
@@ -7513,6 +7585,9 @@ impl LayoutEngine {
                     self.last_item_endnote_equation_tail_line_box.set(true);
                 }
             }
+            let next_is_row_fragment = para.is_some_and(|p| {
+                crate::renderer::height_measurer::stored_seg_is_row_fragment(p, line_idx + 1)
+            });
             if endnote_line_vpos_base.is_some() {
                 let line_bottom = if skip_advance_empty_line {
                     y
@@ -7548,9 +7623,7 @@ impl LayoutEngine {
                 y += line_flow_height;
             } else if skip_advance_empty_line {
                 // no advance
-            } else if para.is_some_and(|p| {
-                crate::renderer::height_measurer::stored_seg_is_row_fragment(p, line_idx + 1)
-            }) {
+            } else if next_is_row_fragment {
                 // [#6299] 다음 줄이 이 줄의 **가로 조각**(같은 vertical_pos, 다른
                 // column_start)이면 같은 물리 줄이다 — 어울림 개체 좌·우로 쪼개진 짝을
                 // 세로로 쌓으면 문단이 조각 수만큼 길어져 칸 밖으로 흘러내린다
@@ -7561,6 +7634,23 @@ impl LayoutEngine {
             } else {
                 last_line_box_bottom = Some(y + render_line_flow_height);
                 y += render_line_flow_height + render_line_spacing_px + tac_picture_label_extra;
+            }
+            if !unused_frame_lane && !skip_advance_empty_line && !next_is_row_fragment {
+                let bottom = if is_cell_last_line && cell_ctx.is_some() {
+                    last_line_border_bottom.unwrap_or(y)
+                } else {
+                    y.max(last_line_box_bottom.unwrap_or(y))
+                };
+                if bottom > fill_anchor.1 {
+                    paragraph_fill_bands.push(ParagraphFillBand {
+                        line_index: Some(super::fill_background::paragraph_fill_line_index(
+                            para, line_idx,
+                        )),
+                        anchor: Some(fill_anchor),
+                        top: fill_anchor.1,
+                        bottom,
+                    });
+                }
             }
             prev_line_reserved_tac_picture_height = current_line_reserved_tac_picture_height;
         }
@@ -7595,7 +7685,9 @@ impl LayoutEngine {
                 last_line_border_bottom
                     .or(last_line_box_bottom)
                     .map_or(y, |bottom| {
-                        if cell_ctx.is_none() && !outline_includes_line_spacing {
+                        if cell_ctx.is_none()
+                            && (!outline_includes_line_spacing || border_uses_text_area)
+                        {
                             bottom
                         } else {
                             y.max(bottom)
@@ -7624,6 +7716,11 @@ impl LayoutEngine {
                 // override 좌표 그대로 사용 (margin 미적용).
                 let (box_x, box_w) = if let Some((ox, ow)) = self.border_box_override.get() {
                     (ox, ow)
+                } else if border_uses_text_area {
+                    (
+                        col_area.x + box_margin_left,
+                        col_area.width - box_margin_left - box_margin_right,
+                    )
                 } else {
                     (col_area.x, col_area.width)
                 };
@@ -7638,6 +7735,7 @@ impl LayoutEngine {
                     is_partial_start,
                     is_partial_end,
                     para_index,
+                    paragraph_fill_bands,
                 ));
             }
         }
@@ -8382,29 +8480,17 @@ impl LayoutEngine {
                     (x, full_width)
                 };
 
-                // 글자 배경 사각형 (텍스트 앞에 삽입)
-                if run_border_fill_id > 0 {
-                    let bf_idx = (run_border_fill_id as usize).saturating_sub(1);
-                    if let Some(bs) = styles.border_styles.get(bf_idx) {
-                        if let Some(fill_color) = bs.fill_color {
-                            let rect_id = tree.next_id();
-                            let rect_node = RenderNode::new(
-                                rect_id,
-                                RenderNodeType::Rectangle(RectangleNode::new(
-                                    0.0,
-                                    ShapeStyle {
-                                        fill_color: Some(fill_color),
-                                        stroke_color: None,
-                                        stroke_width: 0.0,
-                                        ..Default::default()
-                                    },
-                                    None,
-                                )),
-                                BoundingBox::new(run_x, y, run_w, line_height),
-                            );
-                            line_node.children.push(rect_node);
-                        }
-                    }
+                // 글자 배경도 이 줄의 실제 run 상자를 소비한다. 글자 크기나 줄이
+                // 달라져도 종류를 단색으로 축소하지 않고 원래 BorderFill을 그린다.
+                if let Some(bf_idx) = run_border_fill_id.checked_sub(1) {
+                    line_node
+                        .children
+                        .extend(Self::border_fill_background_nodes(
+                            tree,
+                            styles.border_styles.get(usize::from(bf_idx)),
+                            BoundingBox::new(x, y, full_width, line_height),
+                            bin_data_content.unwrap_or_default(),
+                        ));
                 }
 
                 // 형광펜 배경 사각형 (RangeTag type=2)
@@ -8680,9 +8766,9 @@ impl LayoutEngine {
                 if run_border_fill_id > 0 {
                     let bf_idx = (run_border_fill_id as usize).saturating_sub(1);
                     if let Some(bs) = styles.border_styles.get(bf_idx) {
-                        let bx = run_x;
+                        let bx = x;
                         let by = y;
-                        let bw = run_w;
+                        let bw = full_width;
                         let bh = line_height;
                         // borders[0]=left, [1]=right, [2]=top, [3]=bottom
                         let border_pairs: [(f64, f64, f64, f64, usize); 4] = [

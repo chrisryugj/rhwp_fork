@@ -845,6 +845,61 @@ pub fn linear_gradient_axis(angle: i16, x: f64, y: f64, w: f64, h: f64) -> (f64,
     )
 }
 
+/// 선형 그러데이션의 첫 색은 원본 중심에, 마지막 색은 양쪽 끝에 놓인다.
+/// 한컴 Print의 0/50/100% 중심 대조군에서 50%는 두 방향, 끝 중심은 한 방향 램프다.
+/// step/stepCenter로 이미 편 stop의 순서·불연속도 함께 보존한다.
+pub(crate) fn linear_gradient_color_stops(
+    gradient: &GradientFillInfo,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> (Vec<ColorRef>, Vec<f64>) {
+    let positions: Vec<_> =
+        (0..gradient.colors.len())
+            .map(|i| {
+                gradient.positions.get(i).copied().unwrap_or_else(|| {
+                    i as f64 / gradient.colors.len().saturating_sub(1).max(1) as f64
+                })
+            })
+            .collect();
+    if gradient.gradient_type != 1
+        || gradient.colors.len() < 2
+        || !(0..=100).contains(&gradient.center_x)
+        || !(0..=100).contains(&gradient.center_y)
+        || width <= 0.0
+        || height <= 0.0
+    {
+        return (gradient.colors.clone(), positions);
+    }
+    let (x0, y0, x1, y1) = linear_gradient_axis(gradient.angle, x, y, width, height);
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let length_squared = dx * dx + dy * dy;
+    if length_squared <= 0.0 {
+        return (gradient.colors.clone(), positions);
+    }
+    let cx = x + width * f64::from(gradient.center_x) / 100.0;
+    let cy = y + height * f64::from(gradient.center_y) / 100.0;
+    // 유효한 0..100% 중심은 상자 안이다. 정사영의 끝자리 부동소수 오차만 정규화한다.
+    let center = (((cx - x0) * dx + (cy - y0) * dy) / length_squared).clamp(0.0, 1.0);
+    let mut colors = Vec::with_capacity(gradient.colors.len() * 2);
+    let mut stops = Vec::with_capacity(gradient.colors.len() * 2);
+    if center > 0.0 {
+        for (&color, &position) in gradient.colors.iter().zip(&positions).rev() {
+            colors.push(color);
+            stops.push(center * (1.0 - position));
+        }
+    }
+    if center < 1.0 {
+        for (&color, &position) in gradient.colors.iter().zip(&positions) {
+            colors.push(color);
+            stops.push(center + (1.0 - center) * position);
+        }
+    }
+    (colors, stops)
+}
+
 /// 선 렌더링 스타일
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct LineStyle {

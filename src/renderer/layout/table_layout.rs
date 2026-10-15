@@ -2771,7 +2771,7 @@ impl LayoutEngine {
         }) {
             return false;
         }
-        let owners = Self::row_cut_cell_order(table, row);
+        let owners = self.indexed_row_cut_cell_order(table, row);
         !owners.is_empty()
             && owners.iter().enumerate().all(|(index, owner)| {
                 start_cut.get(index).copied().unwrap_or(0)
@@ -3380,6 +3380,7 @@ impl LayoutEngine {
         resolved_table_origin: Option<(Option<f64>, f64)>,
         host_char_border_fill_id: TableCharBorder,
     ) -> f64 {
+        let _rows = self.table_rows_scope(table);
         self.layout_table_with_wrapper_margin(
             tree,
             col_node,
@@ -5213,8 +5214,8 @@ impl LayoutEngine {
         let closed_inline_frame = table.common.treat_as_char
             && table.common.height > 0
             && i64::from(table.common.height)
-                == table
-                    .get_raw_row_heights()
+                == self
+                    .indexed_raw_row_heights(table)
                     .iter()
                     .map(|&height| i64::from(height))
                     .sum::<i64>()
@@ -5443,7 +5444,7 @@ impl LayoutEngine {
             }
             // [#5910] 반대 방향 모순(병합 선언 < 걸친 행들의 단일행 선언 합)은
             // 마지막 걸침 행을 줄여 닫는다 — HeightMeasurer 2-b 와 동일 규칙.
-            let shrink = table.rowspan_declared_overflow_shrink();
+            let shrink = self.indexed_rowspan_declared_overflow_shrink(table);
             for (r, &hu) in shrink.iter().enumerate().take(row_count) {
                 if hu == 0 {
                     continue;
@@ -5947,7 +5948,7 @@ impl LayoutEngine {
         table: &crate::model::table::Table,
         row: usize,
     ) -> bool {
-        let row_has_nested = table.cells.iter().any(|cell| {
+        let row_has_nested = self.cells_starting_on_row(table, row).any(|cell| {
             cell.row as usize == row
                 && cell.row_span == 1
                 && cell.paragraphs.iter().any(|paragraph| {
@@ -5963,16 +5964,12 @@ impl LayoutEngine {
                 .render_normalization
                 .borrow()
                 .table_text_reflowed(table)
-            && table
-                .cells
-                .iter()
-                .filter(|cell| cell.row as usize == row)
-                .all(|cell| {
-                    cell.height > 0
-                        && cell.height < 0x8000_0000
-                        && Self::cell_has_stored_line_segs(cell)
-                        && crate::renderer::cell_vpos_ladder_is_intact(&cell.paragraphs)
-                });
+            && self.cells_starting_on_row(table, row).all(|cell| {
+                cell.height > 0
+                    && cell.height < 0x8000_0000
+                    && Self::cell_has_stored_line_segs(cell)
+                    && crate::renderer::cell_vpos_ladder_is_intact(&cell.paragraphs)
+            });
         !row_has_nested
             // Complete reflow rows own their measured physical frame, including
             // the intentional empty line after a nested table. Interior cuts
@@ -5984,7 +5981,7 @@ impl LayoutEngine {
                     table.page_break,
                     crate::model::table::TablePageBreak::RowBreak
                 )
-                && table.cells.iter().any(|cell| {
+                && self.cells_starting_on_row(table, row).any(|cell| {
                     cell.row as usize == row
                         && cell.row_span == 1
                         && cell
@@ -6156,50 +6153,14 @@ impl LayoutEngine {
         cell_h: f64,
         bin_data_content: &[BinDataContent],
     ) {
-        let fill_color = border_style.and_then(|bs| bs.fill_color);
-        let pattern = border_style.and_then(|bs| bs.pattern);
-        let gradient = border_style.and_then(|bs| bs.gradient.clone());
-        if fill_color.is_some() || gradient.is_some() || pattern.is_some() {
-            let rect_id = tree.next_id();
-            let rect_node = RenderNode::new(
-                rect_id,
-                RenderNodeType::Rectangle(RectangleNode::new(
-                    0.0,
-                    ShapeStyle {
-                        fill_color,
-                        pattern,
-                        stroke_color: None,
-                        stroke_width: 0.0,
-                        ..Default::default()
-                    },
-                    gradient,
-                )),
+        cell_node
+            .children
+            .extend(Self::border_fill_background_nodes(
+                tree,
+                border_style,
                 BoundingBox::new(cell_x, cell_y, cell_w, cell_h),
-            );
-            cell_node.children.push(rect_node);
-        }
-        // [Task #429] image fill 처리 — zone 처리와 동일 패턴
-        if let Some(img_fill) = border_style.and_then(|bs| bs.image_fill.as_ref()) {
-            if let Some(img_bytes) = find_bin_data_bytes(bin_data_content, img_fill.bin_data_id) {
-                let img_id = tree.next_id();
-                // [#6895] `ImageNode` 는 **화면 순서**를 담고 `ResolvedImageFill` 은 이진
-                // 순서를 담는다. 종전엔 그대로 옮겨 담아 칸 배경 그림의 밝기·명암이
-                // 반대로 그려졌다(그림 채움 `hp:pic` 축과 달리 이 축은 맞바꿈이 필요하다).
-                let (img_bright, img_contrast) = img_fill.display_brightness_contrast();
-                let img_node = RenderNode::new(
-                    img_id,
-                    RenderNodeType::Image(ImageNode {
-                        fill_mode: Some(img_fill.fill_mode),
-                        brightness: img_bright,
-                        contrast: img_contrast,
-                        effect: img_fill.effect,
-                        ..ImageNode::new(img_fill.bin_data_id, Some(img_bytes))
-                    }),
-                    BoundingBox::new(cell_x, cell_y, cell_w, cell_h),
-                );
-                cell_node.children.push(img_node);
-            }
-        }
+                bin_data_content,
+            ));
     }
 
     /// 표 수평 위치 결정.
@@ -6813,6 +6774,7 @@ impl LayoutEngine {
     ) {
         // 문단 테두리는 현재 셀 안에서만 연결한다. 중첩 셀도 별도 큐를 사용해
         // 부모 셀/본문 문단의 외곽선 병합에 섞이지 않는다.
+        let paragraph_background_index = cell_node.children.len();
         let parent_border_ranges = std::mem::take(&mut *self.para_border_ranges.borrow_mut());
         let parent_border_scope = self.collect_cell_para_borders.replace(true);
         let parent_border_override = self.border_box_override.replace(None);
@@ -9715,7 +9677,15 @@ impl LayoutEngine {
                 }
             }
         }
-        self.render_para_border_groups(tree, composed_paras, cell_node, styles, &inner_area);
+        self.render_para_border_groups(
+            tree,
+            composed_paras,
+            cell_node,
+            styles,
+            &inner_area,
+            bin_data_content,
+            paragraph_background_index,
+        );
         *self.para_border_ranges.borrow_mut() = parent_border_ranges;
         self.collect_cell_para_borders.set(parent_border_scope);
         self.border_box_override.set(parent_border_override);
@@ -12502,13 +12472,12 @@ impl LayoutEngine {
             return Some(measured_height);
         }
         let shrink = i64::from(
-            table
-                .rowspan_declared_overflow_shrink()
+            self.indexed_rowspan_declared_overflow_shrink(table)
                 .get(row)
                 .copied()
                 .unwrap_or(0),
         );
-        let own_cells = Self::row_cut_cell_order(table, row);
+        let own_cells = self.indexed_row_cut_cell_order(table, row);
         let mut source_height = 0i64;
         let mut closed_source_height: Option<i64> = None;
         for index in &own_cells {
@@ -16836,7 +16805,7 @@ impl LayoutEngine {
         cut: &[usize],
         styles: &ResolvedStyleSet,
     ) -> Vec<usize> {
-        let order = Self::row_cut_cell_order(table, row);
+        let order = self.indexed_row_cut_cell_order(table, row);
         cut.iter()
             .enumerate()
             .map(|(index, &start)| {
@@ -17144,8 +17113,8 @@ impl LayoutEngine {
         {
             // 빈 문단의 unit에는 hard-break 표지가 없을 수 있다. 원시 저장 줄과
             // 앞 행들의 선언 높이가 첫 object frame을 정확히 닫을 때만 인정한다.
-            let preceding_rows: i64 = table
-                .get_raw_row_heights()
+            let preceding_rows: i64 = self
+                .indexed_raw_row_heights(table)
                 .iter()
                 .take(cell.row as usize)
                 .map(|&height| i64::from(height))
@@ -17300,7 +17269,7 @@ impl LayoutEngine {
         end_cut: &[usize],
         styles: &ResolvedStyleSet,
     ) -> f64 {
-        let order = Self::row_cut_cell_order(table, row);
+        let order = self.indexed_row_cut_cell_order(table, row);
         order
             .iter()
             .enumerate()
@@ -17339,7 +17308,7 @@ impl LayoutEngine {
         {
             return false;
         }
-        let order = Self::row_cut_cell_order(table, row);
+        let order = self.indexed_row_cut_cell_order(table, row);
         order.iter().enumerate().any(|(index, &cell_index)| {
             let Some(cell) = table.cells.get(cell_index) else {
                 return false;
@@ -17415,8 +17384,8 @@ impl LayoutEngine {
         {
             return None;
         }
-        let order = Self::row_cut_cell_order(table, 0);
-        let full_height = *table.get_raw_row_heights().first()?;
+        let order = self.indexed_row_cut_cell_order(table, 0);
+        let full_height = *self.indexed_raw_row_heights(table).first()?;
         if full_height <= table.common.height || full_height > i32::MAX as u32 {
             return None;
         }
@@ -17849,7 +17818,7 @@ impl LayoutEngine {
         end_cut: &[usize],
         styles: &ResolvedStyleSet,
     ) -> bool {
-        Self::row_cut_cell_order(table, row)
+        self.indexed_row_cut_cell_order(table, row)
             .iter()
             .enumerate()
             .any(|(index, &cell_index)| {
@@ -17918,7 +17887,7 @@ impl LayoutEngine {
                                     styles,
                                 )
                                 .is_some_and(|cut| {
-                                    Self::row_cut_cell_order(table, usize::from(cell.row))
+                                    self.indexed_row_cut_cell_order(table, usize::from(cell.row))
                                         .iter()
                                         .zip(cut)
                                         .any(|(index, end)| {
@@ -18093,8 +18062,8 @@ impl LayoutEngine {
                             if table.row_count > 1 {
                                 // 앞 행과 빈 종료 줄의 가시 끝이 선언 첫 프레임 안에
                                 // 있어야 한다. 셀 최소 높이만으로 쪽 경계를 추정하지 않는다.
-                                let preceding_rows: i64 = table
-                                    .get_raw_row_heights()
+                                let preceding_rows: i64 = self
+                                    .indexed_raw_row_heights(table)
                                     .iter()
                                     .take(cell.row as usize)
                                     .map(|&height| i64::from(height))
@@ -18146,7 +18115,7 @@ impl LayoutEngine {
     ) -> bool {
         // 문단 내부 원점0만으로 물리 쪽 컷을 판정하지 않는다. 첫 선언 프레임을
         // 가로지르는 행만 해당하며 같은 두 줄 형상을 가진 뒤 행은 이어받는 쪽의 일반 내용일 수 있다.
-        let raw_rows = table.get_raw_row_heights();
+        let raw_rows = self.indexed_raw_row_heights(table);
         let preceding_height: i64 = raw_rows.iter().take(row).map(|&h| i64::from(h)).sum();
         let declared_frame = i64::from(table.common.height);
         let row_straddles_declared_frame = raw_rows.get(row).is_some_and(|&height| {
@@ -18376,7 +18345,7 @@ impl LayoutEngine {
         // Only rows whose stored minimum prefix already passes that opening
         // box belong to later frames; the opening height cannot bound them.
         if cell.row > 0 && next_unit.stored_frame_break_before {
-            let raw_heights = table.get_raw_row_heights();
+            let raw_heights = self.indexed_raw_row_heights(table);
             let starts_after_opening_box = raw_heights
                 .get(..usize::from(cell.row))
                 .filter(|heights| heights.iter().all(|&height| height < 0x8000_0000))
@@ -18414,7 +18383,7 @@ impl LayoutEngine {
         // 같은 상자를 먼저 차지한다(issue1853 13쪽 2×2 표: 앞 행 1782HU + 칸 내용 = 선언
         // 12980HU 안, 정본 첫 조각 상자도 선언 높이와 같다).
         let preceding_rows_px = if cell.row > 0 {
-            let raw_heights = table.get_raw_row_heights();
+            let raw_heights = self.indexed_raw_row_heights(table);
             let Some(heights) = raw_heights
                 .get(..usize::from(cell.row))
                 .filter(|heights| heights.iter().all(|&height| height < 0x8000_0000))
@@ -19161,7 +19130,7 @@ impl LayoutEngine {
                 }
                 // 경계를 가로지르는 라벨도 모든 원본 내용이 첫 프레임 안에
                 // 완결되면 다음 조각의 내용 컷을 소유하지 않는다.
-                let rows = table.get_raw_row_heights();
+                let rows = self.indexed_raw_row_heights(table);
                 let before = rows.iter().take(cell.row as usize)
                     .map(|height| hwpunit_to_px(*height as i32, self.dpi)).sum::<f64>()
                     + hwpunit_to_px(table.cell_spacing as i32, self.dpi) * f64::from(cell.row);
@@ -19242,7 +19211,7 @@ impl LayoutEngine {
         if cells.len() != cut.len() {
             return None;
         }
-        let raw = table.get_raw_row_heights();
+        let raw = self.indexed_raw_row_heights(table);
         if raw
             .iter()
             .any(|height| *height == 0 || *height > i32::MAX as u32)
@@ -20471,7 +20440,7 @@ impl LayoutEngine {
         end_cut: &[usize],
         styles: &ResolvedStyleSet,
     ) -> Option<f64> {
-        let cell_order = Self::row_cut_cell_order(table, row);
+        let cell_order = self.indexed_row_cut_cell_order(table, row);
         let [cell_index] = cell_order.as_slice() else {
             return None;
         };
@@ -20816,7 +20785,8 @@ impl LayoutEngine {
         styles: &ResolvedStyleSet,
         cell_budget_deltas: Option<&[f64]>,
     ) -> RowCutResult {
-        let row_cells: Vec<&crate::model::table::Cell> = Self::row_cut_cell_order(table, row)
+        let row_cells: Vec<&crate::model::table::Cell> = self
+            .indexed_row_cut_cell_order(table, row)
             .into_iter()
             .filter_map(|idx| table.cells.get(idx))
             .collect();
@@ -21800,7 +21770,7 @@ impl LayoutEngine {
             cells.sort_by_key(|cell| (cell.row, cell.col));
             cells
         } else {
-            Self::row_cut_cell_order(table, row)
+            self.indexed_row_cut_cell_order(table, row)
                 .into_iter()
                 .filter_map(|index| table.cells.get(index))
                 .collect()
@@ -22570,7 +22540,8 @@ impl LayoutEngine {
         let mut block_cells = Self::row_block_cells(table, b_start, b_end);
         block_cells.sort_by_key(|c| (c.row, c.col));
 
-        let row_cells: Vec<&crate::model::table::Cell> = Self::row_cut_cell_order(table, row)
+        let row_cells: Vec<&crate::model::table::Cell> = self
+            .indexed_row_cut_cell_order(table, row)
             .into_iter()
             .filter_map(|idx| table.cells.get(idx))
             .collect();
@@ -23976,7 +23947,8 @@ impl LayoutEngine {
         end_cut: &[usize],
         styles: &ResolvedStyleSet,
     ) -> bool {
-        let row_cells: Vec<&crate::model::table::Cell> = Self::row_cut_cell_order(table, row)
+        let row_cells: Vec<&crate::model::table::Cell> = self
+            .indexed_row_cut_cell_order(table, row)
             .into_iter()
             .filter_map(|idx| table.cells.get(idx))
             .collect();
@@ -25056,9 +25028,7 @@ impl LayoutEngine {
             return None;
         }
         let (end_row, end_cut_is_empty) = fragment_end;
-        table
-            .cells
-            .iter()
+        self.spanning_cells(table)
             .filter(|cell| {
                 let cell_row = cell.row as usize;
                 let cell_end = cell_row + cell.row_span as usize;
@@ -25251,21 +25221,22 @@ impl LayoutEngine {
             .render_normalization
             .borrow()
             .table_text_reflowed(table);
-        let mut cells = table
-            .cells
-            .iter()
-            .filter(|cell| {
-                cell.row as usize <= row && row < cell.row as usize + cell.row_span as usize
-            })
+        if self.spanning_cells(table).any(|cell| {
+            usize::from(cell.row) <= row && row < usize::from(cell.row) + usize::from(cell.row_span)
+        }) {
+            return false;
+        }
+        let mut cells = self
+            .cells_starting_on_row(table, row)
+            .filter(|cell| cell.row_span == 1)
             .peekable();
         cells.peek().is_some()
             && cells.all(|cell| {
-                cell.row_span == 1
-                    && (reflowed
-                        || cell
-                            .paragraphs
-                            .iter()
-                            .all(crate::renderer::para_has_no_stored_line_segs))
+                reflowed
+                    || cell
+                        .paragraphs
+                        .iter()
+                        .all(crate::renderer::para_has_no_stored_line_segs)
             })
     }
 
@@ -25327,7 +25298,8 @@ impl LayoutEngine {
                 return height;
             }
         }
-        let row_cells: Vec<&crate::model::table::Cell> = Self::row_cut_cell_order(table, row)
+        let row_cells: Vec<&crate::model::table::Cell> = self
+            .indexed_row_cut_cell_order(table, row)
             .into_iter()
             .filter_map(|idx| table.cells.get(idx))
             .collect();
@@ -25337,8 +25309,7 @@ impl LayoutEngine {
         // HeightMeasurer 가 이미 줄여 둔 행을 다시 부풀려(row_cut_h > mt.row_heights)
         // 걸침 묶음이 쪽에 못 들어간다.
         let declared_shrink = hwpunit_to_px(
-            table
-                .rowspan_declared_overflow_shrink()
+            self.indexed_rowspan_declared_overflow_shrink(table)
                 .get(row)
                 .copied()
                 .unwrap_or(0) as i32,
@@ -25735,9 +25706,10 @@ impl LayoutEngine {
             // 이 형상의 첫 조각이 이미 행의 패딩을 소유한다. continuation에 같은
             // top/bottom padding을 다시 예약하면 다음 중첩 표 atom이 한 쪽 일찍
             // 이월되어 한컴보다 물리 쪽 수가 늘어난다.
-            return vec![0.0; Self::row_cut_cell_order(table, row).len()];
+            return vec![0.0; self.indexed_row_cut_cell_order(table, row).len()];
         }
-        let row_cells: Vec<&crate::model::table::Cell> = Self::row_cut_cell_order(table, row)
+        let row_cells: Vec<&crate::model::table::Cell> = self
+            .indexed_row_cut_cell_order(table, row)
             .into_iter()
             .filter_map(|idx| table.cells.get(idx))
             .collect();

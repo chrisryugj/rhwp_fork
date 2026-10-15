@@ -1352,7 +1352,13 @@ impl SvgRenderer {
         self.gradient_counter += 1;
         let id = format!("grad{}", self.gradient_counter);
 
-        let stops = Self::build_gradient_stops(grad);
+        let (colors, positions) =
+            super::linear_gradient_color_stops(grad, bbox.0, bbox.1, bbox.2, bbox.3);
+        let stops = Self::build_gradient_stops(&GradientFillInfo {
+            colors,
+            positions,
+            ..grad.clone()
+        });
 
         let def = match grad.gradient_type {
             2 => {

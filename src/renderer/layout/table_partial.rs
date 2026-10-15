@@ -1534,9 +1534,9 @@ impl LayoutEngine {
                                 carry.cell_index == cell_idx && carry.physical_height > 0.0
                             }))
                     });
-            // The descendant source row owns its closing blank band. The
-            // enclosing cursor forwards that physical space without moving
-            // the whole child into the parent's vertical alignment band.
+            // 하위 원본 행은 끝부분의 빈 띠를 소유한다. 상위 커서는
+            // 전체 하위 표를 상위 표의 세로 정렬 띠로 옮기지 않고
+            // 그 물리 공간을 전달한다.
             let descendant_owns_closing_band = cell.row_span == 1
                 && cell_row + 1 == end_row
                 && self
@@ -3143,9 +3143,9 @@ impl LayoutEngine {
                                         )
                                         .is_some();
                                     if !will_render_inline {
-                                        // The saved line owns the spaces and objects together.
-                                        // Use the same ordered pen as inline tables instead of
-                                        // centering a picture independently of its text prefix.
+                                        // 저장 글줄은 공백과 개체를 함께 소유한다.
+                                        // 인라인 표와 같은 순서의 펜 위치를 사용하며, 앞 텍스트와
+                                        // 분리해 그림만 독립적으로 가운데 정렬하지 않는다.
                                         let stored_picture_left = self
                                             .stored_inline_control_pen(
                                                 para,
@@ -4458,9 +4458,9 @@ impl LayoutEngine {
                                                             })
                                                     })
                                                     .or_else(|| {
-                                                        // The first projected row unit reserves
-                                                        // this same outer-top band. A continued
-                                                        // child cursor must not reopen it.
+                                                        // 투영된 첫 행 유닛은 이 위쪽 바깥 띠를
+                                                        // 이미 예약한다. 이어받는 하위 표의 커서는
+                                                        // 그 띠를 다시 예약하지 않는다.
                                                         ((recursive_cut.start_row == 0
                                                             && recursive_cut
                                                                 .start_cut
@@ -5256,6 +5256,7 @@ impl LayoutEngine {
         } else {
             outer_table
         };
+        let _rows = self.table_rows_scope(table);
 
         // 컷과 원본 물리 상자를 같은 확인 결과로 소비한다. 첫 조각의 남은 빈 띠와
         // 뒤 조각의 글줄 끝·패딩을 서로 다른 높이 추측으로 바꾸지 않는다.

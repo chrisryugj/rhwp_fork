@@ -725,7 +725,12 @@ pub(crate) fn stored_tac_line_successor_advance(
         .get(next.para_shape_id as usize)?
         .spacing_before;
     let advance = line.line_height.checked_add(line.line_spacing)?;
-    let delta = successor.vertical_pos.checked_sub(line.vertical_pos)?;
+    let delta = crate::renderer::composer::stored_tac_successor_delta_hu(
+        host,
+        line,
+        successor,
+        super::px_to_hwpunit(after + before, dpi),
+    )?;
     (delta == advance.checked_add(super::px_to_hwpunit(after + before, dpi))?)
         .then(|| hwpunit_to_px(advance, dpi) + after)
 }

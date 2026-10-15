@@ -1672,13 +1672,9 @@ impl WebCanvasRenderer {
         };
 
         // 색상 스톱 추가 (positions는 이미 0.0~1.0으로 정규화됨)
-        for (i, &color) in grad.colors.iter().enumerate() {
-            let offset = if i < grad.positions.len() {
-                grad.positions[i] as f32
-            } else {
-                i as f32 / (grad.colors.len().max(2) - 1).max(1) as f32
-            };
-            let _ = canvas_grad.add_color_stop(offset, &color_to_css(color));
+        let (colors, positions) = super::linear_gradient_color_stops(grad, x, y, w, h);
+        for (&color, &position) in colors.iter().zip(&positions) {
+            let _ = canvas_grad.add_color_stop(position as f32, &color_to_css(color));
         }
 
         self.ctx.set_fill_style_canvas_gradient(&canvas_grad);

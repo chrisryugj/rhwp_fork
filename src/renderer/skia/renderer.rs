@@ -1356,7 +1356,7 @@ impl SkiaLayerRenderer {
                                 bbox.height as f32,
                             );
                             if let Some(paint) = shape_fill(
-                                rect,
+                                bbox,
                                 &ShapeStyle {
                                     fill_color: background.background_color,
                                     ..Default::default()
@@ -1593,12 +1593,9 @@ impl SkiaLayerRenderer {
                                 bbox.width as f32,
                                 bbox.height as f32,
                             );
-                            if let Some(fill) = shape_fill(
-                                sk_rect,
-                                &rect.style,
-                                rect.gradient.as_deref(),
-                                antialias,
-                            ) {
+                            if let Some(fill) =
+                                shape_fill(bbox, &rect.style, rect.gradient.as_deref(), antialias)
+                            {
                                 if rect.corner_radius > 0.0 {
                                     canvas.draw_round_rect(
                                         sk_rect,
@@ -1637,7 +1634,7 @@ impl SkiaLayerRenderer {
                                 bbox.height as f32,
                             );
                             if let Some(fill) = shape_fill(
-                                oval,
+                                bbox,
                                 &ellipse.style,
                                 ellipse.gradient.as_deref(),
                                 antialias,
@@ -1706,17 +1703,9 @@ impl SkiaLayerRenderer {
                                 }
                             }
                             let sk_path = builder.detach();
-                            if let Some(fill) = shape_fill(
-                                Rect::from_xywh(
-                                    bbox.x as f32,
-                                    bbox.y as f32,
-                                    bbox.width as f32,
-                                    bbox.height as f32,
-                                ),
-                                &path.style,
-                                path.gradient.as_deref(),
-                                antialias,
-                            ) {
+                            if let Some(fill) =
+                                shape_fill(bbox, &path.style, path.gradient.as_deref(), antialias)
+                            {
                                 canvas.draw_path(&sk_path, &fill);
                             }
                             if let Some(stroke) = make_stroke_paint(&path.style) {
@@ -2910,7 +2899,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_shape_fallback_fills_for_gradient_pattern_ellipse_path_and_line() {
+    fn renders_gradient_and_fallback_fills_for_pattern_ellipse_path_and_line() {
         let gradient = GradientFillInfo {
             gradient_type: 1,
             angle: 0,
@@ -2972,6 +2961,7 @@ mod tests {
                 ..Default::default()
             },
         );
+        let gradient_bounds = BoundingBox::new(2.0, 2.0, 10.0, 8.0);
         let tree = PageLayerTree::new(
             40.0,
             40.0,
@@ -2979,7 +2969,7 @@ mod tests {
                 BoundingBox::new(0.0, 0.0, 40.0, 40.0),
                 None,
                 vec![
-                    PaintOp::rectangle(BoundingBox::new(2.0, 2.0, 10.0, 8.0), gradient_rect),
+                    PaintOp::rectangle(gradient_bounds, gradient_rect),
                     PaintOp::rectangle(BoundingBox::new(16.0, 2.0, 10.0, 8.0), pattern_rect),
                     PaintOp::ellipse(BoundingBox::new(2.0, 12.0, 10.0, 10.0), ellipse),
                     PaintOp::path(BoundingBox::new(2.0, 24.0, 10.0, 10.0), path),
@@ -2991,16 +2981,25 @@ mod tests {
             .render_raster_with_options(&tree, RasterRenderOptions::default())
             .expect("render shapes");
         let image = decode_rgba(&output.bytes);
-        let gradient_top = *image.get_pixel(4, 3);
-        let gradient_bottom = *image.get_pixel(4, 8);
+        let gradient_x = (gradient_bounds.x + gradient_bounds.width * 0.5) as u32;
+        let gradient_upper = *image.get_pixel(
+            gradient_x,
+            (gradient_bounds.y + gradient_bounds.height * 0.25) as u32,
+        );
+        let gradient_lower = *image.get_pixel(
+            gradient_x,
+            (gradient_bounds.y + gradient_bounds.height * 0.75) as u32,
+        );
         let pattern_pixel = *image.get_pixel(18, 4);
         let ellipse_pixel = *image.get_pixel(7, 17);
         let path_pixel = *image.get_pixel(7, 29);
         let line_pixel = *image.get_pixel(24, 30);
 
-        // HWP angle 0 runs bottom (blue) to top (red).
-        assert_channel(gradient_top, 0, 180, 255);
-        assert_channel(gradient_bottom, 2, 180, 255);
+        // Source stops are blue at the top and red at the bottom. A solid
+        // first-color fallback cannot satisfy both halves of this contract.
+        assert!(gradient_upper[2] > gradient_upper[0]);
+        assert!(gradient_lower[0] > gradient_lower[2]);
+        assert!(gradient_upper[2] > gradient_lower[2]);
         assert_channel(pattern_pixel, 1, 180, 255);
         assert_channel(ellipse_pixel, 0, 180, 255);
         assert_channel(path_pixel, 2, 180, 255);

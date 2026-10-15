@@ -759,15 +759,62 @@ pub(crate) fn tac_next_line_full_spacing(
                 && (next.line_segs.is_empty()
                     || next.line_segs.first().is_some_and(|first| {
                         (current_owned_row || first.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0)
-                            && seg
-                                .vertical_pos
-                                .saturating_add(seg.line_height)
-                                .saturating_add(seg.line_spacing)
-                                .saturating_add(current_spacing_after_hu)
-                                .saturating_add(next_spacing_before_hu)
-                                == first.vertical_pos
+                            && stored_tac_successor_delta_hu(
+                                para,
+                                seg,
+                                first,
+                                current_spacing_after_hu.saturating_add(next_spacing_before_hu),
+                            )
+                            .is_some_and(|delta| {
+                                seg.line_height
+                                    .checked_add(seg.line_spacing)
+                                    .and_then(|advance| {
+                                        advance.checked_add(current_spacing_after_hu)
+                                    })
+                                    .and_then(|advance| advance.checked_add(next_spacing_before_hu))
+                                    == Some(delta)
+                            })
                     }))
         })
+}
+
+/// 다음 저장 원점과 표 소유 줄의 거리. 쪽으로 통째 이월된 단일 TAC 줄은
+/// 호스트에 이전 쪽 vpos가 남아도 후속 문단이 새 쪽의 0 원점에서 상자를 닫는다.
+/// 줄 높이가 바깥여백 포함 개체 상자와 같고 후속 원점이 정확히 닫힐 때만 그
+/// 좌표계 전환을 사용한다. 측정과 실제 배치가 같은 거리 계약을 소비한다.
+pub(crate) fn stored_tac_successor_delta_hu(
+    para: &Paragraph,
+    seg: &LineSeg,
+    successor: &LineSeg,
+    paragraph_spacing_hu: i32,
+) -> Option<i32> {
+    let closing_advance = seg
+        .line_height
+        .checked_add(seg.line_spacing)?
+        .checked_add(paragraph_spacing_hu)?;
+    let reset_closes_owned_line = successor.vertical_pos < seg.vertical_pos
+        && successor.vertical_pos == closing_advance
+        && para.line_segs.len() == 1
+        && !para.cell_format_vpos_dirty
+        && successor.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+        && stored_first_tac_line(para).is_some_and(|first| std::ptr::eq(first, seg))
+        && para
+            .controls
+            .iter()
+            .filter(|control| matches!(control, Control::Table(_)))
+            .count()
+            == 1
+        && !para.controls.iter().any(|control| {
+            matches!(
+                control,
+                Control::Picture(_) | Control::Shape(_) | Control::Equation(_)
+            )
+        });
+    if reset_closes_owned_line {
+        Some(successor.vertical_pos)
+    } else {
+        successor.vertical_pos.checked_sub(seg.vertical_pos)
+    }
 }
 
 /// 저장된 서로 다른 물리 줄을 소유한 빈/공백 캐리어 TAC 표의 흐름.

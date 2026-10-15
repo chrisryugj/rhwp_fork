@@ -788,8 +788,8 @@ impl TypesetEngine {
                     });
             }
         }
-        // Closing source queries may have reserved a margin after scan. Derive
-        // the unowned flow remainder from that final accepted reservation.
+        // 끝 조각의 원본 조회는 스캔 이후 여백을 예약할 수 있다. 최종 수용한
+        // 예약에서 아직 소유되지 않은 흐름의 남은 몫을 계산한다.
         // 끝 조각의 물리 상자와 아래 바깥여백은 같은 영역을 소유한다.
         // 엄격 예산·캡션 등이 이미 예약한 몫을 다시 더하지 않는다.
         let terminal_flow_outer_bottom =
@@ -798,9 +798,9 @@ impl TypesetEngine {
             input.prepared.host_spacing_after_only + terminal_flow_outer_bottom;
         let commit_fragment = |st: &mut TypesetState, owner_height: f64, terminal: bool| {
             if let Some(mut placement) = fragment_placement {
-                // A nonterminal cut cannot own the successor. A terminal
-                // source origin remains available; spacing consumers require
-                // equality with the final accepted physical bottom.
+                // 끝이 아닌 컷은 다음 내용을 소유할 수 없다. 끝 조각의 원본
+                // 원점은 유지하되, 간격을 소비하는 경로에서는 그 원점이
+                // 최종 수용된 물리 하단과 일치해야 한다.
                 if !terminal {
                     placement.stored_successor_line_origin = None;
                 }
@@ -1108,9 +1108,9 @@ impl TypesetEngine {
             0.0
         };
 
-        // A source rowspan crossing a complete row boundary owns the closing
-        // physical page band too. Reserve it using the accepted fragment origin,
-        // then select its units from the same extended row box that paint uses.
+        // 완료 행 경계를 가로지르는 원본 병합 셀은 끝 물리 쪽의 띠도
+        // 소유한다. 수용한 조각의 원점으로 예약하고, 실제 그리기에 쓰는
+        // 동일하게 확장된 행 상자에서 그 셀의 유닛을 선택한다.
         let accepted_straddle_end_band = if split_end_limit == 0.0
             && split_block_start.is_none()
             && end_row > cursor_row

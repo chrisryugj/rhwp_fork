@@ -200,9 +200,13 @@ fn direct_pdf_keeps_non_linear_and_pattern_fills_closed() {
 #[test]
 fn native_linear_axis_preserves_direction_and_non_square_isolines() {
     let renderer = SkiaLayerRenderer::new();
+    // An endpoint center selects one ramp. A 50% center now correctly expands
+    // to two ramps under the shared #7661 source-center contract.
+    let mut endpoint_gradient = gradient(0);
+    endpoint_gradient.center_y = 100;
     let vertical = renderer
         .render_pixels_with_options(
-            &tree("rectangle", gradient(0), bounds()),
+            &tree("rectangle", endpoint_gradient, bounds()),
             RasterRenderOptions::default(),
         )
         .unwrap();
@@ -229,5 +233,36 @@ fn native_linear_axis_preserves_direction_and_non_square_isolines() {
             channel(&diagonal, 44, 16, component).abs_diff(channel(&diagonal, 52, 24, component))
                 <= 2
         );
+    }
+}
+
+#[test]
+fn native_linear_gradient_keeps_the_first_color_at_the_source_center() {
+    let renderer = SkiaLayerRenderer::new();
+    for center in [0, 50, 100] {
+        let mut source = gradient(0);
+        source.center_y = center;
+        let page = tree("rectangle", source, bounds());
+        assert_axial_vector_pdf(page.clone());
+        let pixels = renderer
+            .render_pixels_with_options(&page, RasterRenderOptions::default())
+            .unwrap();
+        let red_dominates = |y: usize| {
+            let offset = y * pixels.stride + 4 * 48;
+            pixels.bytes[offset] > pixels.bytes[offset + 2]
+        };
+        assert_eq!(
+            red_dominates(10),
+            center == 0,
+            "upper ramp, center={center}"
+        );
+        assert_eq!(
+            red_dominates(30),
+            center == 100,
+            "lower ramp, center={center}"
+        );
+        if center == 50 {
+            assert!(red_dominates(20), "the first color remains at the center");
+        }
     }
 }

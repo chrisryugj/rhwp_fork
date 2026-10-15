@@ -3482,8 +3482,21 @@ pub struct LayoutEngine {
     /// is_partial_start: 다른 컬럼/페이지에서 이어진 부분 (top edge 미렌더링)
     /// is_partial_end: 다음 컬럼/페이지로 이어지는 부분 (bottom edge 미렌더링)
     /// para_index: 본 range 가 속한 paragraph 인덱스 (Task #468: cross-column 박스 연속 검출용)
-    para_border_ranges:
-        std::cell::RefCell<Vec<(u16, f64, f64, f64, f64, f64, f64, bool, bool, usize)>>,
+    para_border_ranges: std::cell::RefCell<
+        Vec<(
+            u16,
+            f64,
+            f64,
+            f64,
+            f64,
+            f64,
+            f64,
+            bool,
+            bool,
+            usize,
+            Vec<fill_background::ParagraphFillBand>,
+        )>,
+    >,
     /// 셀 문단 큐가 본문/부모 셀과 분리된 범위 안인지 여부.
     collect_cell_para_borders: std::cell::Cell<bool>,
     /// 문단 외곽선 box geometry override (Task #463): wrap=Square 호스트 문단의
@@ -3625,6 +3638,7 @@ pub struct LayoutEngine {
     /// `cell_units_uncached` 안에서 계산되어 52,694 셀 표에서 O(셀²)(≈28억) 로 폭증했다.
     /// `cell_units_cache` 와 동일 조판 경계에서 clear 한다.
     table_nested_text_flag_cache: std::cell::RefCell<std::collections::HashMap<usize, bool>>,
+    table_row_index_cache: table_rows::TableRowIndexCache,
     /// 셀 안에 든 표(중첩 표)의 포인터. 저장 쪽 되감김 줄간격 트림은 쪽 프레임을 소유하는
     /// 바깥 표에만 쓴다. `cell_units_cache` 와 동일 조판 경계에서 clear 한다.
     nested_table_ptrs: std::cell::RefCell<std::collections::HashSet<usize>>,
@@ -3643,6 +3657,7 @@ pub struct LayoutEngine {
 
 mod anchor_box_flow;
 mod border_rendering;
+mod fill_background;
 mod fixed_textbox_flow;
 mod note_reference;
 mod paragraph_layout;
@@ -3651,6 +3666,7 @@ mod shape_layout;
 mod table_cell_content;
 pub(crate) mod table_layout;
 mod table_partial;
+mod table_rows;
 mod text_measurement;
 mod utils;
 
@@ -3759,6 +3775,7 @@ impl LayoutEngine {
             nested_table_ptrs: std::cell::RefCell::new(std::collections::HashSet::new()),
             stored_frame_row_plans: std::cell::RefCell::new(std::collections::HashMap::new()),
             table_nested_text_flag_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+            table_row_index_cache: Default::default(),
             cursor_probe_block_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
             single_line_overflow_cache: Default::default(),
             #[cfg(test)]
@@ -3773,8 +3790,87 @@ impl LayoutEngine {
         self.nested_table_ptrs.borrow_mut().clear();
         self.stored_frame_row_plans.borrow_mut().clear();
         self.table_nested_text_flag_cache.borrow_mut().clear();
+        self.table_row_index_cache.clear();
         self.cursor_probe_block_cache.borrow_mut().clear();
         self.single_line_overflow_cache.clear();
+    }
+
+    /// 반환한 guard가 표 borrow와 행 색인을 함께 소유한다.
+    pub(crate) fn table_rows_scope<'a>(
+        &self,
+        table: &'a crate::model::table::Table,
+    ) -> table_rows::TableRows<'a> {
+        self.table_row_index_cache.scope(table)
+    }
+
+    pub(crate) fn cells_starting_on_row<'a>(
+        &self,
+        table: &'a crate::model::table::Table,
+        row: usize,
+    ) -> impl Iterator<Item = &'a crate::model::table::Cell> {
+        let indices = self.table_row_index_cache.lookup(table).map_or_else(
+            || {
+                table
+                    .cells
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, cell)| usize::from(cell.row) == row)
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>()
+            },
+            |rows| rows.starting(row).to_vec(),
+        );
+        indices.into_iter().map(move |index| &table.cells[index])
+    }
+
+    fn spanning_cells<'a>(
+        &self,
+        table: &'a crate::model::table::Table,
+    ) -> impl Iterator<Item = &'a crate::model::table::Cell> {
+        let indices = self.table_row_index_cache.lookup(table).map_or_else(
+            || {
+                table
+                    .cells
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, cell)| cell.row_span > 1)
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>()
+            },
+            |rows| rows.spanning().to_vec(),
+        );
+        indices.into_iter().map(move |index| &table.cells[index])
+    }
+
+    fn indexed_row_cut_cell_order(
+        &self,
+        table: &crate::model::table::Table,
+        row: usize,
+    ) -> Vec<usize> {
+        self.table_row_index_cache.lookup(table).map_or_else(
+            || Self::row_cut_cell_order(table, row),
+            |rows| rows.single_by_column(row).to_vec(),
+        )
+    }
+
+    fn indexed_raw_row_heights(
+        &self,
+        table: &crate::model::table::Table,
+    ) -> std::sync::Arc<Vec<crate::model::HwpUnit>> {
+        self.table_row_index_cache.lookup(table).map_or_else(
+            || std::sync::Arc::new(table.get_raw_row_heights()),
+            |rows| rows.raw_heights(),
+        )
+    }
+
+    fn indexed_rowspan_declared_overflow_shrink(
+        &self,
+        table: &crate::model::table::Table,
+    ) -> std::sync::Arc<Vec<crate::model::HwpUnit>> {
+        self.table_row_index_cache.lookup(table).map_or_else(
+            || std::sync::Arc::new(table.rowspan_declared_overflow_shrink()),
+            |rows| rows.declared_shrink(),
+        )
     }
 
     pub(crate) fn register_exact_font_source(
@@ -7264,6 +7360,86 @@ impl LayoutEngine {
         )
     }
 
+    /// 별도 PageItem으로 방출된 TAC도 문단의 같은 줄 배경을 소유한다.
+    /// bottom은 실제로 수용한 줄 계획/흐름의 끝이며 측정을 다시 하지 않는다.
+    #[allow(clippy::too_many_arguments)]
+    fn collect_tac_paragraph_fill(
+        &self,
+        para: &Paragraph,
+        composed: Option<&ComposedParagraph>,
+        styles: &ResolvedStyleSet,
+        col_node: &RenderNode,
+        col_area: &LayoutRect,
+        para_index: usize,
+        control_index: usize,
+        top: f64,
+        bottom: f64,
+    ) {
+        if let Some(ps) = styles
+            .para_styles
+            .get(composed.map_or(para.para_shape_id as usize, |cp| cp.para_style_id as usize))
+            .filter(|ps| ps.border_fill_id > 0)
+        {
+            let line_index = composed
+                .and_then(|cp| {
+                    crate::renderer::composer::composed_tac_line_assignment(para, cp)
+                        .and_then(|owners| {
+                            owners
+                                .into_iter()
+                                .find(|(ci, _)| *ci == control_index)
+                                .map(|(_, line)| line)
+                        })
+                        .or_else(|| {
+                            cp.inline_controls
+                                .iter()
+                                .find(|owner| owner.control_index == control_index)
+                                .map(|owner| owner.line_index)
+                        })
+                })
+                .map(|index| fill_background::paragraph_fill_line_index(Some(para), index));
+            let anchor = col_node.children.iter().rev().find_map(|node| {
+                        matches!(&node.node_type, RenderNodeType::Table(meta)
+                            if meta.para_index == Some(para_index) && meta.control_index == Some(control_index))
+                            .then_some((node.id, node.bbox.y))
+                    });
+            let band = fill_background::ParagraphFillBand {
+                line_index,
+                anchor,
+                top,
+                bottom,
+            };
+            let mut ranges = self.para_border_ranges.borrow_mut();
+            if let Some(range) = ranges.iter_mut().rev().find(|range| range.9 == para_index) {
+                range.2 = range.2.min(top);
+                range.4 = range.4.max(bottom);
+                if let Some(existing) = range
+                    .10
+                    .iter_mut()
+                    .find(|old| line_index.is_some() && old.line_index == line_index)
+                {
+                    existing.top = existing.top.min(band.top);
+                    existing.bottom = existing.bottom.max(band.bottom);
+                } else {
+                    range.10.push(band);
+                }
+            } else if bottom > top {
+                ranges.push((
+                    ps.border_fill_id,
+                    col_area.x,
+                    top,
+                    col_area.width,
+                    bottom,
+                    ps.border_spacing[2],
+                    ps.border_spacing[3],
+                    false,
+                    false,
+                    para_index,
+                    vec![band],
+                ));
+            }
+        }
+    }
+
     /// [Task #2120] 문단 테두리/배경 연속 그룹 병합 렌더링 (Task #321 v6) —
     /// 원본 무변경 통이동. stroke signature 병합 + 그룹 사각형/테두리 방출.
     #[allow(clippy::too_many_arguments)]
@@ -7274,8 +7450,47 @@ impl LayoutEngine {
         col_node: &mut RenderNode,
         styles: &ResolvedStyleSet,
         col_area: &LayoutRect,
+        bin_data_content: &[BinDataContent],
+        background_index: usize,
     ) {
-        let ranges = self.para_border_ranges.borrow();
+        let mut ranges = self.para_border_ranges.borrow().clone();
+        let final_node_ys: std::collections::HashMap<_, _> = col_node
+            .children
+            .iter()
+            .map(|node| (node.id, node.bbox.y))
+            .collect();
+        // float anchor 이동 등 줄 방출 뒤의 최종 원점을 소비한다. 높이를 다시 추측하지
+        // 않고, 같은 줄 전진에서 생산한 밴드를 그 줄/개체 노드와 함께 옮긴다.
+        for range in &mut ranges {
+            range.10.sort_by_key(|band| band.line_index);
+            let old_top = range.10.iter().map(|band| band.top).reduce(f64::min);
+            let old_bottom = range.10.iter().map(|band| band.bottom).reduce(f64::max);
+            for band in &mut range.10 {
+                if let Some((id, origin_y)) = band.anchor {
+                    if let Some(final_y) = final_node_ys.get(&id) {
+                        let delta = final_y - origin_y;
+                        band.top += delta;
+                        band.bottom += delta;
+                    }
+                }
+            }
+            if let (Some(old_top), Some(old_bottom)) = (old_top, old_bottom) {
+                let new_top = range
+                    .10
+                    .iter()
+                    .map(|band| band.top)
+                    .reduce(f64::min)
+                    .unwrap();
+                let new_bottom = range
+                    .10
+                    .iter()
+                    .map(|band| band.bottom)
+                    .reduce(f64::max)
+                    .unwrap();
+                range.2 += new_top - old_top;
+                range.4 += new_bottom - old_bottom;
+            }
+        }
         if !ranges.is_empty() {
             // 연속 ranges 를 시각적 stroke signature 로 병합 (Task #321 v6 근본 수정).
             // bf_id 가 달라도 동일한 stroke (line_type/width/color) 면 HWP/PDF 처럼 하나의
@@ -7304,20 +7519,36 @@ impl LayoutEngine {
             };
             // 그룹 튜플: (bf_id, x, y_start, w, y_end, top_inset, bottom_inset,
             //              is_partial_start, is_partial_end, first_para_idx, last_para_idx)
-            let mut groups: Vec<(u16, f64, f64, f64, f64, f64, f64, bool, bool, usize, usize)> =
-                Vec::new();
-            for &(
-                bf_id,
-                x,
-                y_start,
-                w,
-                y_end,
-                top_inset,
-                bottom_inset,
-                is_partial_start,
-                is_partial_end,
-                para_idx,
-            ) in ranges.iter()
+            let mut groups: Vec<(
+                u16,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                f64,
+                bool,
+                bool,
+                usize,
+                usize,
+                Vec<usize>,
+            )> = Vec::new();
+            for (
+                range_index,
+                &(
+                    bf_id,
+                    x,
+                    y_start,
+                    w,
+                    y_end,
+                    top_inset,
+                    bottom_inset,
+                    is_partial_start,
+                    is_partial_end,
+                    para_idx,
+                    _,
+                ),
+            ) in ranges.iter().enumerate()
             {
                 if let Some(last) = groups.last_mut() {
                     // bf_id 가 동일하면 기존 동작과 호환 (1차 병합).
@@ -7330,7 +7561,7 @@ impl LayoutEngine {
                         last_sig.is_some() && last_sig == cur_sig
                     };
                     if same_visual
-                        && (last.10 == para_idx || connects(last.10))
+                        && (last.10 == para_idx || (connects(last.10) && connects(para_idx)))
                         && (y_start - last.4) < 30.0
                     {
                         last.4 = y_end;
@@ -7338,6 +7569,7 @@ impl LayoutEngine {
                         // 그룹의 partial_end 는 마지막 range 의 값으로 갱신.
                         // partial_start 는 첫 range 값(last.7)을 유지.
                         last.8 = is_partial_end;
+                        last.11.push(range_index);
                         last.10 = para_idx; // last_para_idx 갱신
                                             // Task #463: 첫 항목이 PartialParagraph (좁은 geometry, 예: pi=50
                                             // 우측 단 시작) 이고 후속 항목이 넓은 geometry 일 때, 박스가 좁게
@@ -7364,6 +7596,7 @@ impl LayoutEngine {
                     is_partial_end,
                     para_idx,
                     para_idx,
+                    vec![range_index],
                 ));
             }
 
@@ -7392,14 +7625,14 @@ impl LayoutEngine {
                         .unwrap_or(0)
                 };
 
-                if !g.7 && first_pi > 0 && connects(first_pi - 1) {
+                if !g.7 && first_pi > 0 && connects(first_pi - 1) && connects(first_pi) {
                     let prev_sig = stroke_sig(para_bf(first_pi - 1));
                     if prev_sig.is_some() && prev_sig == group_sig {
                         g.7 = true;
                     }
                 }
 
-                if !g.8 && connects(last_pi) {
+                if !g.8 && connects(last_pi) && connects(last_pi + 1) {
                     let next_sig = stroke_sig(para_bf(last_pi + 1));
                     if next_sig.is_some() && next_sig == group_sig {
                         g.8 = true;
@@ -7423,6 +7656,8 @@ impl LayoutEngine {
             }
             groups.retain(|g| g.4 > g.2);
 
+            let mut border_nodes = Vec::new();
+            let mut background_nodes = Vec::new();
             let groups_len = groups.len();
             for (
                 gi,
@@ -7438,6 +7673,7 @@ impl LayoutEngine {
                     is_partial_end,
                     first_para_idx,
                     _,
+                    range_indices,
                 ),
             ) in groups.clone().into_iter().enumerate()
             {
@@ -7450,7 +7686,6 @@ impl LayoutEngine {
                 let next_touches = gi + 1 < groups_len && (groups[gi + 1].2 - y_end) < 4.0;
                 let idx = (bf_id as usize).saturating_sub(1);
                 let border_style = styles.border_styles.get(idx);
-                let fill_color = border_style.and_then(|bs| bs.fill_color);
                 let borders = border_style.map(|bs| bs.borders);
                 let stroke_width = borders
                     .map(|borders| {
@@ -7499,7 +7734,6 @@ impl LayoutEngine {
                         RenderNodeType::Rectangle(super::render_tree::RectangleNode::new(
                             0.0,
                             super::ShapeStyle {
-                                fill_color,
                                 stroke_color: Some(stroke_border.color),
                                 stroke_width: super::layout::border_rendering::border_width_to_px(
                                     stroke_border.width,
@@ -7510,27 +7744,9 @@ impl LayoutEngine {
                         )),
                         super::render_tree::BoundingBox::new(x, rect_y, w, rect_h),
                     );
-                    col_node.children.insert(0, rect_node);
+                    border_nodes.push(rect_node);
                 } else {
-                    // wrap 케이스: fill 만 Rectangle 로, stroke 는 면별 LineNode 로 분해.
-                    if fill_color.is_some() {
-                        let rect_id = tree.next_id();
-                        let rect_node = RenderNode::new(
-                            rect_id,
-                            RenderNodeType::Rectangle(super::render_tree::RectangleNode::new(
-                                0.0,
-                                super::ShapeStyle {
-                                    fill_color,
-                                    stroke_color: None,
-                                    stroke_width: 0.0,
-                                    ..Default::default()
-                                },
-                                None,
-                            )),
-                            super::render_tree::BoundingBox::new(x, rect_y, w, rect_h),
-                        );
-                        col_node.children.insert(0, rect_node);
-                    }
+                    // 이어받는 외곽선은 필요한 면만 그린다. 채우기는 아래 문단별 paint가 소유한다.
                     let mut push_border_line =
                         |border: &BorderLine, x1: f64, y1: f64, x2: f64, y2: f64| {
                             if !para_border_is_visible(border) {
@@ -7540,7 +7756,7 @@ impl LayoutEngine {
                                 tree, border, x1, y1, x2, y2,
                             );
                             for node in nodes {
-                                col_node.children.insert(0, node);
+                                border_nodes.push(node);
                             }
                         };
                     let x_left = x;
@@ -7558,7 +7774,57 @@ impl LayoutEngine {
                         }
                     }
                 }
+                // 테두리 연결은 채우기 소유를 합치지 않는다. 같은 그라데이션도 각
+                // 물리 줄에서 재시작하며, 다음 문단의 그림/없음은 원래 정의를 소비한다.
+                // 줄 상자·이어받기 원점은 수집된 실제 범위를 그대로 사용한다.
+                let range_count = range_indices.len();
+                for (range_order, range_index) in range_indices.into_iter().enumerate() {
+                    let range = &ranges[range_index];
+                    let style = range
+                        .0
+                        .checked_sub(1)
+                        .and_then(|index| styles.border_styles.get(usize::from(index)));
+                    let fallback = [fill_background::ParagraphFillBand {
+                        line_index: None,
+                        anchor: None,
+                        top: range.2,
+                        bottom: range.4,
+                    }];
+                    let bands = if range.10.is_empty() {
+                        &fallback[..]
+                    } else {
+                        &range.10[..]
+                    };
+                    for (index, band) in bands.iter().enumerate() {
+                        let first_band = index == 0;
+                        let last_band = index + 1 == bands.len();
+                        let top = if range_order == 0 && first_band {
+                            rect_y
+                        } else {
+                            band.top.max(col_top)
+                        };
+                        let bottom = band.bottom.min(range.4).min(col_bot)
+                            + if range_order + 1 == range_count && last_band {
+                                effective_bot_pad
+                            } else {
+                                0.0
+                            };
+                        if bottom <= top {
+                            continue;
+                        }
+                        background_nodes.extend(Self::border_fill_background_nodes(
+                            tree,
+                            style,
+                            BoundingBox::new(range.1, top, range.3, bottom - top),
+                            bin_data_content,
+                        ));
+                    }
+                }
             }
+            background_nodes.extend(border_nodes);
+            col_node
+                .children
+                .splice(background_index..background_index, background_nodes);
         }
     }
 
@@ -10366,7 +10632,15 @@ impl LayoutEngine {
         );
 
         // 문단 테두리/배경 연속 그룹 병합 렌더링 — #2120 추출
-        self.render_para_border_groups(tree, composed, &mut col_node, styles, col_area);
+        self.render_para_border_groups(
+            tree,
+            composed,
+            &mut col_node,
+            styles,
+            col_area,
+            bin_data_content,
+            0,
+        );
 
         (col_node, y_offset)
     }
@@ -13146,6 +13420,17 @@ impl LayoutEngine {
             // 저장 줄 계획의 pen/advance는 typeset과 동일하다. 표 하단에서 gap을
             // 다시 추측하거나 위아래 여백을 후가산하지 않는다.
             if let Some(end) = flow_placement.and_then(|placement| placement.advance_end) {
+                self.collect_tac_paragraph_fill(
+                    para,
+                    composed.get(para_index),
+                    styles,
+                    col_node,
+                    col_area,
+                    para_index,
+                    control_index,
+                    para_y_for_table,
+                    col_area.y + end,
+                );
                 return TableControlOut {
                     y_offset: col_area.y + end,
                     tac_seg_applied: true,
@@ -14662,34 +14947,17 @@ impl LayoutEngine {
                         y_offset = y_offset.max(stored_flow_end);
                     }
                 }
-                // TAC 표도 호스트 문단의 점유 영역이다. 별도 PageItem 경로로
-                // 그려져 layout_composed_paragraph를 거치지 않아도 문단 외곽선을
-                // 누락하지 않는다. 이미 텍스트 범위를 수집했다면 같은 문단만 확장한다.
-                if let Some(ps) = styles
-                    .para_styles
-                    .get(ps_id)
-                    .filter(|ps| ps.border_fill_id > 0)
-                {
-                    let mut ranges = self.para_border_ranges.borrow_mut();
-                    if let Some(range) = ranges.iter_mut().rev().find(|range| range.9 == para_index)
-                    {
-                        range.2 = range.2.min(para_y_for_table);
-                        range.4 = range.4.max(y_offset);
-                    } else if y_offset > para_y_for_table {
-                        ranges.push((
-                            ps.border_fill_id,
-                            col_area.x,
-                            para_y_for_table,
-                            col_area.width,
-                            y_offset,
-                            ps.border_spacing[2],
-                            ps.border_spacing[3],
-                            false,
-                            false,
-                            para_index,
-                        ));
-                    }
-                }
+                self.collect_tac_paragraph_fill(
+                    para,
+                    composed.get(para_index),
+                    styles,
+                    col_node,
+                    col_area,
+                    para_index,
+                    control_index,
+                    para_y_for_table,
+                    y_offset,
+                );
                 return (y_offset, true);
             }
             // ── 같은 문단의 인라인 TAC 표 렌더링 ──
