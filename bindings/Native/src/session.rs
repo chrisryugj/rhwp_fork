@@ -13,6 +13,9 @@ use rhwp_core::native_host::editor::{NativeCompositionFocusLoss, NativeEditOutco
 use rhwp_core::native_host::save::{
     NativeSaveFormat, NativeSaveStatus, NativeSaveToken, PreparedSave,
 };
+use rhwp_core::native_host::view::{
+    NativePagePoint, NativeView, NativeViewConfig, NativeViewPoint, NativeViewRect, NativeViewState,
+};
 use rhwp_core::native_host::{NativeDocumentSession, NativeHostError, MAX_DOCUMENT_BYTES};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -251,6 +254,120 @@ enum Request {
     },
 }
 
+#[derive(Deserialize)]
+#[serde(
+    tag = "op",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum HostRequest {
+    View {
+        state: NativeViewState,
+        command: ViewCommand,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(
+    tag = "action",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum ViewCommand {
+    State {},
+    Configure {
+        config: NativeViewConfig,
+    },
+    Scroll {
+        x: f64,
+        y: f64,
+    },
+    ScrollBy {
+        x: f64,
+        y: f64,
+    },
+    ZoomAt {
+        zoom: f64,
+        x: f64,
+        y: f64,
+    },
+    PageAt {
+        x: f64,
+        y: f64,
+    },
+    PointInViewport {
+        page: u32,
+        x: f64,
+        y: f64,
+    },
+    EnsureCaret {
+        page: u32,
+        rect: NativeViewRect,
+        margin: f64,
+    },
+}
+
+/// Platform-neutral host operations. P58 consumes no binary payload.
+/// # Safety
+/// Each nonempty span must be readable for its declared length during the call.
+#[no_mangle]
+pub unsafe extern "C" fn rhwp_native_host_request(
+    request: *const u8,
+    request_len: usize,
+    data: *const u8,
+    data_len: usize,
+) -> *mut c_char {
+    response(|| {
+        let request = unsafe { input(request, request_len, MAX_REQUEST_BYTES)? };
+        let data = unsafe { input(data, data_len, MAX_DOCUMENT_BYTES)? };
+        let request: HostRequest = serde_json::from_slice(request)
+            .map_err(|_| NativeHostError::InvalidArgument("invalid host request JSON".into()))?;
+        if !data.is_empty() {
+            return Err(NativeHostError::InvalidArgument(
+                "this request does not accept binary data".into(),
+            ));
+        }
+        match request {
+            HostRequest::View { state, command } => {
+                let mut view = NativeView::try_from(state)?;
+                let mut query = Value::Null;
+                match command {
+                    ViewCommand::State {} => {}
+                    ViewCommand::Configure { config } => {
+                        view.set_config(config)?;
+                    }
+                    ViewCommand::Scroll { x, y } => {
+                        view.set_scroll(NativeViewPoint { x, y })?;
+                    }
+                    ViewCommand::ScrollBy { x, y } => {
+                        view.scroll_by(NativeViewPoint { x, y })?;
+                    }
+                    ViewCommand::ZoomAt { zoom, x, y } => {
+                        view.zoom_at(zoom, NativeViewPoint { x, y })?;
+                    }
+                    ViewCommand::PageAt { x, y } => {
+                        query = json!(view.viewport_to_page(NativeViewPoint { x, y })?);
+                    }
+                    ViewCommand::PointInViewport { page, x, y } => {
+                        query = json!(view.page_to_viewport(NativePagePoint {
+                            page,
+                            point: NativeViewPoint { x, y }
+                        })?);
+                    }
+                    ViewCommand::EnsureCaret { page, rect, margin } => {
+                        view.ensure_caret_visible(page, rect, margin)?;
+                    }
+                }
+                Ok(
+                    json!({"ok":true,"state":view.state(),"contentSize":view.content_size(),"scrollLimit":view.scroll_limit(),"visible":view.visible_regions(),"rasterScale":view.raster_scale(),"query":query}),
+                )
+            }
+        }
+    })
+}
+
 fn next_handle() -> Result<u64, NativeHostError> {
     NEXT_HANDLE
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
@@ -335,7 +452,7 @@ pub extern "C" fn rhwp_session_capabilities() -> *mut c_char {
     response(|| {
         Ok(
             json!({"ok":true,"abiVersion":1,"nativeSkia":cfg!(feature="native-skia"),
-        "threadAffine":true,"maxSessions":MAX_SESSIONS,"maxDocumentBytes":MAX_DOCUMENT_BYTES,
+        "hostRequests":true,"viewState":true,"threadAffine":true,"maxSessions":MAX_SESSIONS,"maxDocumentBytes":MAX_DOCUMENT_BYTES,
         "maxRequestBytes":MAX_REQUEST_BYTES,"maxBufferBytes":MAX_BUFFER_BYTES,
         "pixelFormat":"rgba8Premultiplied","colorSpace":"srgb"}),
         )

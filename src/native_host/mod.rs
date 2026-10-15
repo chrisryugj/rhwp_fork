@@ -6,6 +6,7 @@
 pub mod editor;
 pub mod fonts;
 pub mod save;
+pub mod view;
 
 use std::marker::PhantomData;
 use std::rc::Rc;

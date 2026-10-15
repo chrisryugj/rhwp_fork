@@ -62,6 +62,15 @@ class NativeHost:
         storage = ctypes.create_string_buffer(data)
         return self.call("request", handle, storage, len(data))
 
+    def host_request(self, data=b"", **request):
+        encoded = json.dumps(request, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        arguments = ctypes.create_string_buffer(encoded)
+        payload = ctypes.create_string_buffer(data) if data else None
+        function = self.library.rhwp_native_host_request
+        function.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
+        function.restype = ctypes.c_void_p
+        return self._result(function(arguments, len(encoded), payload, len(data)))
+
     def copy_buffer(self, response):
         """Consume one retained buffer; ownership ends even when copying fails."""
         buffer = response["buffer"]

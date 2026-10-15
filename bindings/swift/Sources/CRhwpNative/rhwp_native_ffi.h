@@ -23,6 +23,8 @@ char *rhwp_read_text(const char *input_path, int page);
  * Empty document bytes create a blank document. Close documents explicitly.
  * Output buffers have independent lifetime and must be released separately. */
 char *rhwp_session_capabilities(void);
+/* Host JSON operations; data is borrowed for binary-payload operations only. */
+char *rhwp_native_host_request(const uint8_t *request, size_t request_len, const uint8_t *data, size_t data_len);
 char *rhwp_session_open(const uint8_t *data, size_t len, const uint8_t *password, size_t password_len);
 char *rhwp_session_request(uint64_t handle, const uint8_t *request, size_t request_len);
 char *rhwp_session_close(uint64_t handle);

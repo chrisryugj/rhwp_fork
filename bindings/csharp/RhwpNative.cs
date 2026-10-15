@@ -63,6 +63,17 @@ public static class RhwpNative
         return TakeResultString(rhwp_session_request(handle, request, (UIntPtr)request.Length));
     }
 
+    public static string HostRequest(string requestJson, byte[]? data = null)
+    {
+        if (requestJson is null) throw new ArgumentNullException(nameof(requestJson));
+        byte[] request = Encoding.UTF8.GetBytes(requestJson);
+        data ??= Array.Empty<byte>();
+        return TakeResultString(rhwp_native_host_request(request, (UIntPtr)request.Length, data, (UIntPtr)data.Length));
+    }
+
+    [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr rhwp_native_host_request(byte[] request, UIntPtr requestLength, byte[] data, UIntPtr dataLength);
+
     public static string SessionClose(ulong handle) => TakeResultString(rhwp_session_close(handle));
 
     public static string SessionBufferCopy(ulong buffer, byte[] destination)

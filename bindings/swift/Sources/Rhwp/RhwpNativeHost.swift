@@ -34,6 +34,18 @@ public extension Rhwp {
         }
     }
 
+    static func hostRequest(request: [String: Any], data: Data = Data()) throws -> [String: Any] {
+        let json = try JSONSerialization.data(withJSONObject: request)
+        return try json.withUnsafeBytes { bytes in
+            try data.withUnsafeBytes { payload in
+                try consumeHostResult(rhwp_native_host_request(
+                    bytes.baseAddress?.assumingMemoryBound(to: UInt8.self), bytes.count,
+                    payload.baseAddress?.assumingMemoryBound(to: UInt8.self), payload.count
+                ))
+            }
+        }
+    }
+
     static func sessionClose(handle: UInt64) throws {
         _ = try consumeHostResult(rhwp_session_close(handle))
     }

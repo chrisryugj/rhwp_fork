@@ -157,3 +157,23 @@ open → region render → hit/caret → 한글 IME → undo/redo → save → r
 기존 입력을 지정하면 편집 데모를 적용하지 않고 읽기·조회·새 파일 저장만 수행한다.
 이는 headless 경로이며 실제 window/event loop, OS IME와 각 플랫폼 packaging 검증은 별도다.
 기능을 끈 library의 ABI 검사는 위 session_contract 명령에 `--native-skia disabled`를 사용한다.
+
+## 다중 페이지 뷰 상태 (P58)
+
+`native_host::view::NativeView`는 페이지 논리 크기와 viewport, zoom, deviceScale, pageGap을
+받아 연속 페이지 배치·스크롤·가시 영역·좌표 변환을 계산한다. 페이지 좌표는 엔진의 96-DPI
+논리 단위이며 viewport/scroll/gap은 창 논리 단위다. 실제 raster 배율은 zoom × deviceScale이다.
+포인터를 기준으로 zoom을 바꾸고 caret가 보이도록 최소한 스크롤한다. 범위를 벗어난 scroll은
+문서 범위로 제한하며 페이지 사이 빈 공간은 hit 대상이 아니다.
+
+C `rhwp_native_host_request(json, length, data, dataLength)`, Swift `Rhwp.hostRequest`,
+C# `RhwpNative.HostRequest`, Python `NativeHost.host_request`로 같은 계산을 사용한다.
+P58의 JSON은 `{op:"view",state:{config:{pages:[{width,height}],viewport:{width,height},zoom,
+deviceScale,pageGap},scroll:{x,y}},command:{action:"state"}}`다. command action은 configure,
+scroll/scrollBy{x,y}, zoomAt{zoom,x,y}, pageAt{x,y}, pointInViewport{page,x,y},
+ensureCaret{page,rect:{x,y,width,height},margin}도 지원한다. 이 연산은 binary data를 받지 않는다.
+
+응답은 검증된 state, contentSize, scrollLimit, visible, rasterScale과 선택적 query 결과다.
+visible의 pageRegion은 P52 입력 영역이고 pageRect는 페이지 전체의 창 논리 위치다.
+RGBA 버퍼의 표시 원점은 pageRect.xy + originXY/deviceScale로 계산한다. 최대 10,000페이지,
+논리 extent 2^40, raster 배율 (0,64]로 제한하며 조판/renderer의 페이지 배치는 바꾸지 않는다.
