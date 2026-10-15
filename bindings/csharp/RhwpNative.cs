@@ -45,6 +45,52 @@ public static class RhwpNative
         return TakeResultString(result);
     }
 
+    // Session and buffer handles must be used and released on their opening thread.
+    // Each method returns the versioned JSON envelope, including structured errors.
+    public static string SessionCapabilities() => TakeResultString(rhwp_session_capabilities());
+
+    public static string SessionOpen(byte[] data, byte[]? password = null)
+    {
+        if (data is null) throw new ArgumentNullException(nameof(data));
+        password ??= Array.Empty<byte>();
+        return TakeResultString(rhwp_session_open(data, (UIntPtr)data.Length, password, (UIntPtr)password.Length));
+    }
+
+    public static string SessionRequest(ulong handle, string requestJson)
+    {
+        if (requestJson is null) throw new ArgumentNullException(nameof(requestJson));
+        byte[] request = Encoding.UTF8.GetBytes(requestJson);
+        return TakeResultString(rhwp_session_request(handle, request, (UIntPtr)request.Length));
+    }
+
+    public static string SessionClose(ulong handle) => TakeResultString(rhwp_session_close(handle));
+
+    public static string SessionBufferCopy(ulong buffer, byte[] destination)
+    {
+        if (destination is null) throw new ArgumentNullException(nameof(destination));
+        return TakeResultString(rhwp_session_buffer_copy(buffer, destination, (UIntPtr)destination.Length));
+    }
+
+    public static string SessionBufferRelease(ulong buffer) => TakeResultString(rhwp_session_buffer_release(buffer));
+
+    [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr rhwp_session_capabilities();
+
+    [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr rhwp_session_open(byte[] data, UIntPtr length, byte[] password, UIntPtr passwordLength);
+
+    [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr rhwp_session_request(ulong handle, byte[] request, UIntPtr requestLength);
+
+    [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr rhwp_session_close(ulong handle);
+
+    [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr rhwp_session_buffer_copy(ulong buffer, [Out] byte[] destination, UIntPtr capacity);
+
+    [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr rhwp_session_buffer_release(ulong buffer);
+
     [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
     private static extern IntPtr rhwp_export_text(byte[] inputPath, byte[] outputDirectory, int page);
 

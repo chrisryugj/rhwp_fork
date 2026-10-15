@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use rhwp_core::wasm_api::HwpDocument;
 
+mod session;
+
 const ALL_PAGES: i32 = -1;
 
 #[no_mangle]
@@ -82,8 +84,8 @@ pub extern "C" fn rhwp_read_text(input_path: *const c_char, page: i32) -> *mut c
 ///
 /// # Safety
 ///
-/// `ptr` 은 이 모듈의 `rhwp_export_text`·`rhwp_export_markdown`·`rhwp_export_pdf_direct`·`rhwp_read_text` 가
-/// 돌려준 포인터이거나 널이어야 한다. 다른 할당자에서 온 포인터를 넘기거나 같은
+/// `ptr`은 이 라이브러리의 export/read 또는 `rhwp_session_*` 함수가 반환한 JSON
+/// 문자열 포인터이거나 널이어야 한다. 다른 할당자에서 온 포인터를 넘기거나 같은
 /// 포인터를 두 번 넘기면 정의되지 않은 동작이다.
 ///
 /// C ABI 심볼은 바뀌지 않으므로 C#·Swift 등 호출 측 선언은 그대로 쓸 수 있다.

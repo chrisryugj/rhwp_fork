@@ -36,3 +36,42 @@ profile 또는 compatibility backend 선택 옵션을 노출하지 않는다.
 
 Linux에서 native ABI를 검증해도 Apple XCFramework build/link가 검증된 것은 아니다.
 Apple 산출물과 독립 한컴 PDF 출력 대조는 별도 검증 대상이다.
+
+## 지속 문서 세션 (P51)
+
+Rust의 `native_host::NativeDocumentSession`은 `DocumentCore`와 Skia renderer를 소유한다.
+새 문서는 내장 템플릿으로 만들고, 기존 문서는 최대 128 MiB의 바이트에서 연다.
+`document()`는 읽기 전용이다. 기본 빌드에서도 문서 수명·쪽 크기 조회를 사용할 수 있고,
+화면 출력은 `native-skia`가 필요하다. 기본 화면은 CPU raw RGBA이며 PNG를 경유하지 않는다.
+
+C의 `rhwp_session_capabilities/open/request/close`는 JSON 봉투를 반환한다.
+반환 문자열은 항상 `rhwp_string_free`로 해제한다. `open`의 문서 길이가 0이면 새 문서다.
+`request`는 길이가 명시된 UTF-8 JSON이며 다음 명령을 지원한다.
+
+```json
+{"op":"info"}
+{"op":"pageSize","page":0}
+{"op":"render","page":0,"scale":1.0}
+```
+
+쪽 번호는 0부터, 쪽 좌표는 기존 96-DPI layer 좌표다. scale은 `(0, 64]`이며 frame은
+최대 16,777,216픽셀이다. `render`는 buffer handle, byteLength, width/height/stride,
+revision, `rgba8Premultiplied`/`srgb` 정보를 반환한다. 각 행은 위에서 아래로 저장한다.
+`rhwp_session_buffer_copy`로 caller의 바이트 배열에 복사하고
+`rhwp_session_buffer_release`로 해제한다. 너무 작은 대상에는 아무것도 쓰지 않는다.
+문서를 닫아도 이미 반환한 buffer는 유지되므로 별도로 해제해야 한다.
+
+문서와 buffer handle은 **생성한 OS 스레드에서만** 사용한다. 다른 스레드·닫힌 handle은 오류다.
+요청은 동기 호출이며 재진입을 지원하지 않는다. thread마다 문서 8개, 보관 buffer 64개/128 MiB,
+요청 JSON 1 MiB로 제한한다. 이 제한은 파서·Skia의 전체 peak RSS 상한을 뜻하지 않는다.
+panic을 포착하면 해당 스레드의 handle을 모두 무효화한다. 잘못된 주소를 C 포인터로 넘기는 것은
+호출자 계약 위반이다. 입력 메모리는 호출 동안 유효해야 하며 포인터를 보관하지 않는다.
+
+Swift는 `Rhwp.session*`, C#은 `RhwpNative.Session*` 메서드를 제공한다. 외부 실행 예산·파일 I/O·
+앱 event loop는 host가 소유한다. native 실제 수명 검사는 빌드한 library를 지정해 실행한다.
+
+```sh
+python3 bindings/Native/tests/session_contract.py /path/to/librhwp_native_ffi.so
+```
+
+이 프로브의 Linux 통과는 Apple/Windows 패키지 실행이나 한컴 시각 정합 검증을 대신하지 않는다.
