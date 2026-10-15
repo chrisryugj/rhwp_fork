@@ -155,6 +155,35 @@ impl NativeEditor {
         self.session.set_font_sources(paths, environment)
     }
 
+    /// Save without committing an unfinished IME preview. HWP stores current
+    /// body focus; HWPX retains its existing source-settings/default policy.
+    pub fn prepare_save(
+        &mut self,
+        format: super::save::NativeSaveFormat,
+    ) -> Result<super::save::PreparedSave, NativeHostError> {
+        self.require_no_composition()?;
+        match format {
+            super::save::NativeSaveFormat::Hwp => self
+                .session
+                .prepare_save_with_caret(format, &self.selection.focus),
+            super::save::NativeSaveFormat::Hwpx => self.session.prepare_save(format),
+        }
+    }
+
+    pub fn acknowledge_save(
+        &mut self,
+        token: super::save::NativeSaveToken,
+    ) -> Result<super::save::NativeSaveStatus, NativeHostError> {
+        self.session.acknowledge_save(token)
+    }
+
+    pub fn cancel_save(
+        &mut self,
+        token: super::save::NativeSaveToken,
+    ) -> Result<super::save::NativeSaveStatus, NativeHostError> {
+        self.session.cancel_save(token)
+    }
+
     pub fn selection(&self) -> &NativeTextSelection {
         &self.selection
     }

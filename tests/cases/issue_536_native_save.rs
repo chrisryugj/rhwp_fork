@@ -1,5 +1,6 @@
 //! Host persistence checkpoints, byte/report ownership and saved-caret contracts.
 #![cfg(not(target_arch = "wasm32"))]
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::io::{Cursor, Read};
 use std::sync::Arc;
@@ -148,7 +149,7 @@ fn late_acknowledgement_keeps_new_edits_dirty_and_does_not_clear_history() {
     assert!(editor.can_undo());
     let current = editor.prepare_save(NativeSaveFormat::Hwpx).unwrap();
     assert!(!current.caret_saved());
-    assert!(current.caret_preserved_from_source());
+    assert!(!current.caret_preserved_from_source());
     assert!(!editor.acknowledge_save(current.token()).unwrap().dirty);
     let undo = editor.undo(second.revision).unwrap();
     assert!(editor.session().is_dirty());
@@ -201,7 +202,7 @@ fn hwp_focus_is_stamped_on_the_snapshot_with_the_same_utf16_and_raw_docinfo_cont
         NativeSaveCaretPolicy::HwpxSourceSettings
     );
     assert!(!hwpx.caret_saved());
-    assert!(hwpx.caret_preserved_from_source());
+    assert!(!hwpx.caret_preserved_from_source());
 }
 
 #[derive(Debug)]
@@ -279,4 +280,30 @@ fn save_formats_and_tokens_have_strict_transport_types() {
         session.acknowledge_save(NativeSaveToken::from_raw(u64::MAX)),
         Err(NativeHostError::InvalidArgument(_))
     ));
+}
+
+#[test]
+fn hwpx_caret_source_flag_matches_preserved_settings_bytes() {
+    use std::io::Read;
+    let mut original = NativeDocumentSession::new_blank().unwrap();
+    let first = original.prepare_save(NativeSaveFormat::Hwpx).unwrap();
+    assert!(!first.caret_preserved_from_source());
+    let mut reopened = NativeDocumentSession::open_bytes(first.bytes(), None).unwrap();
+    let expected = reopened
+        .document()
+        .document()
+        .hwpx_aux_entry("settings.xml")
+        .unwrap()
+        .to_vec();
+    let prepared = reopened.prepare_save(NativeSaveFormat::Hwpx).unwrap();
+    assert!(prepared.caret_preserved_from_source());
+    assert!(!prepared.caret_saved());
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(prepared.bytes())).unwrap();
+    let mut actual = Vec::new();
+    archive
+        .by_name("settings.xml")
+        .unwrap()
+        .read_to_end(&mut actual)
+        .unwrap();
+    assert_eq!(actual, expected);
 }

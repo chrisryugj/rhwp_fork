@@ -5,6 +5,7 @@
 
 pub mod editor;
 pub mod fonts;
+pub mod save;
 
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -102,6 +103,8 @@ pub struct NativeDocumentSession {
     revision: u64,
     font_generation: u64,
     fonts: fonts::NativeFontState,
+    saved_revision: Option<u64>,
+    pending_save: Option<save::PendingSaveCheckpoint>,
     #[cfg(feature = "native-skia")]
     renderer: std::cell::OnceCell<crate::renderer::skia::SkiaLayerRenderer>,
     // feature가 꺼진 빌드도 같은 스레드 소유권 계약을 지킨다.
@@ -116,6 +119,8 @@ impl NativeDocumentSession {
             revision: 0,
             font_generation: 0,
             fonts,
+            saved_revision: None,
+            pending_save: None,
             #[cfg(feature = "native-skia")]
             renderer: std::cell::OnceCell::new(),
             _thread_affinity: PhantomData,
@@ -141,7 +146,9 @@ impl NativeDocumentSession {
             Some(password) => DocumentCore::from_bytes_with_password(bytes, password)?,
             None => DocumentCore::from_bytes(bytes)?,
         };
-        Ok(Self::from_core(core))
+        let mut session = Self::from_core(core);
+        session.saved_revision = Some(0);
+        Ok(session)
     }
 
     pub fn document(&self) -> &DocumentCore {

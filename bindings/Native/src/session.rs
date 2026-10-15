@@ -10,6 +10,9 @@ use rhwp_core::document_core::native_interaction::{
     NativeTextPosition, NativeTextSelection, NativeVerticalDirection,
 };
 use rhwp_core::native_host::editor::{NativeCompositionFocusLoss, NativeEditOutcome, NativeEditor};
+use rhwp_core::native_host::save::{
+    NativeSaveFormat, NativeSaveStatus, NativeSaveToken, PreparedSave,
+};
 use rhwp_core::native_host::{NativeDocumentSession, NativeHostError, MAX_DOCUMENT_BYTES};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -57,6 +60,27 @@ impl ManagedSession {
             Self::Edit(editor) => {
                 editor.set_font_sources(editor.session().revision(), paths, environment)
             }
+        }
+    }
+    fn prepare_save(&mut self, format: NativeSaveFormat) -> Result<PreparedSave, NativeHostError> {
+        match self {
+            Self::View(session) => session.prepare_save(format),
+            Self::Edit(editor) => editor.prepare_save(format),
+        }
+    }
+    fn acknowledge_save(
+        &mut self,
+        token: NativeSaveToken,
+    ) -> Result<NativeSaveStatus, NativeHostError> {
+        match self {
+            Self::View(session) => session.acknowledge_save(token),
+            Self::Edit(editor) => editor.acknowledge_save(token),
+        }
+    }
+    fn cancel_save(&mut self, token: NativeSaveToken) -> Result<NativeSaveStatus, NativeHostError> {
+        match self {
+            Self::View(session) => session.cancel_save(token),
+            Self::Edit(editor) => editor.cancel_save(token),
         }
     }
     fn editing_info(&self) -> (bool, bool, Option<u64>) {
@@ -133,6 +157,15 @@ thread_local! {
 )]
 enum Request {
     Info,
+    PrepareSave {
+        format: NativeSaveFormat,
+    },
+    AcknowledgeSave {
+        token: NativeSaveToken,
+    },
+    CancelSave {
+        token: NativeSaveToken,
+    },
     BeginEdit {
         selection: NativeTextSelection,
         expected_revision: u64,
@@ -371,6 +404,30 @@ pub unsafe extern "C" fn rhwp_session_request(
             let record = host.sessions.get_mut(&handle).ok_or_else(invalid_handle)?;
             let session = record.session();
             match request {
+                Request::PrepareSave { format } => {
+                    let prepared = record.prepare_save(format)?;
+                    let caret_saved = prepared.caret_saved();
+                    let caret_preserved = prepared.caret_preserved_from_source();
+                    let caret_policy = prepared.caret_policy();
+                    let (bytes,report,revision,token) = prepared.into_parts();
+                    let byte_length = bytes.len();
+                    let buffer = match retain_buffer(&mut host, bytes) {
+                        Ok(buffer) => buffer,
+                        Err(error) => {
+                            host.sessions.get_mut(&handle).ok_or_else(invalid_handle)?.cancel_save(token)?;
+                            return Err(error);
+                        }
+                    };
+                    Ok(json!({"ok":true,"buffer":buffer,"byteLength":byte_length,"token":token,"revision":revision,"report":report,"caretSaved":caret_saved,"caretPreservedFromSource":caret_preserved,"caretPolicy":caret_policy}))
+                }
+                Request::AcknowledgeSave { token } => {
+                    let status = record.acknowledge_save(token)?;
+                    Ok(json!({"ok":true,"isDirty":status.dirty,"status":status}))
+                }
+                Request::CancelSave { token } => {
+                    let status = record.cancel_save(token)?;
+                    Ok(json!({"ok":true,"isDirty":status.dirty,"status":status}))
+                }
                 Request::BeginEdit { .. } => unreachable!("handled before borrowing session"),
                 Request::SetSelection { selection, expected_revision } => Ok(edit_result(record.editor_mut()?.set_selection(expected_revision,selection)?)),
                 Request::ReplaceSelection { text, expected_revision } => Ok(edit_result(record.editor_mut()?.replace_selection(expected_revision,&text)?)),
@@ -402,7 +459,7 @@ pub unsafe extern "C" fn rhwp_session_request(
                 }
                 Request::Info => {
                     let (can_undo,can_redo,composition_id) = record.editing_info();
-                    Ok(json!({"ok":true,"pageCount":session.document().page_count(),"revision":session.revision(),"fontGeneration":session.font_generation(),"canUndo":can_undo,"canRedo":can_redo,"compositionId":composition_id}))
+                    Ok(json!({"ok":true,"pageCount":session.document().page_count(),"revision":session.revision(),"fontGeneration":session.font_generation(),"canUndo":can_undo,"canRedo":can_redo,"compositionId":composition_id,"isDirty":session.is_dirty()}))
                 },
                 Request::PageSize { page } => Ok(json!({"ok":true,"page":page,"size":session.page_size(page)?})),
                 Request::Render { page, scale } => {

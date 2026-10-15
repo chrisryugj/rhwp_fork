@@ -64,6 +64,7 @@ pub struct PreparedSave {
     revision: u64,
     token: NativeSaveToken,
     caret_policy: NativeSaveCaretPolicy,
+    caret_preserved_from_source: bool,
 }
 
 impl PreparedSave {
@@ -92,7 +93,7 @@ impl PreparedSave {
     }
 
     pub fn caret_preserved_from_source(&self) -> bool {
-        self.caret_policy == NativeSaveCaretPolicy::HwpxSourceSettings
+        self.caret_preserved_from_source
     }
 
     pub fn into_parts(self) -> (Vec<u8>, ContentLossReport, u64, NativeSaveToken) {
@@ -209,6 +210,12 @@ impl NativeDocumentSession {
         serialized: SerializedDocument,
         caret_policy: NativeSaveCaretPolicy,
     ) -> Result<PreparedSave, NativeHostError> {
+        let caret_preserved_from_source = caret_policy == NativeSaveCaretPolicy::HwpxSourceSettings
+            && self
+                .core
+                .document()
+                .hwpx_aux_entry("settings.xml")
+                .is_some();
         let token = NEXT_SAVE_TOKEN
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
@@ -222,6 +229,7 @@ impl NativeDocumentSession {
             revision,
             token,
             caret_policy,
+            caret_preserved_from_source,
         })
     }
 
