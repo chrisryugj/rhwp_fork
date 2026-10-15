@@ -1,9 +1,9 @@
 //! Opt-in native editor state. The document engine itself remains history-free.
 //!
 //! This first surface edits body text only. Offsets are Unicode scalar indices;
-//! cell editing, inline-control affinity, tabs and paragraph insertion require
-//! separate commands and are rejected explicitly here. OS IME events and screen
-//! coordinates belong to the host, not to this session.
+//! cell editing, inline-control affinity and tabs are rejected explicitly.
+//! Paragraph split/join and grapheme navigation live in `commands`. OS IME events
+//! and screen coordinates belong to the host, not to this session.
 
 use std::collections::VecDeque;
 
@@ -234,22 +234,59 @@ impl NativeEditor {
         expected_revision: u64,
         text: &str,
     ) -> Result<NativeEditOutcome, NativeHostError> {
-        self.session.check_revision(expected_revision)?;
-        self.require_no_composition()?;
+        let selection = self.selection.clone();
+        self.replace_range(expected_revision, &selection, text)
+    }
+
+    /// Shared scalar range replacement for editor commands and host adapters.
+    /// The undo selection is the caller's actual selection, not this edit range.
+    pub(super) fn replace_range(
+        &mut self,
+        expected_revision: u64,
+        selection: &NativeTextSelection,
+        text: &str,
+    ) -> Result<NativeEditOutcome, NativeHostError> {
+        self.check_edit_ready(expected_revision)?;
         Self::validate_text(text)?;
-        Self::validate_selection(&self.session.core, &self.selection)?;
-        let selection_after = Self::replacement_end(&self.selection, text)?;
-        if self.selected_text(&self.selection) == text {
+        Self::validate_selection(&self.session.core, selection)?;
+        let selection_after = Self::replacement_end(selection, text)?;
+        if self.selected_text(selection) == text {
             self.selection = selection_after;
             return Ok(self.outcome(false, false));
         }
+        self.edit_transaction(expected_revision, |core| {
+            Self::apply_replacement(core, selection, text)?;
+            Ok(selection_after)
+        })
+    }
+
+    pub(super) fn check_edit_ready(&self, expected_revision: u64) -> Result<(), NativeHostError> {
+        self.session.check_revision(expected_revision)?;
+        self.require_no_composition()?;
+        Self::validate_selection(&self.session.core, &self.selection)
+    }
+
+    /// Commit one known-changing action. The closure can mutate only the core;
+    /// editor selection/history are published after every fallible step succeeds.
+    /// This does not rewind the core's already-emitted event log on rollback.
+    pub(super) fn edit_transaction(
+        &mut self,
+        expected_revision: u64,
+        edit: impl FnOnce(&mut DocumentCore) -> Result<NativeTextSelection, NativeHostError>,
+    ) -> Result<NativeEditOutcome, NativeHostError> {
+        self.check_edit_ready(expected_revision)?;
         self.check_mutation_capacity()?;
         self.check_snapshot_slots(2)?;
         let selection_before = self.selection.clone();
         let before = self.session.core.save_snapshot_native();
-        if let Err(error) = self.apply_replacement(&selection_before, text) {
-            return Err(self.rollback_and_discard(before, error));
-        }
+        let result = edit(&mut self.session.core).and_then(|selection| {
+            Self::validate_selection(&self.session.core, &selection)?;
+            Ok(selection)
+        });
+        let selection_after = match result {
+            Ok(selection) => selection,
+            Err(error) => return Err(self.rollback_and_discard(before, error)),
+        };
         if let Err(error) = self.session.did_mutate() {
             return Err(self.rollback_and_discard(before, error));
         }
@@ -319,7 +356,7 @@ impl NativeEditor {
                 .map_err(NativeHostError::from)
                 .and_then(|_| {
                     if changed {
-                        self.apply_replacement(&selection_before, text)
+                        Self::apply_replacement(&mut self.session.core, &selection_before, text)
                     } else {
                         Ok(())
                     }
@@ -500,7 +537,7 @@ impl NativeEditor {
         Ok(())
     }
 
-    fn validate_selection(
+    pub(super) fn validate_selection(
         core: &DocumentCore,
         selection: &NativeTextSelection,
     ) -> Result<(), NativeHostError> {
@@ -532,7 +569,9 @@ impl NativeEditor {
         Ok(())
     }
 
-    fn ordered(selection: &NativeTextSelection) -> (&NativeTextPosition, &NativeTextPosition) {
+    pub(super) fn ordered(
+        selection: &NativeTextSelection,
+    ) -> (&NativeTextPosition, &NativeTextPosition) {
         if (selection.anchor.paragraph, selection.anchor.scalar_offset)
             <= (selection.focus.paragraph, selection.focus.scalar_offset)
         {
@@ -560,7 +599,7 @@ impl NativeEditor {
         })
     }
 
-    fn selected_text(&self, selection: &NativeTextSelection) -> String {
+    pub(super) fn selected_text(&self, selection: &NativeTextSelection) -> String {
         let (start, end) = Self::ordered(selection);
         let paragraphs = &self.session.core.document().sections[start.section as usize].paragraphs;
         (start.paragraph..=end.paragraph)
@@ -582,8 +621,8 @@ impl NativeEditor {
             .join("\n")
     }
 
-    fn apply_replacement(
-        &mut self,
+    pub(super) fn apply_replacement(
+        core: &mut DocumentCore,
         selection: &NativeTextSelection,
         text: &str,
     ) -> Result<(), NativeHostError> {
@@ -592,7 +631,7 @@ impl NativeEditor {
             && end.scalar_offset - start.scalar_offset <= 8
             && text.chars().count() <= 8
         {
-            self.session.core.replace_body_text_local_native(
+            core.replace_body_text_local_native(
                 start.section as usize,
                 start.paragraph as usize,
                 start.scalar_offset as usize,
@@ -601,11 +640,11 @@ impl NativeEditor {
             )?;
             // Expose a settled document to native geometry/save consumers. This
             // session does not yet own Studio's deferred-pagination scheduler.
-            self.session.core.paginate_if_needed();
+            core.paginate_if_needed();
             return Ok(());
         }
         if start != end {
-            self.session.core.delete_range_native(
+            core.delete_range_native(
                 start.section as usize,
                 start.paragraph as usize,
                 start.scalar_offset as usize,
@@ -615,7 +654,7 @@ impl NativeEditor {
             )?;
         }
         if !text.is_empty() {
-            self.session.core.insert_text_native(
+            core.insert_text_native(
                 start.section as usize,
                 start.paragraph as usize,
                 start.scalar_offset as usize,
