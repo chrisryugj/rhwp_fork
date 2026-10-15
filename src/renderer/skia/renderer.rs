@@ -525,6 +525,17 @@ impl SkiaLayerRenderer {
         self
     }
 
+    /// Replace custom fonts with explicit immutable byte snapshots. Every
+    /// bounded TTF/OTF/TTC face must load; paths and RHWP_FONT_PATH are not read.
+    /// System fallback remains available, and an existing bundled catalog is
+    /// retained. Failure leaves callers free to keep their previous renderer.
+    pub fn try_with_font_data(mut self, sources: &[Vec<u8>]) -> Result<Self, HwpError> {
+        let catalog = TypefaceCatalog::try_from_data(&self.font_mgr, sources)?;
+        self.clear_caches();
+        self.custom_typefaces = catalog;
+        Ok(self)
+    }
+
     /// 기본 native Skia paint와 동일한 후보 사다리에서 문자별 typeface 결정을 읽는다.
     /// 렌더링, surface 생성, font 파일 적재를 시작하지 않는다.
     pub(crate) fn font_decision(

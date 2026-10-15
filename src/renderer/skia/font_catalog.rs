@@ -16,6 +16,62 @@ pub(super) struct TypefaceCatalog {
 }
 
 impl TypefaceCatalog {
+    /// Load only the supplied byte snapshots. Unlike the path-based fallback
+    /// loader, every face must parse and construct successfully or the whole
+    /// replacement catalog is discarded. No environment paths are consulted.
+    pub fn try_from_data(
+        font_mgr: &FontMgr,
+        sources: &[Vec<u8>],
+    ) -> Result<Self, crate::error::HwpError> {
+        use crate::error::HwpError;
+        let invalid = |message: &str| HwpError::RenderError(message.into());
+        if sources.len() > MAX_FONT_FILES {
+            return Err(invalid("native font file count exceeds 256"));
+        }
+        let mut catalog = Self::default();
+        let mut total_bytes = 0u64;
+        let mut retained_bytes = 0u64;
+        for bytes in sources {
+            let length = bytes.len() as u64;
+            if length == 0 || length > MAX_FONT_FILE_BYTES {
+                return Err(invalid("native font size must be in 1..=32 MiB"));
+            }
+            total_bytes = total_bytes
+                .checked_add(length)
+                .ok_or_else(|| invalid("native font input byte count overflow"))?;
+            if total_bytes > MAX_FONT_TOTAL_BYTES {
+                return Err(invalid("native font input bytes exceed 64 MiB"));
+            }
+            let faces = ttf_parser::fonts_in_collection(bytes).unwrap_or(1);
+            if faces == 0 || faces > MAX_COLLECTION_FACES {
+                return Err(invalid(
+                    "native font collection face count must be in 1..=64",
+                ));
+            }
+            let retained = length
+                .checked_mul(u64::from(faces))
+                .and_then(|bytes| retained_bytes.checked_add(bytes))
+                .ok_or_else(|| invalid("native font retained byte count overflow"))?;
+            if retained > MAX_FONT_TOTAL_BYTES {
+                return Err(invalid("native font retained copies exceed 64 MiB"));
+            }
+            retained_bytes = retained;
+            for face_index in 0..faces {
+                ttf_parser::Face::parse(bytes, face_index)
+                    .map_err(|_| invalid("native font face could not be parsed"))?;
+                let face = font_mgr
+                    .new_from_data(Data::new_copy(bytes), Some(face_index))
+                    .ok_or_else(|| invalid("native font face could not be constructed by Skia"))?;
+                let family = face.family_name().trim().to_lowercase();
+                if family.is_empty() {
+                    return Err(invalid("native font face has no family name"));
+                }
+                catalog.families.entry(family).or_default().push(face);
+            }
+        }
+        Ok(catalog)
+    }
+
     pub fn load(font_mgr: &FontMgr, sources: &[PathBuf]) -> Self {
         let mut catalog = Self::default();
         let mut total_bytes = 0u64;
