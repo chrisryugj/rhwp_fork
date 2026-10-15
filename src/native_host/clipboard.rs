@@ -4,10 +4,13 @@
 //! a general HTML sanitizer. Objects/tables and scalar/logical inline affinity
 //! are outside this surface. Empty HTML and empty text preserve selection/history.
 
+use std::borrow::Cow;
+
+use quick_xml::events::Event;
+use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
 
 use crate::document_core::native_interaction::{NativeTextPosition, NativeTextSelection};
-use crate::model::control::Control;
 use crate::DocumentCore;
 
 use super::editor::{NativeEditOutcome, NativeEditor};
@@ -52,6 +55,7 @@ impl NativeEditor {
                 html: None,
             });
         }
+        Self::check_body_text_span(self.session().document(), selection)?;
         let plain_text = self.selected_text(selection);
         check_text_controls(&plain_text)?;
         let (start, end) = Self::ordered(selection);
@@ -168,6 +172,7 @@ impl NativeEditor {
     ) -> Result<NativeEditOutcome, NativeHostError> {
         self.check_edit_ready(expected_revision)?;
         check_input_size(html)?;
+        let html = prepare_body_html(html)?;
         let selection = self.selection().clone();
         if html.trim().is_empty() {
             return self.set_selection(expected_revision, selection);
@@ -186,7 +191,7 @@ impl NativeEditor {
                 start.section as usize,
                 start.paragraph as usize,
                 start.scalar_offset as usize,
-                html,
+                &html,
             )?;
             let imported: HtmlPasteResult = serde_json::from_str(&json).map_err(|_| {
                 NativeHostError::InvalidArgument(
@@ -288,6 +293,73 @@ fn check_text_controls(text: &str) -> Result<(), NativeHostError> {
     Ok(())
 }
 
+/// A lexical admission pass, not an HTML sanitizer or a second importer. The
+/// core silently drops some unsupported source objects (for example non-data
+/// images), so checking only the resulting IR cannot detect that content loss.
+/// Existing XML tokenization distinguishes quoted attributes, comments and
+/// escaped text; HTML void tags and optional/mixed-case end tags need no XML
+/// nesting validation here. The caller has already bounded input to 1 MiB.
+fn prepare_body_html(html: &str) -> Result<Cow<'_, str>, NativeHostError> {
+    let mut reader = Reader::from_str(html);
+    reader.config_mut().check_end_names = false;
+    reader.config_mut().allow_unmatched_ends = true;
+    reader.config_mut().allow_dangling_amp = true;
+    let mut without_comments: Option<String> = None;
+    let mut copy_start = 0;
+    loop {
+        let event_start = reader.buffer_position() as usize;
+        match reader.read_event().map_err(|_| {
+            NativeHostError::Unsupported("clipboard HTML contains unrecognized markup".into())
+        })? {
+            Event::Start(tag) | Event::Empty(tag) => {
+                let name = tag.local_name().as_ref().to_ascii_lowercase();
+                if matches!(
+                    name.as_slice(),
+                    b"img"
+                        | b"picture"
+                        | b"source"
+                        | b"table"
+                        | b"svg"
+                        | b"math"
+                        | b"object"
+                        | b"embed"
+                        | b"iframe"
+                        | b"canvas"
+                        | b"video"
+                        | b"audio"
+                        | b"form"
+                        | b"input"
+                        | b"select"
+                        | b"textarea"
+                        | b"button"
+                        | b"hr"
+                ) {
+                    return Err(NativeHostError::Unsupported(
+                        "clipboard HTML object and table import is unsupported".into(),
+                    ));
+                }
+            }
+            Event::Comment(_) => {
+                // The core's tag scanner can mistake '>' inside a comment for
+                // its end and insert the remaining '-->' as document text.
+                without_comments
+                    .get_or_insert_with(|| String::with_capacity(html.len()))
+                    .push_str(&html[copy_start..event_start]);
+                copy_start = reader.buffer_position() as usize;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    match without_comments {
+        Some(mut normalized) => {
+            normalized.push_str(&html[copy_start..]);
+            Ok(Cow::Owned(normalized))
+        }
+        None => Ok(Cow::Borrowed(html)),
+    }
+}
+
 fn clipboard_selection_size(
     core: &DocumentCore,
     selection: &NativeTextSelection,
@@ -338,25 +410,16 @@ fn check_imported_paragraphs(
     start: &NativeTextPosition,
     end: &NativeTextPosition,
 ) -> Result<(), NativeHostError> {
+    NativeEditor::check_body_text_span(
+        core,
+        &NativeTextSelection {
+            anchor: start.clone(),
+            focus: end.clone(),
+        },
+    )?;
     for paragraph in &core.document().sections[start.section as usize].paragraphs
         [start.paragraph as usize..=end.paragraph as usize]
     {
-        if paragraph.controls.iter().any(|control| {
-            control.is_logical_inline()
-                || matches!(
-                    control,
-                    Control::Table(_)
-                        | Control::Shape(_)
-                        | Control::Picture(_)
-                        | Control::Equation(_)
-                        | Control::Form(_)
-                        | Control::CharOverlap(_)
-                )
-        }) {
-            return Err(NativeHostError::Unsupported(
-                "clipboard object and table import is unsupported".into(),
-            ));
-        }
         if paragraph.text.chars().any(char::is_control) {
             return Err(NativeHostError::Unsupported(
                 "clipboard paragraph contains unsupported control characters".into(),

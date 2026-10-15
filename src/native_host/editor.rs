@@ -1,13 +1,15 @@
 //! Opt-in native editor state. The document engine itself remains history-free.
 //!
 //! This first surface edits body text only. Offsets are Unicode scalar indices;
-//! cell editing, inline-control affinity and tabs are rejected explicitly.
+//! cell editing, object-bearing paragraph mutations, inline-control affinity and
+//! tabs are rejected explicitly. Read-only selection may span floating objects.
 //! Paragraph split/join and grapheme navigation live in `commands`. OS IME events
 //! and screen coordinates belong to the host, not to this session.
 
 use std::collections::VecDeque;
 
 use crate::document_core::native_interaction::{NativeTextPosition, NativeTextSelection};
+use crate::model::control::Control;
 use crate::DocumentCore;
 
 use super::{NativeDocumentSession, NativeHostError};
@@ -275,6 +277,7 @@ impl NativeEditor {
         edit: impl FnOnce(&mut DocumentCore) -> Result<NativeTextSelection, NativeHostError>,
     ) -> Result<NativeEditOutcome, NativeHostError> {
         self.check_edit_ready(expected_revision)?;
+        Self::check_body_text_span(&self.session.core, &self.selection)?;
         self.check_mutation_capacity()?;
         self.check_snapshot_slots(2)?;
         let selection_before = self.selection.clone();
@@ -581,6 +584,34 @@ impl NativeEditor {
         }
     }
 
+    /// The scalar body-edit surface cannot preserve/export semantic controls
+    /// when removing a paragraph. Inspect the entire validated span, including
+    /// middle paragraphs and floating objects the interaction query can traverse.
+    /// Keep this separate from selection validation: read-only navigation and
+    /// identical-text no-ops do not need to modify an object's paragraph.
+    pub(super) fn check_body_text_span(
+        core: &DocumentCore,
+        selection: &NativeTextSelection,
+    ) -> Result<(), NativeHostError> {
+        let (start, end) = Self::ordered(selection);
+        for paragraph in &core.document().sections[start.section as usize].paragraphs
+            [start.paragraph as usize..=end.paragraph as usize]
+        {
+            if paragraph.controls.iter().any(|control| {
+                // Blank documents carry these section/column definitions; core
+                // text editing preserves them. Other controls (including fields,
+                // bookmarks, headers and unknown controls) are not plain text.
+                !matches!(control, Control::SectionDef(_) | Control::ColumnDef(_))
+            }) {
+                return Err(NativeHostError::Unsupported(
+                    "body text edits and clipboard export cannot include semantic-control paragraphs"
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn replacement_end(
         selection: &NativeTextSelection,
         text: &str,
@@ -626,6 +657,9 @@ impl NativeEditor {
         selection: &NativeTextSelection,
         text: &str,
     ) -> Result<(), NativeHostError> {
+        // Also covers IME previews and command edit ranges distinct from the
+        // editor's current selection. This check precedes all core mutations.
+        Self::check_body_text_span(core, selection)?;
         let (start, end) = Self::ordered(selection);
         if start.paragraph == end.paragraph
             && end.scalar_offset - start.scalar_offset <= 8

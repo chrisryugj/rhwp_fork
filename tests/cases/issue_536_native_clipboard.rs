@@ -329,6 +329,32 @@ fn native_clipboard_html_source_objects_reject_before_lossy_import() {
 }
 
 #[test]
+fn native_clipboard_bookmark_in_middle_paragraph_is_not_plain_text() {
+    let mut core = core(&["A", "B", "C"]);
+    let mut model = core.document().clone();
+    model.sections[0].paragraphs[1]
+        .controls
+        .push(Control::Bookmark(Default::default()));
+    core.set_document(model);
+    let range = selection((0, 1), (2, 0));
+    let mut editor =
+        NativeEditor::new(NativeDocumentSession::from_core(core), range.clone()).unwrap();
+    let before = document(&editor);
+    assert!(matches!(
+        editor.copy_selection(0),
+        Err(NativeHostError::Unsupported(_))
+    ));
+    assert!(matches!(
+        editor.cut_selection(0),
+        Err(NativeHostError::Unsupported(_))
+    ));
+    assert_eq!(document(&editor), before);
+    assert_eq!(editor.selection(), &range);
+    assert_eq!(editor.session().revision(), 0);
+    assert!(!editor.can_undo());
+}
+
+#[test]
 fn native_clipboard_html_escaped_object_text_and_comments_remain_text() {
     let mut editor = editor(&["원문"], selection((0, 0), (0, 2)));
     editor
