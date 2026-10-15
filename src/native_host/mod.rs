@@ -3,6 +3,7 @@
 //! 문서 엔진의 편집 정책은 바꾸지 않는다. 세션은 생성한 스레드에서 사용하며
 //! 페이지 좌표는 기존 layer tree의 96-DPI 논리 좌표를 그대로 사용한다.
 
+pub mod clipboard;
 pub mod commands;
 pub mod editor;
 pub mod fonts;

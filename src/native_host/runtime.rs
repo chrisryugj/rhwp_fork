@@ -23,6 +23,7 @@ use std::thread::{self, JoinHandle};
 
 use serde::{Deserialize, Serialize};
 
+use super::clipboard::{NativeClipboardPayload, MAX_CLIPBOARD_BYTES};
 use super::commands::{NativeCommandOutcome, NativeEditCommand, NativeImeContext};
 use super::editor::{NativeEditOutcome, NativeEditor};
 use super::save::NativeSaveCaretPolicy;
@@ -77,6 +78,7 @@ pub struct NativeRuntimeConfig {
     pub max_outstanding: usize,
     /// Aggregate buffer reservations (1..=128 MiB). A render reserves the existing
     /// 64 MiB frame ceiling; a save reserves 128 MiB before it is accepted.
+    /// Copy/cut reserve the 1 MiB clipboard output ceiling before acceptance.
     pub max_pending_bytes: usize,
 }
 
@@ -124,6 +126,20 @@ pub enum NativeRuntimeCommand {
     },
     ImeContext {
         target: NativeRuntimeTarget,
+    },
+    CopySelection {
+        target: NativeRuntimeTarget,
+    },
+    CutSelection {
+        target: NativeRuntimeTarget,
+    },
+    PasteText {
+        target: NativeRuntimeTarget,
+        text: String,
+    },
+    PasteHtml {
+        target: NativeRuntimeTarget,
+        html: String,
     },
     PageSize {
         target: NativeRuntimeTarget,
@@ -230,9 +246,11 @@ impl NativeRuntimeCommand {
             } => bytes
                 .capacity()
                 .checked_add(password.as_ref().map_or(0, Vec::capacity)),
-            Self::Replace { text, .. } | Self::UpdateComposition { text, .. } => {
-                Some(text.capacity())
-            }
+            Self::Replace { text, .. }
+            | Self::UpdateComposition { text, .. }
+            | Self::PasteText { text, .. } => Some(text.capacity()),
+            Self::PasteHtml { html, .. } => Some(html.capacity()),
+            Self::CopySelection { .. } | Self::CutSelection { .. } => Some(MAX_CLIPBOARD_BYTES),
             Self::BeginEdit { selection, .. } | Self::SetSelection { selection, .. } => {
                 selection_bytes(selection)
             }
@@ -318,6 +336,10 @@ pub enum NativeRuntimeOutput {
     Info(NativeRuntimeInfo),
     CommandExecuted(NativeCommandOutcome),
     ImeContext(NativeImeContext),
+    Clipboard {
+        payload: NativeClipboardPayload,
+        outcome: Option<NativeEditOutcome>,
+    },
     DocumentClosed,
     PageSize {
         target: NativeRuntimeTarget,
@@ -359,6 +381,7 @@ impl fmt::Debug for NativeRuntimeOutput {
             Self::Info(_) => "Info",
             Self::CommandExecuted(_) => "CommandExecuted",
             Self::ImeContext(_) => "ImeContext",
+            Self::Clipboard { .. } => "Clipboard",
             Self::DocumentClosed => "DocumentClosed",
             Self::PageSize { .. } => "PageSize",
             Self::CaretRect { .. } => "CaretRect",
@@ -827,6 +850,15 @@ fn replacement(
     }
 }
 
+fn compact_clipboard_payload(payload: NativeClipboardPayload) -> NativeClipboardPayload {
+    // NativeEditor checks the combined UTF-8 length before cut mutates the
+    // document. Remove allocator slack so the unread output fits its reservation.
+    NativeClipboardPayload {
+        plain_text: payload.plain_text.into_boxed_str().into_string(),
+        html: payload.html.map(|html| html.into_boxed_str().into_string()),
+    }
+}
+
 fn execute(
     owner: &mut Option<OwnedDocument>,
     id: NativeRequestId,
@@ -871,6 +903,38 @@ fn execute(
             doc.editor()?
                 .ime_context(target.revision)
                 .map(O::ImeContext)
+        }
+        C::CopySelection { target } => {
+            let doc = document(owner)?;
+            doc.check(target)?;
+            let payload = doc.editor()?.copy_selection(target.revision)?;
+            Ok(O::Clipboard {
+                payload: compact_clipboard_payload(payload),
+                outcome: None,
+            })
+        }
+        C::CutSelection { target } => {
+            let doc = document(owner)?;
+            doc.check(target)?;
+            let (payload, outcome) = doc.editor()?.cut_selection(target.revision)?;
+            Ok(O::Clipboard {
+                payload: compact_clipboard_payload(payload),
+                outcome: Some(outcome),
+            })
+        }
+        C::PasteText { target, text } => {
+            let doc = document(owner)?;
+            doc.check(target)?;
+            doc.editor()?
+                .paste_text(target.revision, &text)
+                .map(O::Edited)
+        }
+        C::PasteHtml { target, html } => {
+            let doc = document(owner)?;
+            doc.check(target)?;
+            doc.editor()?
+                .paste_html(target.revision, &html)
+                .map(O::Edited)
         }
         C::PageSize { target, page } => {
             let doc = document(owner)?;

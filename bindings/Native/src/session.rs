@@ -171,6 +171,20 @@ enum Request {
     ImeContext {
         expected_revision: u64,
     },
+    CopySelection {
+        expected_revision: u64,
+    },
+    CutSelection {
+        expected_revision: u64,
+    },
+    PasteText {
+        text: String,
+        expected_revision: u64,
+    },
+    PasteHtml {
+        html: String,
+        expected_revision: u64,
+    },
     Info {},
     PrepareSave {
         format: NativeSaveFormat,
@@ -494,6 +508,9 @@ fn worker_output(host: &mut Host, worker: u64, output: NativeRuntimeOutput) -> V
             NativeRuntimeOutput::ImeContext(context) => {
                 json!({"ok":true,"kind":"imeContext","context":context})
             }
+            NativeRuntimeOutput::Clipboard { payload, outcome } => {
+                json!({"ok":true,"kind":"clipboard","payload":payload,"outcome":outcome})
+            }
             NativeRuntimeOutput::Info(info) => {
                 let mut encoded = json!(info);
                 if let Some(fields) = encoded.as_object_mut() {
@@ -721,6 +738,13 @@ pub unsafe extern "C" fn rhwp_session_request(
             match request {
                 Request::ExecuteCommand {command,expected_revision}=>{let result=record.editor_mut()?.execute_command(expected_revision,command)?;Ok(json!({"ok":true,"outcome":result.outcome,"preferredX":result.preferred_x}))},
                 Request::ImeContext {expected_revision}=>Ok(json!({"ok":true,"context":record.editor_mut()?.ime_context(expected_revision)?})),
+                Request::CopySelection {expected_revision}=>Ok(json!({"ok":true,"kind":"clipboard","payload":record.editor_mut()?.copy_selection(expected_revision)?,"outcome":null})),
+                Request::CutSelection {expected_revision}=>{
+                    let (payload,outcome)=record.editor_mut()?.cut_selection(expected_revision)?;
+                    Ok(json!({"ok":true,"kind":"clipboard","payload":payload,"outcome":outcome}))
+                },
+                Request::PasteText {text,expected_revision}=>Ok(edit_result(record.editor_mut()?.paste_text(expected_revision,&text)?)),
+                Request::PasteHtml {html,expected_revision}=>Ok(edit_result(record.editor_mut()?.paste_html(expected_revision,&html)?)),
                 Request::PrepareSave { format } => {
                     let prepared = record.prepare_save(format)?;
                     let caret_saved = prepared.caret_saved();

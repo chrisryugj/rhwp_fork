@@ -343,3 +343,71 @@ fn native_clipboard_all_entry_points_reject_stale_revision_and_active_compositio
     assert_eq!(editor.selection(), &range);
     assert_eq!(editor.composition_id(), Some(id));
 }
+
+#[test]
+fn native_clipboard_runtime_schema_rejects_unknown_fields_and_redacts_payloads() {
+    use rhwp::native_host::runtime::NativeRuntimeCommand;
+
+    for mut value in [
+        serde_json::json!({"op":"copySelection","target":{"documentId":1,"revision":0}}),
+        serde_json::json!({"op":"cutSelection","target":{"documentId":1,"revision":0}}),
+        serde_json::json!({"op":"pasteText","target":{"documentId":1,"revision":0},"text":"PRIVATE"}),
+        serde_json::json!({"op":"pasteHtml","target":{"documentId":1,"revision":0},"html":"<p>PRIVATE</p>"}),
+    ] {
+        let command: NativeRuntimeCommand = serde_json::from_value(value.clone()).unwrap();
+        assert!(!format!("{command:?}").contains("PRIVATE"));
+        value["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<NativeRuntimeCommand>(value.clone()).is_err());
+        value.as_object_mut().unwrap().remove("unexpected");
+        value.as_object_mut().unwrap().remove("target");
+        assert!(serde_json::from_value::<NativeRuntimeCommand>(value).is_err());
+    }
+}
+
+#[test]
+fn native_clipboard_runtime_reserves_output_ceiling_and_owned_input_capacity() {
+    use rhwp::native_host::runtime::{
+        NativeRequestId, NativeRuntime, NativeRuntimeCommand as Command, NativeRuntimeConfig,
+        NativeRuntimeError, NativeRuntimeTarget,
+    };
+
+    let mut runtime = NativeRuntime::spawn(NativeRuntimeConfig {
+        max_pending_bytes: MAX_CLIPBOARD_BYTES - 1,
+        ..Default::default()
+    })
+    .unwrap();
+    let target = NativeRuntimeTarget {
+        document_id: NativeRequestId::from_raw(1),
+        revision: 0,
+    };
+    for command in [
+        Command::CopySelection { target },
+        Command::CutSelection { target },
+    ] {
+        assert_eq!(
+            runtime.try_submit(command).unwrap_err().error,
+            NativeRuntimeError::ByteCapacity,
+            "copy/cut must reserve their possible output before acceptance"
+        );
+    }
+    for html in [false, true] {
+        let mut text = String::with_capacity(MAX_CLIPBOARD_BYTES);
+        text.push('x');
+        let rejected = runtime
+            .try_submit(if html {
+                Command::PasteHtml { target, html: text }
+            } else {
+                Command::PasteText { target, text }
+            })
+            .unwrap_err();
+        assert_eq!(rejected.error, NativeRuntimeError::ByteCapacity);
+        match *rejected.command {
+            Command::PasteText { text, .. } | Command::PasteHtml { html: text, .. } => {
+                assert_eq!(text, "x");
+                assert!(text.capacity() >= MAX_CLIPBOARD_BYTES);
+            }
+            other => panic!("rejected input ownership changed: {other:?}"),
+        }
+    }
+    runtime.close();
+}
