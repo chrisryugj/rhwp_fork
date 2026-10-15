@@ -50,8 +50,8 @@ fn texts(editor: &NativeEditor) -> Vec<&str> {
         .collect()
 }
 
-fn document(editor: &NativeEditor) -> serde_json::Value {
-    serde_json::to_value(editor.session().document().document()).unwrap()
+fn document(editor: &NativeEditor) -> String {
+    format!("{:?}", editor.session().document().document())
 }
 
 #[test]
