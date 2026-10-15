@@ -10,6 +10,10 @@ use rhwp_core::document_core::native_interaction::{
     NativeTextPosition, NativeTextSelection, NativeVerticalDirection,
 };
 use rhwp_core::native_host::editor::{NativeCompositionFocusLoss, NativeEditOutcome, NativeEditor};
+use rhwp_core::native_host::runtime::{
+    NativeRequestId, NativeRuntime, NativeRuntimeCommand, NativeRuntimeConfig, NativeRuntimeOutput,
+    NativeRuntimeTarget,
+};
 use rhwp_core::native_host::save::{
     NativeSaveFormat, NativeSaveStatus, NativeSaveToken, PreparedSave,
 };
@@ -29,6 +33,7 @@ static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 #[derive(Default)]
 struct Host {
     sessions: HashMap<u64, ManagedSession>,
+    workers: HashMap<u64, NativeRuntime>,
     buffers: HashMap<u64, Vec<u8>>,
     buffer_bytes: usize,
 }
@@ -262,6 +267,35 @@ enum Request {
     deny_unknown_fields
 )]
 enum HostRequest {
+    WorkerCreate {
+        #[serde(default)]
+        config: NativeRuntimeConfig,
+    },
+    WorkerSubmit {
+        worker: u64,
+        command: NativeRuntimeCommand,
+    },
+    WorkerOpen {
+        worker: u64,
+        replace: Option<NativeRuntimeTarget>,
+        password: Option<Vec<u8>>,
+    },
+    WorkerPoll {
+        worker: u64,
+    },
+    WorkerCancel {
+        worker: u64,
+        request_id: NativeRequestId,
+    },
+    WorkerClose {
+        worker: u64,
+    },
+    WorkerStatus {
+        worker: u64,
+    },
+    WorkerRelease {
+        worker: u64,
+    },
     View {
         state: NativeViewState,
         command: ViewCommand,
@@ -309,7 +343,7 @@ enum ViewCommand {
     },
 }
 
-/// Platform-neutral host operations. P58 consumes no binary payload.
+/// Platform-neutral host operations. Only workerOpen consumes binary document bytes.
 /// # Safety
 /// Each nonempty span must be readable for its declared length during the call.
 #[no_mangle]
@@ -324,12 +358,72 @@ pub unsafe extern "C" fn rhwp_native_host_request(
         let data = unsafe { input(data, data_len, MAX_DOCUMENT_BYTES)? };
         let request: HostRequest = serde_json::from_slice(request)
             .map_err(|_| NativeHostError::InvalidArgument("invalid host request JSON".into()))?;
-        if !data.is_empty() {
+        if !matches!(&request, HostRequest::WorkerOpen { .. }) && !data.is_empty() {
             return Err(NativeHostError::InvalidArgument(
                 "this request does not accept binary data".into(),
             ));
         }
         match request {
+            HostRequest::WorkerCreate { config } => HOST.with(|host| {
+                let mut host = host.borrow_mut();
+                if host.workers.len() >= 4 { return Err(NativeHostError::LimitExceeded("release finished workers before creating more (max 4)".into())); }
+                let runtime = match NativeRuntime::spawn(config) { Ok(runtime) => runtime, Err(error) => return Ok(json!({"ok":false,"code":error.code(),"error":error.to_string()})) };
+                let worker = next_handle()?;
+                host.workers.insert(worker,runtime);
+                Ok(json!({"ok":true,"worker":worker}))
+            }),
+            HostRequest::WorkerSubmit { worker, command } => HOST.with(|host| {
+                let mut host=host.borrow_mut();
+                let runtime=host.workers.get_mut(&worker).ok_or_else(invalid_handle)?;
+                Ok(worker_submit_result(runtime.try_submit(command)))
+            }),
+            HostRequest::WorkerOpen { worker,replace,password } => HOST.with(|host| {
+                let mut host=host.borrow_mut();
+                let runtime=host.workers.get_mut(&worker).ok_or_else(invalid_handle)?;
+                Ok(worker_submit_result(runtime.try_submit(NativeRuntimeCommand::Open {replace,bytes:data.to_vec(),password})))
+            }),
+            HostRequest::WorkerPoll { worker } => HOST.with(|host| {
+                let mut host=host.borrow_mut();
+                let runtime=host.workers.get_mut(&worker).ok_or_else(invalid_handle)?;
+                match runtime.try_recv() {
+                    Ok(None) => Ok(json!({"ok":true,"completion":null})),
+                    Ok(Some(completion)) => {
+                        let mut output=match completion.result {
+                            Ok(output) => worker_output(&mut host,worker,output),
+                            Err(error) => json!({"ok":false,"code":error.code,"error":error.message}),
+                        };
+                        output["requestId"]=json!(completion.request_id);
+                        Ok(json!({"ok":true,"completion":output}))
+                    }
+                    Err(error) => Ok(json!({"ok":false,"code":error.code(),"error":error.to_string()})),
+                }
+            }),
+            HostRequest::WorkerCancel { worker,request_id } => HOST.with(|host| {
+                let host=host.borrow();
+                let runtime=host.workers.get(&worker).ok_or_else(invalid_handle)?;
+                Ok(json!({"ok":true,"outcome":runtime.cancel(request_id)}))
+            }),
+            HostRequest::WorkerClose { worker } => HOST.with(|host| {
+                let mut host=host.borrow_mut();
+                let runtime=host.workers.get_mut(&worker).ok_or_else(invalid_handle)?;
+                runtime.close();
+                Ok(json!({"ok":true,"isFinished":runtime.is_finished()}))
+            }),
+            HostRequest::WorkerStatus { worker } => HOST.with(|host| {
+                let host=host.borrow();
+                let runtime=host.workers.get(&worker).ok_or_else(invalid_handle)?;
+                Ok(json!({"ok":true,"isFinished":runtime.is_finished()}))
+            }),
+            HostRequest::WorkerRelease { worker } => HOST.with(|host| {
+                let mut host=host.borrow_mut();
+                if !host.workers.get(&worker).ok_or_else(invalid_handle)?.is_finished() {return Err(NativeHostError::InvalidArgument("close worker and wait for isFinished before releasing it or unloading the library".into()));}
+                let mut runtime=host.workers.remove(&worker).ok_or_else(invalid_handle)?;
+                match runtime.try_join() {
+                    Ok(true)=>Ok(json!({"ok":true})),
+                    Ok(false)=>unreachable!("finished worker can join"),
+                    Err(error)=>Ok(json!({"ok":false,"code":error.code(),"error":error.to_string()})),
+                }
+            }),
             HostRequest::View { state, command } => {
                 let mut view = NativeView::try_from(state)?;
                 let mut query = Value::Null;
@@ -366,6 +460,89 @@ pub unsafe extern "C" fn rhwp_native_host_request(
             }
         }
     })
+}
+
+fn worker_submit_result(
+    result: Result<NativeRequestId, rhwp_core::native_host::runtime::NativeRuntimeSubmitError>,
+) -> Value {
+    match result {
+        Ok(id) => json!({"ok":true,"requestId":id}),
+        Err(error) => json!({"ok":false,"code":error.error.code(),"error":error.error.to_string()}),
+    }
+}
+
+fn worker_output(host: &mut Host, worker: u64, output: NativeRuntimeOutput) -> Value {
+    let cancel = match &output {
+        NativeRuntimeOutput::PreparedSave {
+            document_id,
+            prepared,
+        } => Some((*document_id, prepared.token)),
+        _ => None,
+    };
+    let result: Result<Value, NativeHostError> = (|| {
+        Ok(match output {
+            NativeRuntimeOutput::Info(info) => json!({"ok":true,"kind":"info","info":info}),
+            NativeRuntimeOutput::DocumentClosed => json!({"ok":true,"kind":"documentClosed"}),
+            NativeRuntimeOutput::PageSize { target, page, size } => {
+                json!({"ok":true,"kind":"pageSize","target":target,"page":page,"size":size})
+            }
+            NativeRuntimeOutput::CaretRect { target, caret } => {
+                json!({"ok":true,"kind":"caret","target":target,"caret":caret})
+            }
+            NativeRuntimeOutput::HitTest { target, hit } => {
+                json!({"ok":true,"kind":"hit","target":target,"hit":hit})
+            }
+            NativeRuntimeOutput::SelectionRects { target, rects } => {
+                json!({"ok":true,"kind":"selectionRects","target":target,"rects":rects})
+            }
+            NativeRuntimeOutput::Edited(outcome) => {
+                json!({"ok":true,"kind":"edited","outcome":outcome})
+            }
+            NativeRuntimeOutput::Frame { document_id, frame } => {
+                let mut value = frame_result(host, frame)?;
+                value["kind"] = json!("frame");
+                value["documentId"] = json!(document_id);
+                value
+            }
+            NativeRuntimeOutput::PreparedSave {
+                document_id,
+                prepared,
+            } => {
+                let byte_length = prepared.bytes.len();
+                let report: Value = serde_json::from_str(&prepared.content_loss.to_json())
+                    .expect("valid content-loss JSON");
+                let buffer = retain_buffer(host, prepared.bytes.into_vec())?;
+                json!({"ok":true,"kind":"preparedSave","documentId":document_id,"buffer":buffer,"byteLength":byte_length,
+                "token":prepared.token,"revision":prepared.revision,"report":report,"caretSaved":prepared.caret_saved,
+                "caretPreservedFromSource":prepared.caret_preserved_from_source,"caretPolicy":prepared.caret_policy})
+            }
+            NativeRuntimeOutput::SaveStatus {
+                document_id,
+                status,
+            } => {
+                json!({"ok":true,"kind":"saveStatus","documentId":document_id,"isDirty":status.dirty,"status":status})
+            }
+            NativeRuntimeOutput::Cancelled => json!({"ok":true,"kind":"cancelled"}),
+            NativeRuntimeOutput::Skipped(reason) => {
+                json!({"ok":true,"kind":"skipped","reason":reason})
+            }
+        })
+    })();
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let mut value = json!({"ok":false,"code":error.code(),"error":error.to_string()});
+            if let Some((document_id, token)) = cancel {
+                if let Some(runtime) = host.workers.get_mut(&worker) {
+                    let cleanup = worker_submit_result(
+                        runtime.try_submit(NativeRuntimeCommand::CancelSave { document_id, token }),
+                    );
+                    value["saveCleanup"] = cleanup;
+                }
+            }
+            value
+        }
+    }
 }
 
 fn next_handle() -> Result<u64, NativeHostError> {
@@ -452,7 +629,7 @@ pub extern "C" fn rhwp_session_capabilities() -> *mut c_char {
     response(|| {
         Ok(
             json!({"ok":true,"abiVersion":1,"nativeSkia":cfg!(feature="native-skia"),
-        "hostRequests":true,"viewState":true,"threadAffine":true,"maxSessions":MAX_SESSIONS,"maxDocumentBytes":MAX_DOCUMENT_BYTES,
+        "worker":true,"maxWorkers":4,"hostRequests":true,"viewState":true,"threadAffine":true,"maxSessions":MAX_SESSIONS,"maxDocumentBytes":MAX_DOCUMENT_BYTES,
         "maxRequestBytes":MAX_REQUEST_BYTES,"maxBufferBytes":MAX_BUFFER_BYTES,
         "pixelFormat":"rgba8Premultiplied","colorSpace":"srgb"}),
         )

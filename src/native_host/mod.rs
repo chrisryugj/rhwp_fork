@@ -5,6 +5,7 @@
 
 pub mod editor;
 pub mod fonts;
+pub mod runtime;
 pub mod save;
 pub mod view;
 

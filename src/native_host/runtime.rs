@@ -857,7 +857,7 @@ fn execute(
             doc.check(target)?;
             Ok(O::CaretRect {
                 target,
-                caret: doc.session().document().native_caret_rect(&position)?,
+                caret: Some(doc.session().document().native_caret_rect(&position)?),
             })
         }
         C::HitTest { target, page, x, y } => {

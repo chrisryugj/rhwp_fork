@@ -177,3 +177,32 @@ ensureCaret{page,rect:{x,y,width,height},margin}도 지원한다. 이 연산은 
 visible의 pageRegion은 P52 입력 영역이고 pageRect는 페이지 전체의 창 논리 위치다.
 RGBA 버퍼의 표시 원점은 pageRect.xy + originXY/deviceScale로 계산한다. 최대 10,000페이지,
 논리 extent 2^40, raster 배율 (0,64]로 제한하며 조판/renderer의 페이지 배치는 바꾸지 않는다.
+
+## 전용 문서 worker (P59)
+
+`native_host::runtime::NativeRuntime`은 문서를 전용 스레드 안에서 열고 유지한다. !Send인
+core/renderer를 스레드 사이로 이동하지 않는다. 요청과 읽지 않은 완료를 합쳐 기본4개/최대16개,
+보관하는 입력·출력 bytes는 기본128 MiB로 제한한다. 문서 IR·history·Skia 내부 작업 메모리까지의
+전체 RSS 상한은 아니다. 모든 편집/저장은 FIFO이며 render만 최신으로 병합한다. 거절된 submit은
+기존 render를 무효화하지 않고 Rust 호출자에게 command 소유권을 돌려준다.
+
+호스트 JSON 요청은 workerCreate{config}, workerSubmit{worker,command},
+workerOpen{worker,replace,password}, workerPoll{worker}, workerCancel{worker,requestId},
+workerClose{worker}, workerStatus{worker}, workerRelease{worker}다. workerOpen만 별도 binary data
+span으로 문서 바이트를 받는다. worker handle은 생성한 OS 스레드의 소유다.
+command는 `{op:"new",replace:null}`, `{op:"info"}`, target을 받는 renderRegion/pageSize/caretRect/
+hitTest/selectionRects/beginEdit/setSelection/replace/IME/undo/redo/prepareSave와 documentId/token을
+받는 acknowledgeSave/cancelSave다. target은 `{documentId,revision}`으로 재열기의 revision0을
+이전 문서와 구별한다. render에는 fontGeneration도 전달한다.
+
+submit은 requestId를 반환하고 poll은 아직 완료가 없으면 completion:null이다. 완료는
+`{requestId,ok,kind,...}`이며 operation 오류도 같은 ID로 전달한다. frame/preparedSave의 bytes는
+기존 sessionBufferCopy/Release로 소비한다. C ABI 보관 buffer 한도를 넘으면 해당 완료를 오류로
+돌려주고 준비된 저장은 CancelSave를 enqueue하여 saveCleanup에 cleanup requestId를 제공한다.
+이 cleanup 완료도 poll로 회수한다. 저장 report와 token은 준비된 바로 그 bytes에 대응한다.
+
+cancel은 worker가 아직 요청을 가져가지 않았을 때만 성공한다. 실행 중 Skia/파서 호출을 강제
+중단하지 않는다. close는 비차단 종료 신호이며 workerStatus.isFinished 뒤 workerRelease로
+수명을 끝낸다. 그 전에 공유 library를 동적으로 unload하면 안 된다. 이미 받은 buffer도 별도로
+해제한다. [Python NativeWorker](Native/examples/native_worker.py)는 GUI event loop용 submit/poll과
+CLI/test 전용 wait/wait_closed를 구분한다. 실제 OS별 thread 종료·artifact 실행은 별도 검증이다.
