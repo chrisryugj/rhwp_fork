@@ -2,6 +2,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use rhwp::document_core::native_interaction::{NativeTextPosition, NativeTextSelection};
+use rhwp::model::control::Control;
+use rhwp::model::table::Table;
 use rhwp::native_host::clipboard::{
     NativeClipboardPayload, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_PARAGRAPHS,
 };
@@ -248,6 +250,96 @@ fn native_clipboard_unsupported_middle_table_rolls_back_entire_html_import() {
     assert_eq!(editor.session().revision(), revision);
     assert!(editor.can_redo());
     assert!(!editor.can_undo());
+}
+
+#[test]
+fn native_clipboard_floating_object_in_source_span_is_not_silently_discarded() {
+    let mut core = core(&["A", "B", "C"]);
+    let mut model = core.document().clone();
+    let mut table = Table::default();
+    table.common.treat_as_char = false;
+    model.sections[0].paragraphs[1]
+        .controls
+        .push(Control::Table(Box::new(table)));
+    core.set_document(model);
+    let mut editor = NativeEditor::new(
+        NativeDocumentSession::from_core(core),
+        selection((0, 0), (0, 0)),
+    )
+    .unwrap();
+    // Editing another paragraph stays supported, and rejection must preserve redo.
+    editor.replace_selection(0, "x").unwrap();
+    editor.undo(1).unwrap();
+    let revision = editor.session().revision();
+    let range = selection((0, 1), (2, 0));
+    editor.set_selection(revision, range.clone()).unwrap();
+    let before = document(&editor);
+    for operation in ["copy", "cut", "plain", "multiline", "html"] {
+        let result = match operation {
+            "copy" => editor.copy_selection(revision).map(|_| ()),
+            "cut" => editor.cut_selection(revision).map(|_| ()),
+            "plain" => editor.paste_text(revision, "replacement").map(|_| ()),
+            "multiline" => editor.paste_text(revision, "one\ntwo").map(|_| ()),
+            "html" => editor
+                .paste_html(revision, "<p>replacement</p>")
+                .map(|_| ()),
+            _ => unreachable!(),
+        };
+        assert!(
+            matches!(result, Err(NativeHostError::Unsupported(_))),
+            "{operation}"
+        );
+        assert_eq!(document(&editor), before, "{operation}");
+        assert_eq!(editor.selection(), &range, "{operation}");
+        assert_eq!(editor.session().revision(), revision, "{operation}");
+        assert!(editor.can_redo(), "{operation}");
+        assert!(!editor.can_undo(), "{operation}");
+    }
+}
+
+#[test]
+fn native_clipboard_html_source_objects_reject_before_lossy_import() {
+    let range = selection((0, 0), (0, 2));
+    let mut editor = editor(&["원문"], range.clone());
+    editor.replace_selection(0, "x").unwrap();
+    editor.undo(1).unwrap();
+    let revision = editor.session().revision();
+    let before = document(&editor);
+    for html in [
+        "<p>앞<img src=\"missing.png\">뒤</p>",
+        "<p>앞<IMG alt=\">\" SRC='missing.png'>뒤</p>",
+        "<p>앞<img src='data:image/png;base64,invalid'>뒤</p>",
+        "<p>앞<svg><text>object</text></svg>뒤</p>",
+        "<p>앞<object data='missing.bin'></object>뒤</p>",
+        "<p>앞<iframe src='missing.html'></iframe>뒤</p>",
+    ] {
+        assert!(
+            matches!(
+                editor.paste_html(revision, html),
+                Err(NativeHostError::Unsupported(_))
+            ),
+            "{html}"
+        );
+        assert_eq!(document(&editor), before, "{html}");
+        assert_eq!(editor.selection(), &range, "{html}");
+        assert_eq!(editor.session().revision(), revision, "{html}");
+        assert!(editor.can_redo(), "{html}");
+        assert!(!editor.can_undo(), "{html}");
+    }
+}
+
+#[test]
+fn native_clipboard_html_escaped_object_text_and_comments_remain_text() {
+    let mut editor = editor(&["원문"], selection((0, 0), (0, 2)));
+    editor
+        .paste_html(
+            0,
+            "<html><body><!--StartFragment--><p><b>앞</b>&lt;img&gt;<i>뒤</i></p><!-- <img src='ignored'> --><!--EndFragment--></body></html>",
+        )
+        .unwrap();
+    assert_eq!(texts(&editor), ["앞<img>뒤"]);
+    editor.undo(1).unwrap();
+    assert_eq!(texts(&editor), ["원문"]);
 }
 
 #[test]

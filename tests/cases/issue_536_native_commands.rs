@@ -5,6 +5,7 @@ use rhwp::document_core::native_interaction::{
     NativeTextPosition, NativeTextSelection, NativeVerticalDirection,
 };
 use rhwp::model::control::Control;
+use rhwp::model::table::Table;
 use rhwp::native_host::commands::{NativeCommandOutcome, NativeEditCommand as Command};
 use rhwp::native_host::editor::NativeEditor;
 use rhwp::native_host::{NativeDocumentSession, NativeHostError};
@@ -419,6 +420,56 @@ fn native_commands_unsupported_adjacent_inline_target_preserves_document_and_his
         format!("{:?}", editor.session().document().document()),
         before
     );
+}
+
+#[test]
+fn native_commands_floating_middle_object_rejects_all_body_mutations() {
+    let mut core = core(&["A", "B", "C"]);
+    let mut document = core.document().clone();
+    let mut table = Table::default();
+    table.common.treat_as_char = false;
+    document.sections[0].paragraphs[1]
+        .controls
+        .push(Control::Table(Box::new(table)));
+    core.set_document(document);
+    let mut editor =
+        NativeEditor::new(NativeDocumentSession::from_core(core), caret(0, 0)).unwrap();
+    editor.replace_selection(0, "x").unwrap();
+    editor.undo(1).unwrap();
+    let revision = editor.session().revision();
+    let range = selected(position(0, 1), position(2, 0));
+    select(&mut editor, range.clone());
+    let before = format!("{:?}", editor.session().document().document());
+    for command in [
+        Command::DeleteForward {},
+        Command::DeleteBackward {},
+        Command::SplitParagraph {},
+    ] {
+        assert!(matches!(
+            editor.execute_command(revision, command),
+            Err(NativeHostError::Unsupported(_))
+        ));
+        assert_eq!(
+            format!("{:?}", editor.session().document().document()),
+            before
+        );
+        assert_eq!(editor.selection(), &range);
+        assert_eq!(editor.session().revision(), revision);
+        assert!(editor.can_redo());
+        assert!(!editor.can_undo());
+    }
+    assert!(matches!(
+        editor.replace_selection(revision, "x"),
+        Err(NativeHostError::Unsupported(_))
+    ));
+    assert_eq!(
+        format!("{:?}", editor.session().document().document()),
+        before
+    );
+    assert_eq!(editor.selection(), &range);
+    assert_eq!(editor.session().revision(), revision);
+    assert!(editor.can_redo());
+    assert!(!editor.can_undo());
 }
 
 #[test]
