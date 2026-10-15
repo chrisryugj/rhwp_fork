@@ -19,6 +19,8 @@ from qt_native_host import NativeWindow, scalar_from_utf16, utf16_length
 class IdleWorker:
     def __init__(self):
         self.requests = []
+        self.finished = True
+        self.released = False
     def submit(self, command):
         self.requests.append(command)
         return len(self.requests)
@@ -27,9 +29,9 @@ class IdleWorker:
     def close(self):
         pass
     def is_finished(self):
-        return True
+        return self.finished
     def release(self):
-        pass
+        self.released = True
 
 
 class AdapterTests(unittest.TestCase):
@@ -106,6 +108,44 @@ class AdapterTests(unittest.TestCase):
         window.finished = True
         window.io.shutdown(wait=True)
         window.close()
+
+    def test_begin_edit_info_response_enables_editor_before_next_command(self):
+        worker = IdleWorker()
+        window = NativeWindow(None, worker=worker)
+        window.timer.stop()
+        window.actions.clear()
+        window.info = {"documentId": 7, "revision": 0}
+        position = {"section": 0, "paragraph": 0, "scalarOffset": 0, "cellPath": []}
+        selection = {"anchor": position, "focus": position}
+        window.enqueue([lambda _: {"op": "beginEdit", "selection": selection},
+                        lambda _: {"op": "replace", "text": "각"}])
+        window.pump()
+        window.pending = None
+        window.step_done({"ok": True, "kind": "info", "info": {
+            "documentId": 7, "revision": 0, "editing": True,
+            "selection": selection, "compositionId": None}})
+        window.pump()
+        self.assertTrue(window.info["editing"])
+        self.assertEqual(window.info["selection"], selection)
+        self.assertEqual(worker.requests[1]["target"], {"documentId": 7, "revision": 0})
+        window.finished = True
+        window.io.shutdown(wait=True)
+        window.close()
+
+    def test_close_retains_worker_until_native_call_has_finished(self):
+        worker = IdleWorker()
+        worker.finished = False
+        window = NativeWindow(None, worker=worker)
+        window.timer.stop()
+        window.close()
+        window.tick()
+        self.assertTrue(window.closing)
+        self.assertFalse(window.finished)
+        self.assertFalse(worker.released)
+        worker.finished = True
+        window.tick()
+        self.assertTrue(worker.released)
+        self.assertTrue(window.finished)
 
     def test_pending_actions_are_bounded_without_claiming_cancellation(self):
         worker = IdleWorker()

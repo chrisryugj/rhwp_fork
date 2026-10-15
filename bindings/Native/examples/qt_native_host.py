@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QMimeData, QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QEvent, QMimeData, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QFileDialog, QGridLayout, QMainWindow, QScrollBar, QWidget
 
@@ -70,6 +70,11 @@ class Canvas(QWidget):
     def resizeEvent(self, event):
         self.window.rebuild_view()
         super().resizeEvent(event)
+
+    def event(self, event):
+        if event.type() == QEvent.Type.DevicePixelRatioChange:
+            self.window.rebuild_view()
+        return super().event(event)
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -222,9 +227,8 @@ class NativeWindow(QMainWindow):
 
     def tick(self):
         if self.closing:
-            if not hasattr(self.worker, "is_finished") or self.worker.is_finished():
-                if hasattr(self.worker, "release"):
-                    self.worker.release()
+            if self.worker.is_finished():
+                self.worker.release()
                 self.finished = True
                 self.timer.stop()
                 self.io.shutdown(wait=False)
