@@ -73,8 +73,21 @@ impl NativeEditor {
         session: NativeDocumentSession,
         selection: NativeTextSelection,
     ) -> Result<Self, NativeHostError> {
+        Self::try_new(session, selection).map_err(|failed| {
+            let (_, error) = *failed;
+            error
+        })
+    }
+
+    /// Enter editing without losing the viewer session when its selected target
+    /// is unsupported. The returned session is unchanged on every error path.
+    /// Hosts that retain an open document should use this instead of `new`.
+    pub fn try_new(
+        session: NativeDocumentSession,
+        selection: NativeTextSelection,
+    ) -> Result<Self, Box<(NativeDocumentSession, NativeHostError)>> {
         let available = Self::available_history_capacity(&session);
-        Self::with_history_capacity(session, selection, DEFAULT_HISTORY_CAPACITY.min(available))
+        Self::try_with_history_capacity(session, selection, DEFAULT_HISTORY_CAPACITY.min(available))
     }
 
     pub fn with_history_capacity(
@@ -82,16 +95,35 @@ impl NativeEditor {
         selection: NativeTextSelection,
         history_capacity: usize,
     ) -> Result<Self, NativeHostError> {
+        Self::try_with_history_capacity(session, selection, history_capacity).map_err(|failed| {
+            let (_, error) = *failed;
+            error
+        })
+    }
+
+    fn try_with_history_capacity(
+        session: NativeDocumentSession,
+        selection: NativeTextSelection,
+        history_capacity: usize,
+    ) -> Result<Self, Box<(NativeDocumentSession, NativeHostError)>> {
         if session.core.batch_mode {
-            return Err(NativeHostError::Unsupported(
-                "finish the document batch before opening a native editor".into(),
-            ));
+            return Err(Box::new((
+                session,
+                NativeHostError::Unsupported(
+                    "finish the document batch before opening a native editor".into(),
+                ),
+            )));
         }
-        Self::validate_selection(&session.core, &selection)?;
+        if let Err(error) = Self::validate_selection(&session.core, &selection) {
+            return Err(Box::new((session, error)));
+        }
         let available = Self::available_history_capacity(&session);
         if history_capacity == 0 || history_capacity > available {
-            return Err(NativeHostError::LimitExceeded(format!(
-                "native editor history capacity must be in 1..={available}"
+            return Err(Box::new((
+                session,
+                NativeHostError::LimitExceeded(format!(
+                    "native editor history capacity must be in 1..={available}"
+                )),
             )));
         }
         Ok(Self {

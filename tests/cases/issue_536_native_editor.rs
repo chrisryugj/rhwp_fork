@@ -443,3 +443,70 @@ fn issue_536_native_editor_does_not_treat_an_existing_batch_as_a_transaction() {
         Err(NativeHostError::Unsupported(_))
     ));
 }
+
+#[test]
+fn issue_536_native_editor_failed_begin_keeps_viewer_and_allows_retry() {
+    let session = NativeDocumentSession::from_core(core_with_text("가😀"));
+    let failed = match NativeEditor::try_new(session, selection(3, 3)) {
+        Err(failed) => failed,
+        Ok(_) => panic!("out-of-range selection must reject editing"),
+    };
+    let (session, error) = *failed;
+    assert!(matches!(error, NativeHostError::InvalidArgument(_)));
+    assert_eq!(session.revision(), 0);
+    assert_eq!(
+        session.document().document().sections[0].paragraphs[0].text,
+        "가😀"
+    );
+    assert!(session.document().get_cursor_rect_native(0, 0, 0).is_ok());
+    let mut editor = match NativeEditor::try_new(session, selection(2, 2)) {
+        Ok(editor) => editor,
+        Err(_) => panic!("the returned viewer session must remain usable"),
+    };
+    editor.replace_selection(0, "나").unwrap();
+    assert_eq!(text(&editor), "가😀나");
+}
+
+#[test]
+fn issue_536_native_editor_inline_first_paragraph_keeps_viewer_open() {
+    use rhwp::model::control::Control;
+
+    let mut core = core_with_text("");
+    core.create_table_native(0, 0, 0, 1, 1).unwrap();
+    let mut document = core.document().clone();
+    let paragraph = document.sections[0]
+        .paragraphs
+        .iter_mut()
+        .enumerate()
+        .find_map(|(index, paragraph)| {
+            paragraph
+                .controls
+                .iter_mut()
+                .find_map(|control| match control {
+                    Control::Table(table) => {
+                        table.common.treat_as_char = true;
+                        Some(index as u32)
+                    }
+                    _ => None,
+                })
+        })
+        .unwrap();
+    core.set_document(document);
+    let before = serde_json::to_value(&core.document().sections[0].paragraphs).unwrap();
+    let session = NativeDocumentSession::from_core(core);
+    let at_object = NativeTextSelection {
+        anchor: position(paragraph, 0),
+        focus: position(paragraph, 0),
+    };
+    let (session, error) = match NativeEditor::try_new(session, at_object) {
+        Err(failed) => *failed,
+        Ok(_) => panic!("inline-object affinity is outside body-text editing"),
+    };
+    assert!(matches!(error, NativeHostError::Unsupported(_)));
+    assert_eq!(session.revision(), 0);
+    assert_eq!(
+        serde_json::to_value(&session.document().document().sections[0].paragraphs).unwrap(),
+        before
+    );
+    assert!(!session.document().get_document_info().is_empty());
+}
