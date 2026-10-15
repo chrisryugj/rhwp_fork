@@ -23,6 +23,7 @@ use std::thread::{self, JoinHandle};
 
 use serde::{Deserialize, Serialize};
 
+use super::commands::{NativeCommandOutcome, NativeEditCommand, NativeImeContext};
 use super::editor::{NativeEditOutcome, NativeEditor};
 use super::save::NativeSaveCaretPolicy;
 use super::save::{NativeSaveFormat, NativeSaveStatus, NativeSaveToken, PreparedSave};
@@ -117,6 +118,13 @@ pub enum NativeRuntimeCommand {
         password: Option<Vec<u8>>,
     },
     Info {},
+    ExecuteCommand {
+        target: NativeRuntimeTarget,
+        command: NativeEditCommand,
+    },
+    ImeContext {
+        target: NativeRuntimeTarget,
+    },
     PageSize {
         target: NativeRuntimeTarget,
         page: u32,
@@ -239,6 +247,7 @@ impl NativeRuntimeCommand {
                 selection_bytes(selection).map(|input| input.max(1024 * 1024))
             }
             Self::PrepareSave { .. } => Some(MAX_DOCUMENT_BYTES),
+            Self::ImeContext { .. } => Some(64 * 1024),
             _ => Some(0),
         }
     }
@@ -307,6 +316,8 @@ impl NativeRuntimePreparedSave {
 
 pub enum NativeRuntimeOutput {
     Info(NativeRuntimeInfo),
+    CommandExecuted(NativeCommandOutcome),
+    ImeContext(NativeImeContext),
     DocumentClosed,
     PageSize {
         target: NativeRuntimeTarget,
@@ -346,6 +357,8 @@ impl fmt::Debug for NativeRuntimeOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Info(_) => "Info",
+            Self::CommandExecuted(_) => "CommandExecuted",
+            Self::ImeContext(_) => "ImeContext",
             Self::DocumentClosed => "DocumentClosed",
             Self::PageSize { .. } => "PageSize",
             Self::CaretRect { .. } => "CaretRect",
@@ -845,6 +858,20 @@ fn execute(
             Ok(O::Info(document(owner)?.info()))
         }
         C::Info {} => Ok(O::Info(document(owner)?.info())),
+        C::ExecuteCommand { target, command } => {
+            let doc = document(owner)?;
+            doc.check(target)?;
+            doc.editor()?
+                .execute_command(target.revision, command)
+                .map(O::CommandExecuted)
+        }
+        C::ImeContext { target } => {
+            let doc = document(owner)?;
+            doc.check(target)?;
+            doc.editor()?
+                .ime_context(target.revision)
+                .map(O::ImeContext)
+        }
         C::PageSize { target, page } => {
             let doc = document(owner)?;
             doc.check(target)?;

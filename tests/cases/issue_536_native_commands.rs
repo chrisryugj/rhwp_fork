@@ -179,7 +179,7 @@ fn native_commands_extension_keeps_anchor_and_arrow_collapses_range() {
 fn native_commands_backspace_restores_cluster_and_original_caret_on_undo() {
     let mut editor = editor(&["a\u{301}b"]);
     select(&mut editor, caret(0, 2));
-    let outcome = run(&mut editor, Command::DeleteBackward).outcome;
+    let outcome = run(&mut editor, Command::DeleteBackward {}).outcome;
     assert_eq!(texts(&editor), ["b"]);
     assert_eq!(editor.selection(), &caret(0, 0));
     assert!(outcome.document_changed && outcome.history_changed);
@@ -195,7 +195,7 @@ fn native_commands_backspace_restores_cluster_and_original_caret_on_undo() {
 fn native_commands_forward_delete_removes_whole_emoji_zwj_sequence() {
     let mut editor = editor(&["a👩\u{200d}💻b"]);
     select(&mut editor, caret(0, 1));
-    run(&mut editor, Command::DeleteForward);
+    run(&mut editor, Command::DeleteForward {});
     assert_eq!(texts(&editor), ["ab"]);
     assert_eq!(editor.selection(), &caret(0, 1));
     editor.undo(editor.session().revision()).unwrap();
@@ -204,7 +204,7 @@ fn native_commands_forward_delete_removes_whole_emoji_zwj_sequence() {
 
 #[test]
 fn native_commands_interior_deletion_never_leaves_an_orphan_mark() {
-    for command in [Command::DeleteBackward, Command::DeleteForward] {
+    for command in [Command::DeleteBackward {}, Command::DeleteForward {}] {
         let mut editor = editor(&["a\u{301}z"]);
         select(&mut editor, caret(0, 1));
         run(&mut editor, command);
@@ -233,14 +233,14 @@ fn native_commands_paragraph_edge_navigation_and_delete_join_once() {
         },
     );
     assert_eq!(editor.selection(), &caret(0, 2));
-    run(&mut editor, Command::DeleteForward);
+    run(&mut editor, Command::DeleteForward {});
     assert_eq!(texts(&editor), ["가😀나다"]);
     assert_eq!(editor.selection(), &caret(0, 2));
     editor.undo(editor.session().revision()).unwrap();
     assert_eq!(texts(&editor), ["가😀", "나다"]);
     assert!(!editor.can_undo());
     select(&mut editor, caret(1, 0));
-    run(&mut editor, Command::DeleteBackward);
+    run(&mut editor, Command::DeleteBackward {});
     assert_eq!(texts(&editor), ["가😀나다"]);
     editor.undo(editor.session().revision()).unwrap();
     assert_eq!(editor.selection(), &caret(1, 0));
@@ -251,7 +251,7 @@ fn native_commands_split_replaces_range_and_undo_restores_formatting() {
     {
         let mut editor = editor(&["가😀나"]);
         select(&mut editor, caret(0, 2));
-        run(&mut editor, Command::SplitParagraph);
+        run(&mut editor, Command::SplitParagraph {});
         assert_eq!(texts(&editor), ["가😀", "나"]);
         assert_eq!(editor.selection(), &caret(1, 0));
         editor.undo(editor.session().revision()).unwrap();
@@ -265,7 +265,7 @@ fn native_commands_split_replaces_range_and_undo_restores_formatting() {
     let selection = selected(position(0, 1), position(1, 2));
     let mut editor =
         NativeEditor::new(NativeDocumentSession::from_core(core), selection.clone()).unwrap();
-    let outcome = run(&mut editor, Command::SplitParagraph).outcome;
+    let outcome = run(&mut editor, Command::SplitParagraph {}).outcome;
     assert_eq!(texts(&editor), ["가", "마"]);
     assert_eq!(outcome.selection, caret(1, 0));
     assert_eq!(outcome.revision, 1);
@@ -285,7 +285,7 @@ fn native_commands_split_replaces_range_and_undo_restores_formatting() {
 fn native_commands_explicit_join_restores_empty_paragraph_on_undo() {
     let mut editor = editor(&["가", "", "나"]);
     select(&mut editor, caret(1, 0));
-    run(&mut editor, Command::JoinPreviousParagraph);
+    run(&mut editor, Command::JoinPreviousParagraph {});
     assert_eq!(texts(&editor), ["가", "나"]);
     assert_eq!(editor.selection(), &caret(0, 1));
     editor.undo(editor.session().revision()).unwrap();
@@ -294,7 +294,7 @@ fn native_commands_explicit_join_restores_empty_paragraph_on_undo() {
     select(&mut editor, selected(position(0, 0), position(0, 1)));
     let revision = editor.session().revision();
     assert!(matches!(
-        editor.execute_command(revision, Command::JoinPreviousParagraph),
+        editor.execute_command(revision, Command::JoinPreviousParagraph {}),
         Err(NativeHostError::InvalidArgument(_))
     ));
     assert_eq!(texts(&editor), ["가", "", "나"]);
@@ -308,16 +308,16 @@ fn native_commands_boundary_noops_and_movement_preserve_redo() {
     editor.undo(1).unwrap();
     let revision = editor.session().revision();
     for command in [
-        Command::DeleteBackward,
-        Command::DeleteForward,
-        Command::JoinPreviousParagraph,
+        Command::DeleteBackward {},
+        Command::DeleteForward {},
+        Command::JoinPreviousParagraph {},
         Command::MoveLeft {
             extend_selection: false,
         },
         Command::MoveRight {
             extend_selection: false,
         },
-        Command::SelectAll,
+        Command::SelectAll {},
     ] {
         let outcome = run(&mut editor, command).outcome;
         assert_eq!(outcome.revision, revision);
@@ -336,8 +336,8 @@ fn native_commands_stale_revision_and_preedit_reject_without_mutation() {
     let before = serde_json::to_value(editor.session().document().document()).unwrap();
     let selection = editor.selection().clone();
     for command in [
-        Command::SplitParagraph,
-        Command::DeleteForward,
+        Command::SplitParagraph {},
+        Command::DeleteForward {},
         Command::MoveRight {
             extend_selection: true,
         },
@@ -371,12 +371,12 @@ fn native_commands_select_all_is_limited_to_the_current_body_section() {
     core.set_document(document);
     let mut editor =
         NativeEditor::new(NativeDocumentSession::from_core(core), caret(0, 1)).unwrap();
-    run(&mut editor, Command::SelectAll);
+    run(&mut editor, Command::SelectAll {});
     assert_eq!(
         editor.selection(),
         &selected(position(0, 0), position(1, 2))
     );
-    run(&mut editor, Command::DeleteForward);
+    run(&mut editor, Command::DeleteForward {});
     assert_eq!(texts(&editor), [""]);
     assert_eq!(
         editor.session().document().document().sections[1].paragraphs[0].text,
@@ -401,11 +401,11 @@ fn native_commands_unsupported_adjacent_inline_target_preserves_document_and_his
     let revision = editor.session().revision();
     let before = serde_json::to_value(editor.session().document().document()).unwrap();
     for command in [
-        Command::DeleteForward,
+        Command::DeleteForward {},
         Command::MoveRight {
             extend_selection: false,
         },
-        Command::SelectAll,
+        Command::SelectAll {},
     ] {
         assert!(matches!(
             editor.execute_command(revision, command),
@@ -489,5 +489,46 @@ fn native_commands_json_contract_uses_explicit_camel_case_fields() {
         r#"{"command":"deleteForward","unexpected":true}"#,
     ] {
         assert!(serde_json::from_str::<Command>(json).is_err(), "{json}");
+    }
+}
+
+#[test]
+fn ime_context_is_read_only_bounded_and_scalar_based_during_preedit() {
+    let mut editor = editor(&["A😀é나"]);
+    select(&mut editor, caret(0, 2));
+    let context = editor.ime_context(0).unwrap();
+    assert_eq!(context.cursor_scalar, 2);
+    assert_eq!(context.text, "A😀é나");
+    assert_eq!(context.anchor_scalar, Some(2));
+    let id = editor.begin_composition(0).unwrap().composition_id.unwrap();
+    editor.update_composition(0, id, "가").unwrap();
+    let revision = editor.session().revision();
+    assert!(editor.ime_context(revision).unwrap().text.contains('가'));
+    assert_eq!(editor.session().revision(), revision);
+    assert!(editor.ime_context(0).is_err());
+    editor.cancel_composition(revision, id).unwrap();
+    let long = "x".repeat(5000);
+    let mut editor = NativeEditor::new(
+        NativeDocumentSession::from_core(core(&[&long])),
+        caret(0, 4000),
+    )
+    .unwrap();
+    let context = editor.ime_context(0).unwrap();
+    assert!(context.text.chars().count() <= 4096);
+    assert!(context.text_truncated);
+    assert_eq!(context.absolute_start_scalar + context.cursor_scalar, 4000);
+}
+
+#[test]
+fn argument_free_commands_reject_unknown_fields() {
+    for command in [
+        "deleteBackward",
+        "deleteForward",
+        "splitParagraph",
+        "joinPreviousParagraph",
+        "selectAll",
+    ] {
+        let input = format!("{{\"command\":\"{command}\",\"unexpected\":true}}");
+        assert!(serde_json::from_str::<Command>(&input).is_err());
     }
 }

@@ -164,6 +164,13 @@ thread_local! {
     deny_unknown_fields
 )]
 enum Request {
+    ExecuteCommand {
+        command: rhwp_core::native_host::commands::NativeEditCommand,
+        expected_revision: u64,
+    },
+    ImeContext {
+        expected_revision: u64,
+    },
     Info {},
     PrepareSave {
         format: NativeSaveFormat,
@@ -481,6 +488,12 @@ fn worker_output(host: &mut Host, worker: u64, output: NativeRuntimeOutput) -> V
     };
     let result: Result<Value, NativeHostError> = (|| {
         Ok(match output {
+            NativeRuntimeOutput::CommandExecuted(result) => {
+                json!({"ok":true,"kind":"command","outcome":result.outcome,"preferredX":result.preferred_x})
+            }
+            NativeRuntimeOutput::ImeContext(context) => {
+                json!({"ok":true,"kind":"imeContext","context":context})
+            }
             NativeRuntimeOutput::Info(info) => {
                 let mut encoded = json!(info);
                 if let Some(fields) = encoded.as_object_mut() {
@@ -706,6 +719,8 @@ pub unsafe extern "C" fn rhwp_session_request(
             let record = host.sessions.get_mut(&handle).ok_or_else(invalid_handle)?;
             let session = record.session();
             match request {
+                Request::ExecuteCommand {command,expected_revision}=>{let result=record.editor_mut()?.execute_command(expected_revision,command)?;Ok(json!({"ok":true,"outcome":result.outcome,"preferredX":result.preferred_x}))},
+                Request::ImeContext {expected_revision}=>Ok(json!({"ok":true,"context":record.editor_mut()?.ime_context(expected_revision)?})),
                 Request::PrepareSave { format } => {
                     let prepared = record.prepare_save(format)?;
                     let caret_saved = prepared.caret_saved();

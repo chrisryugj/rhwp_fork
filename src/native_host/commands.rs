@@ -51,17 +51,17 @@ pub enum NativeEditCommand {
     },
     /// Delete the scalar selection, or one complete grapheme at a caret.
     /// At the paragraph start, join with the preceding body paragraph.
-    DeleteBackward,
+    DeleteBackward {},
     /// Delete the scalar selection, or one complete grapheme at a caret.
     /// At the paragraph end, join with the following body paragraph.
-    DeleteForward,
+    DeleteForward {},
     /// Replace the scalar selection with a paragraph boundary as one action.
-    SplitParagraph,
+    SplitParagraph {},
     /// Join the focus paragraph into its predecessor. Requires a collapsed
     /// selection and places the caret at the join. Backspace/Delete instead
     /// delete a noncollapsed selection.
-    JoinPreviousParagraph,
-    SelectAll,
+    JoinPreviousParagraph {},
+    SelectAll {},
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -121,10 +121,14 @@ impl NativeEditor {
                 preferred_x = Some(movement.preferred_x);
                 self.move_focus(expected_revision, movement.position, extend_selection)?
             }
-            NativeEditCommand::DeleteBackward => self.delete_grapheme(expected_revision, true)?,
-            NativeEditCommand::DeleteForward => self.delete_grapheme(expected_revision, false)?,
-            NativeEditCommand::SplitParagraph => self.split_selection(expected_revision)?,
-            NativeEditCommand::JoinPreviousParagraph => {
+            NativeEditCommand::DeleteBackward {} => {
+                self.delete_grapheme(expected_revision, true)?
+            }
+            NativeEditCommand::DeleteForward {} => {
+                self.delete_grapheme(expected_revision, false)?
+            }
+            NativeEditCommand::SplitParagraph {} => self.split_selection(expected_revision)?,
+            NativeEditCommand::JoinPreviousParagraph {} => {
                 if self.selection().anchor != self.selection().focus {
                     return Err(NativeHostError::InvalidArgument(
                         "joinPreviousParagraph requires a collapsed selection".into(),
@@ -132,7 +136,7 @@ impl NativeEditor {
                 }
                 self.join_at(expected_revision, self.selection().focus.paragraph)?
             }
-            NativeEditCommand::SelectAll => {
+            NativeEditCommand::SelectAll {} => {
                 let mut start = self.selection().focus.clone();
                 start.paragraph = 0;
                 start.scalar_offset = 0;
@@ -322,4 +326,89 @@ fn grapheme_span(text: &str, offset: u32, backward: bool) -> (u32, u32) {
         start = end;
     }
     (start, start)
+}
+
+/// Bounded surrounding text for an OS adapter. Cursor/anchor are scalar offsets
+/// inside `text`; the OS adapter converts them to UTF-16 where required.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeImeContext {
+    pub text: String,
+    pub cursor_scalar: u32,
+    pub anchor_scalar: Option<u32>,
+    pub selected_text: String,
+    pub absolute_start_scalar: u32,
+    pub position: NativeTextPosition,
+    pub text_truncated: bool,
+    pub selection_truncated: bool,
+}
+
+impl NativeEditor {
+    /// Query also during preedit; never move selection or mutate the document.
+    pub fn ime_context(&self, expected_revision: u64) -> Result<NativeImeContext, NativeHostError> {
+        self.session().check_revision(expected_revision)?;
+        let selection = self.selection();
+        Self::validate_selection(self.session().document(), selection)?;
+        let focus = &selection.focus;
+        let document = self.session().document().document();
+        let paragraph =
+            &document.sections[focus.section as usize].paragraphs[focus.paragraph as usize];
+        let length = paragraph.text.chars().count();
+        let start = (focus.scalar_offset as usize).saturating_sub(2048);
+        let end = length.min(start.saturating_add(4096));
+        let text = paragraph
+            .text
+            .chars()
+            .skip(start)
+            .take(end - start)
+            .collect();
+        let anchor = &selection.anchor;
+        let anchor_scalar = (anchor.paragraph == focus.paragraph
+            && (anchor.scalar_offset as usize) >= start
+            && (anchor.scalar_offset as usize) <= end)
+            .then(|| anchor.scalar_offset - start as u32);
+        let (from, to) = Self::ordered(selection);
+        let mut selected = String::new();
+        let mut count = 0usize;
+        let mut truncated = false;
+        'paragraphs: for index in from.paragraph..=to.paragraph {
+            if index > from.paragraph {
+                if count == 4096 {
+                    truncated = true;
+                    break;
+                }
+                selected.push('\n');
+                count += 1;
+            }
+            let text = &document.sections[from.section as usize].paragraphs[index as usize].text;
+            let left = if index == from.paragraph {
+                from.scalar_offset as usize
+            } else {
+                0
+            };
+            let right = if index == to.paragraph {
+                to.scalar_offset as usize
+            } else {
+                text.chars().count()
+            };
+            for ch in text.chars().skip(left).take(right - left) {
+                if count == 4096 {
+                    truncated = true;
+                    break 'paragraphs;
+                }
+                selected.push(ch);
+                count += 1;
+            }
+        }
+        Ok(NativeImeContext {
+            text,
+            cursor_scalar: focus.scalar_offset - start as u32,
+            anchor_scalar,
+            selected_text: selected,
+            absolute_start_scalar: start as u32,
+            position: focus.clone(),
+            text_truncated: start > 0 || end < length,
+            selection_truncated: truncated,
+        })
+    }
 }

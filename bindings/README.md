@@ -206,3 +206,21 @@ cancel은 worker가 아직 요청을 가져가지 않았을 때만 성공한다.
 수명을 끝낸다. 그 전에 공유 library를 동적으로 unload하면 안 된다. 이미 받은 buffer도 별도로
 해제한다. [Python NativeWorker](Native/examples/native_worker.py)는 GUI event loop용 submit/poll과
 CLI/test 전용 wait/wait_closed를 구분한다. 실제 OS별 thread 종료·artifact 실행은 별도 검증이다.
+
+## 기본 본문 명령과 IME 문맥 (P60)
+
+`executeCommand`는 expectedRevision과 `{command:"moveLeft",extendSelection:false}` 같은
+명령을 받는다. worker에서는 expectedRevision 대신 target을 전달한다. moveRight/Home/End/
+moveUp/moveDown, deleteBackward/deleteForward, splitParagraph/joinPreviousParagraph/selectAll을
+지원한다. 주소는 scalar지만 collapsed caret의 이동·삭제는 extended grapheme 경계를 따른다.
+Home/End는 현재 문단 경계, selectAll은 현재 본문 구역이다. 좌우는 논리 문자열 순서다.
+셀·inline-control affinity·탭 삽입은 이 계약에 포함되지 않는다.
+
+문단 split/join과 선택 삭제는 한 revision/한 undo 단위이며 실패하면 문서·선택·history를 복원한다.
+IME 조합 중 일반 명령은 commit/cancel을 먼저 요구한다. vertical 응답의 preferredX를 다음
+vertical 입력에 전달하고 다른 명령 뒤에는 초기화한다.
+
+`imeContext`는 조합 중에도 읽을 수 있는 최대4096 scalar 주변 문맥과 scalar cursor/anchor,
+선택 텍스트 및 truncation 정보를 반환한다. worker는 target, 동기 세션은 expectedRevision을
+받는다. OS API가 UTF-16을 쓰면 adapter에서 변환하고 surrogate 중간으로 커서를 만들지 않는다.
+이 조회 자체는 문서·선택·revision을 바꾸지 않는다.
