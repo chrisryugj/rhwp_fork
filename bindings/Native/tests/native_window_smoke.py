@@ -39,6 +39,41 @@ class AdapterTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def idle_window(self, worker=None):
+        window = NativeWindow(None, worker=worker or IdleWorker())
+        window.timer.stop()
+        window.actions.clear()
+        self.addCleanup(window.close)
+        self.addCleanup(window.io.shutdown, wait=True)
+        self.addCleanup(setattr, window, "finished", True)
+        return window
+
+    def test_unrelated_failed_edit_does_not_cancel_page_geometry_load(self):
+        worker = IdleWorker()
+        window = self.idle_window(worker)
+        window.info = {"documentId": 7, "revision": 0}
+        published = []
+        window.rebuild_view = lambda: published.append(list(window.pages))
+        window.loading_pages = True
+        window.load_page_size(0, 2)
+        window.pump()
+        window.enqueue([lambda _: {"op": "replace", "text": "\t"}], refresh=True)
+        window.pending = None
+        window.step_done({"ok": True, "size": {"width": 100, "height": 200}})
+        window.pump()
+        window.pending = None
+        window.step_done({"ok": False, "error": "unsupported edit"})
+        window.pump()
+        self.assertEqual([request["op"] for request in worker.requests],
+                         ["pageSize", "replace", "pageSize"])
+        self.assertTrue(window.loading_pages)
+        window.pending = None
+        window.step_done({"ok": True, "size": {"width": 120, "height": 240}})
+        window.pump()
+        self.assertFalse(window.loading_pages)
+        self.assertEqual(published, [[{"width": 100, "height": 200}, {"width": 120, "height": 240}]])
+        self.assertEqual(window.errors, ["unsupported edit"])
+
     def test_utf16_non_bmp_and_surrogate_rejection(self):
         self.assertEqual(utf16_length("가😀각"), 4)
         self.assertEqual(scalar_from_utf16("가😀각", 3), 2)

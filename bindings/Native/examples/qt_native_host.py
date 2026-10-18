@@ -218,13 +218,13 @@ class NativeWindow(QMainWindow):
         self.errors.append(str(message))
         self.statusBar().showMessage(str(message))
 
-    def enqueue(self, steps, done=None, refresh=False):
+    def enqueue(self, steps, done=None, refresh=False, page_load_token=None):
         if self.closing:
             return False
         if len(self.actions) + (self.job is not None) >= self.MAX_ACTIONS:
             self.fail("입력 큐가 가득 찼습니다. 진행 중인 작업은 취소되지 않았습니다.")
             return False
-        self.actions.append([deque(steps), done, refresh, None])
+        self.actions.append([deque(steps), done, refresh, None, page_load_token])
         return True
 
     def tick(self):
@@ -275,7 +275,7 @@ class NativeWindow(QMainWindow):
         if self.job is None and self.actions:
             self.job = self.actions.popleft()
         if self.job is not None:
-            steps, done, refresh, last = self.job
+            steps, done, refresh, last, _page_load_token = self.job
             if steps:
                 request = steps.popleft()(last)
                 if request is None:
@@ -316,7 +316,8 @@ class NativeWindow(QMainWindow):
     def step_done(self, result):
         if not result.get("ok") or result.get("kind") == "skipped":
             self.fail(result.get("error", result.get("reason", "native request failed")))
-            if self.loading_pages:
+            if (self.loading_pages and self.page_load_token is not None
+                    and self.job[4] is self.page_load_token):
                 self.loading_pages = False
                 self.page_load_token = None
                 self.pages.clear()
@@ -397,7 +398,7 @@ class NativeWindow(QMainWindow):
         def request(_):
             if token is self.page_load_token and target == self.target():
                 return {"op": "pageSize", "page": page}
-        if not self.enqueue([request], loaded):
+        if not self.enqueue([request], loaded, page_load_token=token):
             self.loading_pages = False
             self.page_load_token = None
             self.pages.clear()
