@@ -11959,6 +11959,7 @@ impl LayoutEngine {
                 straddle_row_relief,
                 straddle_page_bands,
                 fragment_row_heights,
+                fragment_block_frames,
                 end_row_owns_stored_frame,
             } => {
                 y_offset = self.layout_partial_table_item(
@@ -11980,6 +11981,7 @@ impl LayoutEngine {
                     straddle_row_relief,
                     straddle_page_bands,
                     fragment_row_heights.as_deref(),
+                    fragment_block_frames,
                     *end_row_owns_stored_frame,
                     &ctx,
                     y_offset,
@@ -15408,6 +15410,7 @@ impl LayoutEngine {
         straddle_row_relief: &[(usize, f64)],
         straddle_page_bands: &[crate::renderer::pagination::StraddleCellCarry],
         fragment_row_heights: Option<&[f64]>,
+        fragment_block_frames: &[(usize, usize)],
         end_row_owns_stored_frame: bool,
         ctx: &ColumnItemCtx,
         mut y_offset: f64,
@@ -15547,6 +15550,7 @@ impl LayoutEngine {
         let fragment_measurement = pt_mt.zip(fragment_row_heights).map(|(measured, rows)| {
             let mut measured = measured.clone();
             measured.row_heights = rows.to_vec();
+            measured.fragment_block_frames = fragment_block_frames.to_vec();
             measured
         });
         let pt_mt = fragment_measurement.as_ref().or(pt_mt);

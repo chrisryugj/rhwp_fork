@@ -16,6 +16,8 @@ pub(in crate::renderer::typeset) struct BlockTableRowScan {
     /// 컷 경로마다 내용 전진량(`split_end_limit`)·패딩 포함 컷 상자·물리 띠 중 하나를
     /// 예약하므로, 쪽 끝까지의 남은 방은 이 값에서 잰다. 0이면 `split_end_limit`을 쓴다.
     pub(in crate::renderer::typeset) split_end_reserved: f64,
+    /// 끝 블록 컷이 실제로 예약한 높이. 유닛 전진량과 구별한다.
+    pub(in crate::renderer::typeset) split_block_physical_height: Option<f64>,
     /// 마지막으로 포함한 완전 행을 현재 조각의 남은 물리 높이로 압축할 때의
     /// 렌더 전용 높이 상한. continuation은 끝행의 full cut으로 빈 tail을
     /// 소비한 뒤 다음 행으로 전진한다.

@@ -62,6 +62,7 @@ impl TypesetEngine {
             mut split_end_cut,
             mut split_end_limit,
             mut split_end_reserved,
+            mut split_block_physical_height,
             mut end_row_height_override,
         } = scan;
         let block_query = table::scan::RowBlockQuery {
@@ -304,6 +305,7 @@ impl TypesetEngine {
                 split_block_start = Some(b_start);
                 let split_total =
                     selected.occupied_height(&block_query, &block, blk_start_cut, end_row);
+                split_block_physical_height = Some(split_total);
                 consumed += cs_before + split_total;
                 return false;
             }
@@ -330,6 +332,7 @@ impl TypesetEngine {
             split_end_cut,
             split_end_limit,
             split_end_reserved,
+            split_block_physical_height,
             end_row_height_override,
         };
         ScanStep {

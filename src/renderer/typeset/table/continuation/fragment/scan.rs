@@ -100,6 +100,7 @@ impl TypesetEngine {
                     },
                     split_end_limit: if opening { height } else { 0.0 },
                     split_end_reserved: 0.0,
+                    split_block_physical_height: None,
                     end_row_height_override: Some(height),
                 };
             }
@@ -119,6 +120,7 @@ impl TypesetEngine {
                         split_end_cut: vec![0],
                         split_end_limit: frame.opening_height,
                         split_end_reserved: 0.0,
+                        split_block_physical_height: None,
                         end_row_height_override: Some(frame.opening_height),
                     };
                 }
@@ -146,6 +148,7 @@ impl TypesetEngine {
                         split_end_cut: cut,
                         split_end_limit: opening,
                         split_end_reserved: 0.0,
+                        split_block_physical_height: None,
                         end_row_height_override: Some(opening),
                     };
                 }
@@ -165,6 +168,7 @@ impl TypesetEngine {
                         split_end_cut: Vec::new(),
                         split_end_limit: 0.0,
                         split_end_reserved: 0.0,
+                        split_block_physical_height: None,
                         end_row_height_override: None,
                     };
                 }
@@ -254,6 +258,7 @@ impl TypesetEngine {
                     split_end_cut: Vec::new(),
                     split_end_limit: 0.0,
                     split_end_reserved: 0.0,
+                    split_block_physical_height: None,
                     end_row_height_override: None,
                 },
             );
@@ -333,6 +338,7 @@ impl TypesetEngine {
             mut split_end_cut,
             mut split_end_limit,
             mut split_end_reserved,
+            mut split_block_physical_height,
             mut end_row_height_override,
         } = run_scan(scan_vars);
         if let Some(started) = issue2424_scan_started {
@@ -512,6 +518,7 @@ impl TypesetEngine {
                         split_end_cut = refit.split_end_cut;
                         split_end_limit = refit.split_end_limit;
                         split_end_reserved = refit.split_end_reserved;
+                        split_block_physical_height = refit.split_block_physical_height;
                         end_row_height_override = refit.end_row_height_override;
                         accepted_end_row_box = refit.accepted_end_row_box;
                         if end_row <= cursor_row {
@@ -583,6 +590,7 @@ impl TypesetEngine {
                         split_end_cut: Vec::new(),
                         split_end_limit: 0.0,
                         split_end_reserved: 0.0,
+                        split_block_physical_height: None,
                         end_row_height_override: None,
                     };
                 }
@@ -605,6 +613,7 @@ impl TypesetEngine {
                     split_end_cut = refit.split_end_cut;
                     split_end_limit = refit.split_end_limit;
                     split_end_reserved = refit.split_end_reserved;
+                    split_block_physical_height = refit.split_block_physical_height;
                     end_row_height_override = refit.end_row_height_override;
                     accepted_end_row_box = refit.accepted_end_row_box;
                 }
@@ -823,6 +832,7 @@ impl TypesetEngine {
             split_end_cut,
             split_end_limit,
             split_end_reserved,
+            split_block_physical_height,
             end_row_height_override,
         }
     }
