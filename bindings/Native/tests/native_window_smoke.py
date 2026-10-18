@@ -434,6 +434,10 @@ def actual_smoke(library, screenshot=None):
         window.command("pasteText", text="\n".join(f"페이지 {index}" for index in range(110)))
         pump(app, lambda: idle() and window.info.get("pageCount", 0) > 1
              and len(window.pages) == window.info["pageCount"] and bool(window.frames))
+        caret = window.caret_rect()
+        assert 0 <= caret.top() < caret.bottom() <= window.canvas.height(), (
+            "off-screen caret after multi-page paste", caret, window.state)
+        assert window.state["scroll"]["y"] > 0
         window.command("undo")
         pump(app, lambda: idle() and window.context.get("text") == "각"
              and window.info.get("pageCount") == 1 and len(window.pages) == 1 and bool(window.frames))
@@ -468,7 +472,7 @@ def actual_smoke(library, screenshot=None):
             pump(app, lambda: window.info["documentId"] != document_id and idle() and bool(window.frames))
             assert not window.info["isDirty"]
         assert not window.errors, window.errors
-        print('{"ok":true,"qtOffscreen":true,"nativeRender":true,"syntheticKoreanIME":true,"clipboard":true,"multiPage":true,"saveReopen":true,"osIMEVerified":false}')
+        print('{"ok":true,"qtOffscreen":true,"nativeRender":true,"syntheticKoreanIME":true,"clipboard":true,"multiPage":true,"caretVisible":true,"saveReopen":true,"osIMEVerified":false}')
     finally:
         pump(app, lambda: not window.io_jobs)
         window.close()

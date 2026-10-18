@@ -426,8 +426,15 @@ class NativeWindow(QMainWindow):
 
     def got_caret(self, result):
         self.caret = result["caret"]
+        self.ensure_caret_visible()
         self.canvas.update()
         QApplication.inputMethod().update(Qt.InputMethodQuery.ImCursorRectangle)
+
+    def ensure_caret_visible(self):
+        if self.caret and self.pages and self.view and not self.loading_pages:
+            self.apply_view(action="ensureCaret", page=self.caret["page"], margin=12,
+                            rect={"x": self.caret["x"], "y": self.caret["y"],
+                                  "width": self.caret.get("width", 0), "height": self.caret["height"]})
 
     def set_rects(self, rects):
         self.rects = rects
@@ -439,6 +446,7 @@ class NativeWindow(QMainWindow):
         self.state["config"].update(pages=self.pages, viewport={"width": max(1, self.canvas.width()),
             "height": max(1, self.canvas.height())}, deviceScale=self.canvas.devicePixelRatioF())
         self.apply_view(action="state")
+        self.ensure_caret_visible()
 
     def apply_view(self, **command):
         try:
