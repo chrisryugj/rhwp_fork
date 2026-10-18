@@ -212,6 +212,69 @@ class AdapterTests(unittest.TestCase):
         window.io.shutdown(wait=True)
         window.close()
 
+    def test_opened_document_drops_previous_interaction_geometry(self):
+        window = NativeWindow(None, worker=IdleWorker())
+        window.timer.stop()
+        window.actions.clear()
+        window.refresh = lambda: None
+        window.caret = {"page": 4}
+        window.rects = [{"page": 4}]
+        window.preedit_rects = [{"page": 4}]
+        window.preedit_start = {"paragraph": 9}
+        window.drag_anchor = {"paragraph": 9}
+        window.preferred_x = 123
+        window.view = {"visible": [{"page": 4}]}
+        window.opened({})
+        self.assertIsNone(window.caret)
+        self.assertEqual(window.rects, [])
+        self.assertEqual(window.preedit_rects, [])
+        self.assertIsNone(window.preedit_start)
+        self.assertIsNone(window.drag_anchor)
+        self.assertIsNone(window.preferred_x)
+        self.assertEqual(window.view, {})
+        window.finished = True
+        window.io.shutdown(wait=True)
+        window.close()
+
+    def test_page_geometry_query_does_not_cross_an_edit_revision(self):
+        worker = IdleWorker()
+        window = NativeWindow(None, worker=worker)
+        window.timer.stop()
+        window.actions.clear()
+        window.refresh = lambda: None
+        window.info = {"documentId": 7, "revision": 0, "pageCount": 2}
+        window.loading_pages = True
+        window.load_page_size(0, 2)
+        window.pump()
+        window.enqueue([lambda _: {"op": "replace", "text": "x"}])
+        window.pending = None
+        window.step_done({"ok": True, "size": {"width": 100, "height": 200}})
+        window.pump()
+        window.pending = None
+        window.step_done({"ok": True, "outcome": {"revision": 1}})
+        window.pump()
+        self.assertEqual([request["op"] for request in worker.requests], ["pageSize", "replace"])
+        self.assertFalse(window.loading_pages)
+        self.assertEqual(window.pages, [])
+        window.finished = True
+        window.io.shutdown(wait=True)
+        window.close()
+
+    def test_page_geometry_failure_allows_a_later_reload(self):
+        window = NativeWindow(None, worker=IdleWorker())
+        window.timer.stop()
+        window.actions.clear()
+        window.info = {"documentId": 7, "revision": 0}
+        window.loading_pages = True
+        window.load_page_size(0, 2)
+        window.pump()
+        window.pending = None
+        window.step_done({"ok": False, "error": "geometry unavailable"})
+        self.assertFalse(window.loading_pages)
+        window.finished = True
+        window.io.shutdown(wait=True)
+        window.close()
+
 
 def pump(app, predicate, timeout=45):
     deadline = time.monotonic() + timeout

@@ -25,6 +25,8 @@ executor를 사용한다. 파일 쓰기가 실패하면 cancel하며, 이미 성
 - 화면에 보이는 region만 페이지별로 순서대로 렌더한다. native frame은 복사·release 후
   `Format_RGBA8888_Premultiplied` QImage로 다시 소유한다. 이전 revision/font generation/view의
   결과는 표시하지 않는다. GUI에서 레이아웃을 재계산하지 않는다.
+  페이지 크기 조회 도중 문서 revision이 바뀌면 이전 조회를 버리고 새 정보로 다시 시작한다.
+  조회 실패는 로딩 상태를 해제하며, 문서 교체 시 이전 문서의 선택·캐럿·조합 장식과 이동 기준을 지운다.
 - click/drag, selection/caret overlay, 좌우·상하·Home/End, Backspace/Delete, Enter, Ctrl+A/Z/Y,
   Ctrl+C/X/V를 연결한다. Home/End는 문단 경계다. 셀·inline object 편집은 native API의 거절을 표시한다.
 - Qt `QInputMethodEvent` preedit→update→commit을 native composition에 연결한다. Focus loss는 cancel이다.

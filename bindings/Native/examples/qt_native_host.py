@@ -160,6 +160,7 @@ class NativeWindow(QMainWindow):
         self.info, self.context, self.view = {}, {}, {}
         self.pages, self.frames, self.rects, self.preedit_rects = [], {}, [], []
         self.loading_pages = False
+        self.page_load_token = None
         self.caret = None
         self.actions = deque()
         self.pending = None
@@ -308,6 +309,10 @@ class NativeWindow(QMainWindow):
     def step_done(self, result):
         if not result.get("ok") or result.get("kind") == "skipped":
             self.fail(result.get("error", result.get("reason", "native request failed")))
+            if self.loading_pages:
+                self.loading_pages = False
+                self.page_load_token = None
+                self.pages.clear()
             self.job = None
             return
         self.absorb(result)
@@ -317,8 +322,19 @@ class NativeWindow(QMainWindow):
         self.frames.clear()
         self.pages.clear()
         self.loading_pages = False
+        self.page_load_token = None
+        self.view = {}
+        self.state["config"]["pages"] = []
+        self.state["scroll"] = {"x": 0, "y": 0}
         self.context.clear()
         self.preedit = ""
+        self.preedit_start = None
+        self.preedit_cursor = 0
+        self.preedit_rects.clear()
+        self.caret = None
+        self.rects.clear()
+        self.drag_anchor = None
+        self.preferred_x = None
         self.enqueue([lambda _: {"op": "beginEdit", "selection": {"anchor": body(), "focus": body()}}],
                      refresh=True)
         self.refresh()
@@ -344,15 +360,39 @@ class NativeWindow(QMainWindow):
                              lambda reply: self.set_rects(reply["rects"]))
         self.enqueue([lambda _: {"op": "info"}], got_info)
 
-    def load_page_size(self, page, count):
+    def load_page_size(self, page, count, load=None):
+        if load is None:
+            load = (object(), self.target())
+            self.page_load_token = load[0]
+        token, target = load
+        if token is not self.page_load_token:
+            return
+        if target != self.target():
+            self.loading_pages = False
+            self.page_load_token = None
+            self.pages.clear()
+            self.refresh()
+            return
         if page >= count:
             self.loading_pages = False
+            self.page_load_token = None
             self.rebuild_view()
             return
         def loaded(result):
+            if token is not self.page_load_token:
+                return
+            if target != self.target():
+                self.load_page_size(page, count, load)
+                return
             self.pages.append(result["size"])
-            self.load_page_size(page + 1, count)
-        self.enqueue([lambda _: {"op": "pageSize", "page": page}], loaded)
+            self.load_page_size(page + 1, count, load)
+        def request(_):
+            if token is self.page_load_token and target == self.target():
+                return {"op": "pageSize", "page": page}
+        if not self.enqueue([request], loaded):
+            self.loading_pages = False
+            self.page_load_token = None
+            self.pages.clear()
 
     def got_context(self, result):
         self.context = dict(result["context"])
