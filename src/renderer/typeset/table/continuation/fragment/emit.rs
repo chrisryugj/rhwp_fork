@@ -1477,9 +1477,16 @@ impl TypesetEngine {
                     (room - last_height).max(0.0),
                     cut_row_h,
                 ) {
+                    let row_box = last_height + band;
                     let ledger_box = last_height + ledger_band.unwrap_or(band).max(band);
                     end_row_height_override = Some(ledger_box);
-                    partial_height += ledger_box - split_end_limit;
+                    partial_height += ledger_box - reserved;
+                    if std::env::var("RHWP_DIAG_SCAN").is_ok() {
+                        eprintln!(
+                            "DIAG_SPAN_END_BAND row={} content={:.6} physical_before={:.6} band={:.6} physical_after={:.6} fragment_after={:.6}",
+                            last_row, split_end_limit, last_height, band, row_box, partial_height,
+                        );
+                    }
                     span_band_owns_end_row = true;
                     ledger_end_row_trim = ledger_box - (last_height + band);
                     span_band_row_box = Some((last_row, ledger_box));
