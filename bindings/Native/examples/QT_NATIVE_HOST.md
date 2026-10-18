@@ -30,7 +30,8 @@ executor를 사용한다. 파일 쓰기가 실패하면 cancel하며, 이미 성
   문서·폰트·선택 상태가 바뀌면 이전 캐럿·선택·조합 범위의 geometry를 폐기한다.
   페이지 크기 조회 자체의 실패는 로딩 상태를 해제합니다. 다른 편집 명령의 실패가 진행 중인 페이지 조회를 취소하지 않습니다.
   문서 교체 시 이전 문서의 선택·캐럿·조합 장식과 이동 기준을 지운다.
-- click/drag, selection/caret overlay, 좌우·상하·Home/End, Backspace/Delete, Enter, Ctrl+A/Z/Y,
+- 페이지 크기 조회 중 click/drag hit test를 보류하며, 완성된 뷰의 좌표만 사용합니다.
+  click/drag, selection/caret overlay, 좌우·상하·Home/End, Backspace/Delete, Enter, Ctrl+A/Z/Y,
   Ctrl+C/X/V를 연결한다. Home/End는 문단 경계다. 셀·inline object 편집은 native API의 거절을 표시한다.
 - Qt `QInputMethodEvent` preedit→update→commit을 native composition에 연결한다. Focus loss는 cancel이다.
   surrogate pair 중간 offset과 주변 문자열 replacementStart/replacementLength는 안전하게 거절한다.

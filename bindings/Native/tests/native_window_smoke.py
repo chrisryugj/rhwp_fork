@@ -74,6 +74,31 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(published, [[{"width": 100, "height": 200}, {"width": 120, "height": 240}]])
         self.assertEqual(window.errors, ["unsupported edit"])
 
+    def test_click_waits_for_completed_page_geometry(self):
+        class ViewHost:
+            def __init__(self):
+                self.calls = []
+            def host_request(self, **request):
+                self.calls.append(request)
+                return {"query": {"page": 0, "point": {"x": 10, "y": 20}}}
+        worker = IdleWorker()
+        worker.host = ViewHost()
+        window = self.idle_window(worker)
+        window.info = {"documentId": 7, "revision": 1}
+        window.view = {"visible": [{"page": 1}]}
+        window.loading_pages = True
+        window.click(QPointF(10, 20), False)
+        self.assertEqual(worker.host.calls, [])
+        self.assertFalse(window.actions)
+        window.loading_pages = False
+        window.pages = [{"width": 100, "height": 200}]
+        window.view = {"visible": [{"page": 0}]}
+        window.click(QPointF(10, 20), False)
+        window.pump()
+        self.assertEqual(len(worker.host.calls), 1)
+        self.assertEqual(worker.requests, [{"op": "hitTest", "page": 0, "x": 10, "y": 20,
+                                          "target": {"documentId": 7, "revision": 1}}])
+
     def test_utf16_non_bmp_and_surrogate_rejection(self):
         self.assertEqual(utf16_length("가😀각"), 4)
         self.assertEqual(scalar_from_utf16("가😀각", 3), 2)

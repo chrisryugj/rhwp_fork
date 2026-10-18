@@ -512,7 +512,7 @@ class NativeWindow(QMainWindow):
                    "region": visible["pageRegion"], "scale": scale}, rendered)
 
     def click(self, point, extend):
-        if not self.info or self.preedit:
+        if not self.info or self.preedit or self.loading_pages or not self.pages or not self.view:
             return
         hit = self.worker.host.host_request(op="view", state=self.state,
             command={"action": "pageAt", "x": point.x(), "y": point.y()})["query"]
