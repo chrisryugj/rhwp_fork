@@ -10712,6 +10712,7 @@ impl LayoutEngine {
                     &[],
                     &[],
                     None,
+                    &[],
                     false,
                     &overlay_ctx,
                     col_area.y,
