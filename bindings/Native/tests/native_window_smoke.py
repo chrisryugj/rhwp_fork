@@ -275,6 +275,65 @@ class AdapterTests(unittest.TestCase):
         window.io.shutdown(wait=True)
         window.close()
 
+    def test_page_geometry_is_published_only_after_the_complete_batch(self):
+        window = NativeWindow(None, worker=IdleWorker())
+        window.timer.stop()
+        window.actions.clear()
+        window.info = {"documentId": 7, "revision": 0}
+        window.loading_pages = True
+        published = []
+        window.rebuild_view = lambda: published.append(list(window.pages))
+        window.load_page_size(0, 2)
+        window.pump()
+        window.pending = None
+        window.step_done({"ok": True, "size": {"width": 100, "height": 200}})
+        window.pump()
+        self.assertEqual(window.pages, [])
+        self.assertEqual(published, [])
+        window.pending = None
+        window.step_done({"ok": True, "size": {"width": 120, "height": 240}})
+        window.pump()
+        self.assertEqual(window.pages, [{"width": 100, "height": 200}, {"width": 120, "height": 240}])
+        self.assertEqual(published, [window.pages])
+        window.finished = True
+        window.io.shutdown(wait=True)
+        window.close()
+
+    def test_ime_caret_query_during_geometry_load_uses_no_partial_view(self):
+        class NotReadyHost:
+            def host_request(self, **request):
+                raise AssertionError("partially loaded view must not be queried")
+        worker = IdleWorker()
+        worker.host = NotReadyHost()
+        window = NativeWindow(None, worker=worker)
+        window.timer.stop()
+        window.actions.clear()
+        window.loading_pages = True
+        window.pages = [{"width": 100, "height": 200}]
+        window.caret = {"page": 0, "x": 10, "y": 20, "height": 16}
+        # This query must wait until the native view is complete.
+        area = window.canvas.inputMethodQuery(Qt.InputMethodQuery.ImCursorRectangle)
+        self.assertTrue(area.isValid())
+        window.finished = True
+        window.io.shutdown(wait=True)
+        window.close()
+
+    def test_completed_edit_drops_geometry_from_the_previous_revision(self):
+        window = NativeWindow(None, worker=IdleWorker())
+        window.timer.stop()
+        window.actions.clear()
+        window.info = {"documentId": 7, "revision": 1}
+        window.caret = {"page": 2}
+        window.rects = [{"page": 2}]
+        window.preedit_rects = [{"page": 2}]
+        window.absorb({"ok": True, "outcome": {"revision": 2}})
+        self.assertIsNone(window.caret)
+        self.assertEqual(window.rects, [])
+        self.assertEqual(window.preedit_rects, [])
+        window.finished = True
+        window.io.shutdown(wait=True)
+        window.close()
+
 
 def pump(app, predicate, timeout=45):
     deadline = time.monotonic() + timeout
@@ -312,6 +371,12 @@ def actual_smoke(library, screenshot=None):
         pump(app, lambda: idle() and window.context.get("text") == "")
         window.command("redo")
         pump(app, lambda: idle() and window.context.get("text") == "각")
+        window.command("pasteText", text="\n".join(f"페이지 {index}" for index in range(110)))
+        pump(app, lambda: idle() and window.info.get("pageCount", 0) > 1
+             and len(window.pages) == window.info["pageCount"] and bool(window.frames))
+        window.command("undo")
+        pump(app, lambda: idle() and window.context.get("text") == "각"
+             and window.info.get("pageCount") == 1 and len(window.pages) == 1 and bool(window.frames))
         control = Qt.KeyboardModifier.ControlModifier
         for key in (Qt.Key.Key_A, Qt.Key.Key_C):
             QApplication.sendEvent(window.canvas, QKeyEvent(QEvent.Type.KeyPress, key, control))
@@ -343,7 +408,7 @@ def actual_smoke(library, screenshot=None):
             pump(app, lambda: window.info["documentId"] != document_id and idle() and bool(window.frames))
             assert not window.info["isDirty"]
         assert not window.errors, window.errors
-        print('{"ok":true,"qtOffscreen":true,"nativeRender":true,"syntheticKoreanIME":true,"clipboard":true,"saveReopen":true,"osIMEVerified":false}')
+        print('{"ok":true,"qtOffscreen":true,"nativeRender":true,"syntheticKoreanIME":true,"clipboard":true,"multiPage":true,"saveReopen":true,"osIMEVerified":false}')
     finally:
         pump(app, lambda: not window.io_jobs)
         window.close()

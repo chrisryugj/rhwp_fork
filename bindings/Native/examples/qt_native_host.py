@@ -52,18 +52,19 @@ class Canvas(QWidget):
             frame = self.window.frames.get(page["page"])
             if frame:
                 painter.drawImage(frame[0], frame[1])
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(50, 120, 230, 75))
-        for rect in self.window.rects:
-            painter.drawRect(self.window.page_rect(rect["page"], rect["bounds"]))
-        if self.window.caret and self.hasFocus() and (not self.window.preedit or self.window.preedit_cursor_visible):
-            painter.setPen(QPen(QColor("#202020"), 1))
-            caret = self.window.caret_rect()
-            painter.drawLine(caret.topLeft(), caret.bottomLeft())
-        for rect in self.window.preedit_rects:
-            area = self.window.page_rect(rect["page"], rect["bounds"])
-            painter.setPen(QPen(self.window.preedit_color, 1, Qt.PenStyle.DotLine))
-            painter.drawLine(area.bottomLeft(), area.bottomRight())
+        if self.window.view and self.window.pages and not self.window.loading_pages:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(50, 120, 230, 75))
+            for rect in self.window.rects:
+                painter.drawRect(self.window.page_rect(rect["page"], rect["bounds"]))
+            if self.window.caret and self.hasFocus() and (not self.window.preedit or self.window.preedit_cursor_visible):
+                painter.setPen(QPen(QColor("#202020"), 1))
+                caret = self.window.caret_rect()
+                painter.drawLine(caret.topLeft(), caret.bottomLeft())
+            for rect in self.window.preedit_rects:
+                area = self.window.page_rect(rect["page"], rect["bounds"])
+                painter.setPen(QPen(self.window.preedit_color, 1, Qt.PenStyle.DotLine))
+                painter.drawLine(area.bottomLeft(), area.bottomRight())
         painter.end()
         self.window.paint_count += 1
 
@@ -291,6 +292,8 @@ class NativeWindow(QMainWindow):
         self.render_next()
 
     def absorb(self, result):
+        geometry_keys = ("documentId", "revision", "fontGeneration", "selection")
+        previous = tuple(self.info.get(key) for key in geometry_keys)
         if result.get("info"):
             self.info = result["info"]
         if "preferredX" in result:
@@ -305,6 +308,10 @@ class NativeWindow(QMainWindow):
             for key in ("revision", "selection", "compositionId"):
                 if key in outcome:
                     self.info[key] = outcome[key]
+        if previous != tuple(self.info.get(key) for key in geometry_keys):
+            self.caret = None
+            self.rects.clear()
+            self.preedit_rects.clear()
 
     def step_done(self, result):
         if not result.get("ok") or result.get("kind") == "skipped":
@@ -362,9 +369,9 @@ class NativeWindow(QMainWindow):
 
     def load_page_size(self, page, count, load=None):
         if load is None:
-            load = (object(), self.target())
+            load = (object(), self.target(), [])
             self.page_load_token = load[0]
-        token, target = load
+        token, target, sizes = load
         if token is not self.page_load_token:
             return
         if target != self.target():
@@ -374,6 +381,7 @@ class NativeWindow(QMainWindow):
             self.refresh()
             return
         if page >= count:
+            self.pages = sizes
             self.loading_pages = False
             self.page_load_token = None
             self.rebuild_view()
@@ -384,7 +392,7 @@ class NativeWindow(QMainWindow):
             if target != self.target():
                 self.load_page_size(page, count, load)
                 return
-            self.pages.append(result["size"])
+            sizes.append(result["size"])
             self.load_page_size(page + 1, count, load)
         def request(_):
             if token is self.page_load_token and target == self.target():
@@ -443,6 +451,7 @@ class NativeWindow(QMainWindow):
                 bar.setValue(int(self.state["scroll"][axis]))
                 bar.blockSignals(False)
             self.canvas.update()
+            QApplication.inputMethod().update(Qt.InputMethodQuery.ImCursorRectangle)
         except Exception as error:
             self.fail(error)
 
@@ -472,7 +481,8 @@ class NativeWindow(QMainWindow):
         return QRectF(point.x(), point.y(), bounds.get("width", 1) * zoom, bounds["height"] * zoom)
 
     def caret_rect(self):
-        return self.page_rect(self.caret["page"], self.caret) if self.caret and self.pages else QRectF(0, 0, 1, 20)
+        ready = self.caret and self.pages and self.view and not self.loading_pages
+        return self.page_rect(self.caret["page"], self.caret) if ready else QRectF(0, 0, 1, 20)
 
     def render_next(self):
         if not self.info or not self.view:

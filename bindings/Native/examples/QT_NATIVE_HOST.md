@@ -26,6 +26,8 @@ executor를 사용한다. 파일 쓰기가 실패하면 cancel하며, 이미 성
   `Format_RGBA8888_Premultiplied` QImage로 다시 소유한다. 이전 revision/font generation/view의
   결과는 표시하지 않는다. GUI에서 레이아웃을 재계산하지 않는다.
   페이지 크기 조회 도중 문서 revision이 바뀌면 이전 조회를 버리고 새 정보로 다시 시작한다.
+  한 revision의 전체 페이지 크기를 받은 뒤 뷰에 한 번에 게시하며, 준비 중인 geometry를 IME·overlay에 사용하지 않는다.
+  문서·폰트·선택 상태가 바뀌면 이전 캐럿·선택·조합 범위의 geometry를 폐기한다.
   조회 실패는 로딩 상태를 해제하며, 문서 교체 시 이전 문서의 선택·캐럿·조합 장식과 이동 기준을 지운다.
 - click/drag, selection/caret overlay, 좌우·상하·Home/End, Backspace/Delete, Enter, Ctrl+A/Z/Y,
   Ctrl+C/X/V를 연결한다. Home/End는 문단 경계다. 셀·inline object 편집은 native API의 거절을 표시한다.
@@ -53,6 +55,7 @@ QT_QPA_PLATFORM=offscreen .venv-qt/bin/python -B bindings/Native/tests/native_wi
 대체하지 않는다. `--screenshot`은 선택 사항이며 실행 중인 QWidget을 새 PNG 파일로 남긴다.
 실제 스모크에는 P61까지의 worker/editor/IME 문맥·clipboard ABI가 포함된 native-skia 라이브러리가 필요하다.
 Ctrl+A/C/X/V로 Qt clipboard의 복사·잘라내기·붙여넣기와 한 번의 undo/redo도 검사한다.
+다중 문단 붙여넣기로 여러 쪽을 만든 뒤 undo하여 페이지 크기 배치·뷰가 함께 갱신되는지도 검사한다.
 
 근거: [QInputMethodEvent](https://doc.qt.io/qtforpython-6/PySide6/QtGui/QInputMethodEvent.html),
 [QImage](https://doc.qt.io/qtforpython-6/PySide6/QtGui/QImage.html),
