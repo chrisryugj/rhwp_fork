@@ -62,6 +62,8 @@ impl TypesetEngine {
             source_frame_band,
             mut consumed,
             mut accepted_end_row_box,
+            mut accepted_start_row_box,
+            mut accepted_partial_row_box,
             mut end_row,
             mut split_block_start,
             mut split_end_cut,
@@ -1784,13 +1786,19 @@ impl TypesetEngine {
         // 높이를 다시 추정하지 않고 이번 일반 행이 실제 수용한 증분을 보존한다.
         // 다음 행을 이월한 경우에는 앞서 수용한 행의 결과를 그대로 유지한다.
         if end_row > scan_start_row {
-            let reserved_row = (consumed - consumed_before_row - cs_before).max(0.0);
+            let physical = (consumed - consumed_before_row - cs_before).max(0.0);
+            if scan_start_row == cursor_row && split_block_start.is_none() {
+                accepted_start_row_box = Some((scan_start_row, physical));
+            }
+            accepted_partial_row_box =
+                (split_end_limit > 0.0 && !split_end_cut.is_empty() && split_block_start.is_none())
+                    .then_some((end_row - 1, physical));
             accepted_end_row_box = (split_end_cut.is_empty() && split_block_start.is_none())
-                .then_some((end_row - 1, reserved_row));
+                .then_some((end_row - 1, physical));
             // 내용 컷 행도 같은 증분을 남긴다. 컷 경로마다 예약 값(내용 전진량·패딩 포함 상자·
             // 물리 띠)이 달라 `split_end_limit`만으로는 쪽 끝까지의 남은 방을 잴 수 없다.
             split_end_reserved = if !split_end_cut.is_empty() && split_block_start.is_none() {
-                reserved_row
+                physical
             } else {
                 0.0
             };
@@ -1799,6 +1807,8 @@ impl TypesetEngine {
             source_frame_band,
             consumed,
             accepted_end_row_box,
+            accepted_start_row_box,
+            accepted_partial_row_box,
             end_row,
             split_block_start,
             split_end_cut,
