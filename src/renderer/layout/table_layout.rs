@@ -14166,7 +14166,7 @@ impl LayoutEngine {
                 return true;
             }
             if cell.paragraphs.get(current_para).is_some_and(|para| {
-                self.stored_plain_zero_origin_line_boundary(cell, table, para, source_line, styles)
+                self.stored_plain_zero_origin_line_boundary(cell, table, para, source_line)
             }) {
                 return true;
             }
@@ -15155,7 +15155,7 @@ impl LayoutEngine {
                 false
             };
             let line_reset_before = |li: usize| -> bool {
-                if self.stored_plain_zero_origin_line_boundary(cell, table, p, li, styles) {
+                if self.stored_plain_zero_origin_line_boundary(cell, table, p, li) {
                     return true;
                 }
                 if li == 0 {
@@ -18531,7 +18531,6 @@ impl LayoutEngine {
                         table,
                         para,
                         next.vis_start,
-                        styles,
                     ) || (
                         // A capacity tail in a nested cell remains space in
                         // its parent's frame; it is not a physical page end.
@@ -21015,6 +21014,28 @@ impl LayoutEngine {
             && previous.segment_width == current.segment_width
     }
 
+    // A local line restart permits a content cut, but does not by itself
+    // force a physical page boundary. Keep those two contracts separate.
+    fn stored_plain_zero_origin_line_boundary(
+        &self,
+        cell: &crate::model::table::Cell,
+        table: &crate::model::table::Table,
+        para: &crate::model::paragraph::Paragraph,
+        line: usize,
+    ) -> bool {
+        if !self.stored_plain_line_restart(cell, table, para, line) {
+            return false;
+        }
+        let previous = &para.line_segs[line - 1];
+        (previous.vertical_pos == 0
+            && self.stored_row_reset_closes_declared_frame(cell, table, previous))
+            || i64::from(previous.vertical_pos)
+                + i64::from(previous.line_height)
+                + i64::from(previous.line_spacing)
+                + i64::from(cell.effective_vertical_padding_hu(&table.padding))
+                == i64::from(cell.height)
+    }
+
     pub(crate) fn row_stored_zero_origin_cut(
         &self,
         table: &crate::model::table::Table,
@@ -21188,7 +21209,6 @@ impl LayoutEngine {
                             table,
                             para,
                             unit.vis_start,
-                            styles,
                         )
                     } else {
                         self.stored_plain_line_restart(cell, table, para, unit.vis_start)
@@ -21866,13 +21886,7 @@ impl LayoutEngine {
                     );
                 let plain_zero_origin_boundary =
                     cell.paragraphs.get(u.para_idx).is_some_and(|para| {
-                        self.stored_plain_zero_origin_line_boundary(
-                            cell,
-                            table,
-                            para,
-                            u.vis_start,
-                            styles,
-                        )
+                        self.stored_plain_zero_origin_line_boundary(cell, table, para, u.vis_start)
                     });
                 // 한 저장 줄이 자식 표 전체를 소유하면, 행으로 펼친 뒤에도 그
                 // 줄의 쪽 시작을 유지한다. 현재 잔여에는 안 들어가지만 새 밴드에는
@@ -23648,7 +23662,7 @@ impl LayoutEngine {
         }
         let unit = &units[start];
         cell.paragraphs.get(unit.para_idx).is_some_and(|para| {
-            self.stored_plain_zero_origin_line_boundary(cell, table, para, unit.vis_start, styles)
+            self.stored_plain_zero_origin_line_boundary(cell, table, para, unit.vis_start)
         }) && units[start + 1..]
             .iter()
             .all(|unit| !unit.stored_frame_break_before && !unit.hard_break_before)
@@ -23710,7 +23724,6 @@ impl LayoutEngine {
                             table,
                             para,
                             units[k].vis_start,
-                            styles,
                         )
                 }) || matches!(
                     (stored_line(&units[k - 1], false), stored_line(&units[k], true)),
