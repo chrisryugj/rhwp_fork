@@ -543,8 +543,10 @@ class NativeWindow(QMainWindow):
         self.enqueue([request], refresh=True)
 
     def key(self, event):
-        control = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        modifiers = event.modifiers()
+        control = bool(modifiers & Qt.KeyboardModifier.ControlModifier) and not bool(
+            modifiers & (Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.GroupSwitchModifier))
+        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
         key = event.key()
         if control:
             if key == Qt.Key.Key_C:

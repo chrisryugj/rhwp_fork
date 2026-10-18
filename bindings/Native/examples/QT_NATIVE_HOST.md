@@ -33,7 +33,7 @@ executor를 사용한다. 파일 쓰기가 실패하면 cancel하며, 이미 성
   문서 교체 시 이전 문서의 선택·캐럿·조합 장식과 이동 기준을 지운다.
 - 페이지 크기 조회 중 click/drag hit test를 보류하며, 완성된 뷰의 좌표만 사용합니다.
   click/drag, selection/caret overlay, 좌우·상하·Home/End, Backspace/Delete, Enter, Ctrl+A/Z/Y,
-  Ctrl+C/X/V를 연결한다. Home/End는 문단 경계다. 셀·inline object 편집은 native API의 거절을 표시한다.
+  Ctrl+C/X/V를 연결한다. Ctrl+Alt 또는 AltGr의 출력 문자는 shortcut으로 소비하지 않고 본문에 입력합니다. Home/End는 문단 경계다. 셀·inline object 편집은 native API의 거절을 표시한다.
 - Qt `QInputMethodEvent` preedit→update→commit을 native composition에 연결한다. Focus loss는 cancel이다.
   surrogate pair 중간 offset과 주변 문자열 replacementStart/replacementLength는 안전하게 거절한다.
   주변 문맥·cursor·anchor는 마지막 완료된 native snapshot에서 읽고 scalar→UTF-16으로 바꾼다.

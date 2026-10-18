@@ -99,6 +99,28 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(worker.requests, [{"op": "hitTest", "page": 0, "x": 10, "y": 20,
                                           "target": {"documentId": 7, "revision": 1}}])
 
+    def test_altgr_text_is_inserted_while_control_shortcuts_still_work(self):
+        worker = IdleWorker()
+        window = self.idle_window(worker)
+        window.info = {"documentId": 7, "revision": 0}
+        control, alt = Qt.KeyboardModifier.ControlModifier, Qt.KeyboardModifier.AltModifier
+        events = [(Qt.Key.Key_Q, "@", control | alt),
+                  (Qt.Key.Key_E, "€", control | alt),
+                  (Qt.Key.Key_C, "ç", control | alt),
+                  (Qt.Key.Key_7, "{", Qt.KeyboardModifier.GroupSwitchModifier)]
+        for key, text, modifiers in events:
+            event = QKeyEvent(QEvent.Type.KeyPress, key, modifiers, text)
+            window.key(event)
+            self.assertTrue(event.isAccepted())
+        window.key(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_C, control))
+        for _ in range(len(events)):
+            window.pump()
+            window.pending = None
+            window.step_done({"ok": True, "outcome": {"revision": window.info["revision"] + 1}})
+        window.pump()
+        self.assertEqual([(request["op"], request.get("text")) for request in worker.requests],
+                         [("replace", text) for _, text, _ in events] + [("copySelection", None)])
+
     def test_utf16_non_bmp_and_surrogate_rejection(self):
         self.assertEqual(utf16_length("가😀각"), 4)
         self.assertEqual(scalar_from_utf16("가😀각", 3), 2)
