@@ -33,6 +33,9 @@
 - collaborator·maintainer의 예외 처리와 오늘할일·PR review 문서는 `pr_review_workflow.md`의
   라우팅 결과에 해당하는 역할별 자식 절차를 따른다. 모 문서만 읽고 세부 경로를 추정해 진행하지 않는다.
 - 작업 단계가 바뀌면 현재 단계의 변경을 커밋한 뒤 다음 단계 문서를 시작한다.
+- 새 테스트는 기존 자동 수집·suite·Native 실행 경로를 먼저 확인하고, `ci.yml`에
+  불필요한 개별 호출이나 중복 검증을 추가하지 않는다. 실제 실행 누락이 있을 때의 추가 기준은
+  [CI 테스트 호출 추가 기준](mydocs/manual/github_operations.md#531-ci-테스트-호출-추가-기준)을 따른다.
 - GitHub comment, remote push, PR 생성은 사용자 승인을 받은 뒤 수행한다.
 - Windows PowerShell에서 한글을 포함한 여러 단락의 PR·review·comment 본문은 here-string을
   `gh --body-file -`로 직접 pipe하지 않는다. UTF-8 **without BOM** 임시 Markdown 파일을
@@ -42,7 +45,7 @@
 ## 페이지별 TSV와 PR 재검토 필수 조건
 
 조판·렌더링에 영향을 주는 변경은 **검증 대상 각 문서의 전체 페이지 TSV를 먼저 산출**한다.
-`tolerant_content_match_percent`(2px 이웃 관용 내용 실루엣 일치율)를 페이지별로 확인하며,
+`silhouette_raw_match_percent`(색상 경계 보정 전2px 내용 실루엣 일치율)를 페이지별로 확인하며,
 **한 페이지라도 90% 미만이면 PR을 재검토한다.** 평균값이나 대표 페이지의 높은 점수로
 미달 쪽을 상쇄하지 않는다. 정확히 90%는 통과한다.
 
@@ -154,9 +157,12 @@
   없으면 이관 대상으로 판정하지 않는다. 별도 이슈에서 90% 이상과 확대 판독 후 관계형 회귀를 복원한다.
   [별도 이슈 이관](mydocs/manual/pr_review/visual_fixture_evidence.md#90-미만-회귀-대상의-별도-이슈-이관)을 따른다.
   신규 검사와 기존 검사의 변경은 문단·줄·개체의 소유, 내용 순서·보존, 포함·겹침 관계를 기본으로 한다.
-  **완료된 페이지**의 Native/fresh WASM 2px 관용 실루엣 일치율이 각각 **98% 이상**이고 독립 PDF와
+  **완료된 페이지**의 Native/fresh WASM `silhouette_raw_match_percent`(색상 경계 보정 전2px 실루엣 일치율)이 각각 **98% 이상**이고 독립 PDF와
   직접 확대 판독까지 완료됐으면, 그 페이지는 독립 기대 좌표를 **±2px** 허용 오차로 고정할 수 있다.
   문서 전체가 98% 이상일 필요는 없다. 페이지·DPI·좌표계·SHA·TSV·PNG 증거를 기록하고 관계 검사도 유지한다.
+  문서마다 변경한 핵심 위치를 보호한다. 같은 핵심 동작을 검증할 수 있는 완료 페이지 중
+  Native/fresh WASM **양쪽 raw 일치율의 최솟값**이 **100% → 99%대 → 98%대**인 순서로 우선 선정한다.
+  표 시작·이어받기·종료·후속 본문·수식·각주 등 해당 변경의 중요한 경계도 검사에 포함한다.
   고정한 쪽은 이후에도 양쪽 98% 이상을 유지해야 한다. 100%로 개선은 허용하며 한쪽이라도 98% 미만이면 회귀로 판정한다.
   [페이지별 px 회귀 조건](mydocs/manual/pr_review/visual_fixture_evidence.md#완료-페이지의-98-이상-실루엣과-px-좌표-회귀)을 따른다.
   정확한 기존 검사는 유지하고 구현을 고친다. 세부 절차는
@@ -207,14 +213,19 @@
   편집 command·parser·model·serializer의 속성/저장 정보 변경도 실제 조판 소비 경로에 영향을 주면 적용한다.
   버전에 맞는 한컴 [Print PDF 출력 계약](mydocs/manual/mcp_hwp2024Convert_usage.md#기준-pdf-인쇄-계약)을 따른다.
   편집 동작은 동일하게 편집한 저장본을 Print 출력한다. 기준 PDF 부족은 미검증이며 비해당이 아니다.
-  TSV·실행 로그·중간 JSON은 ignored `output/pr-review/<id>/`에 보존하고 Git에 커밋하지 않는다.
+  작업 중 TSV·실행 로그·중간 JSON은 ignored `output/pr-review/<id>/`에 보존한다.
+  최종 제출용 TSV는 PR 본문에 파일별 `tsv` 코드 블록으로 전체 원문을 넣을 수 있다.
+  본문 크기 제한에 걸리면 원본을 `mydocs/pr/assets/issue_<이슈번호>/<문서이름>_silhouette.tsv`
+  등에 바이트 그대로 복사해 커밋하고 정확한 head SHA의 raw 다운로드 링크로 제출한다.
+  Native/fresh WASM과 base/후보는 하위 폴더나 파일명으로 구분한다. 실행 로그·중간 JSON은 커밋하지 않는다.
+  [TSV 원본 보존·링크](mydocs/manual/verification/visual_sweep_guide.md#tsv-원문-본문-삽입과-저장소-링크)를 따른다.
   영향 페이지의 Native/fresh WASM compare·standalone overlay·review를 산출해 직접 확인하고,
   source SHA·입력/기준 PDF·페이지·명령·대표 PNG·남은 차이를 결과보고에 연결한다. PR review를
   요청하기 전에는 대표 review·overlay PNG를 **PR 본문에서 실제 Markdown 이미지로 표시**한다.
   경로·임시 output·review 문서 링크만으로 대체하지 않으며, PR head repository와 정확한 head SHA로
   고정한 raw URL을 쓴다. code head가 바뀌면 시각 증적과 본문 URL도 다시 만든다. merge 뒤에는
   같은 asset을 merge SHA로 고정한 URL로 contributor comment에 다시 남긴다.
-  검증 범위의 전체 TSV와 대표 review PNG 중 2px 이웃 관용 내용 실루엣 일치율이 하나라도 **90% 미만**이거나 측정 불가이면
+  검증 범위의 전체 TSV와 대표 review PNG 중 색상 경계 보정 전2px 내용 실루엣 일치율이 하나라도 **90% 미만**이거나 측정 불가이면
   `scripts/visual_sweep.py`의 `pr_review_gate`가 `re_review_required`가 된다. 이 상태에서는 새 PR을 만들지 않고,
   이미 열린 PR은 승인·통합하지 않는다. 기여자는 PDF/overlay 원인을 자기 branch에서 재검토·수정하고 새 head에서
   재실행한 뒤 gate를 통과할 때만 PR을 생성·갱신한다. reviewer는 보류를 기록하며 기여자 변경을 메인터너 보정으로
@@ -276,6 +287,18 @@
 
 ## 문서와 검증
 
+- **대용량 PDF 보관**: **50 MiB(52,428,800바이트) 이상 PDF는 로컬에만 보관하고 PR에 포함하지 않는다.**
+  저장소 밖의 안정적인 로컬 경로에 보존한다. 저장소 안에 둘 경우 `.git/info/exclude`에 정확한 경로를
+  등록한다. 출처·바이트 수·SHA-256·전체 쪽수·
+  생성/검증 명령과 전쪽 Native/fresh WASM TSV·대표 PNG를 기록한다. 입력 커밋 확인의
+  [대용량 PDF 로컬 보관](mydocs/manual/pr_review/intake_and_review.md#28-검증-입력-커밋-확인)
+  항목을 적용하며 검증 범위와 시각 gate는 유지한다.
+- **빌드 병렬도 권장값**: Linux·macOS·Windows의 Cargo 빌드 잡 수는
+  **논리 CPU 수 − 2, 최소 1개**를 시작값으로 권장한다. 고정된 의무값이 아니며 메모리 여유,
+  동시 작업, 실제 빌드 성능에 맞게 `CARGO_BUILD_JOBS`를 조절한다. Linux는 `nproc`, macOS는
+  `sysctl -n hw.logicalcpu`, Windows PowerShell은 `[Environment]::ProcessorCount`로 계산한다.
+  테스트 실행의 `--test-threads`와 구분하며, OS별 예시와 fresh WASM의 `codegen-units=16`
+  권장값은 [빌드 병렬도](mydocs/manual/dev_environment_guide.md#빌드-병렬도)를 참고한다.
 - **로컬 Rust·WASM 산출물 재사용**: 일반 개발·이슈 수정·PR review의 기본
   `CARGO_TARGET_DIR`/`--target-dir`는 모든 운영체제에서 **각 host의 기본 rhwp 작업공간 아래
   `target/pr-review` 한 곳**이다. worktree 검증에서도 그 동일한 절대 경로를 전달한다. 이 경로의
@@ -286,6 +309,19 @@
   다른 실행 중인 Cargo 작업의 산출물과 충돌할 우려가 있으면 새 경로를 만드는 대신
   실행 중인 작업·소유자를 먼저 확인하고, 필요할 때만 사용자가 별도 경로를 지시한다.
   `target/pr-review`은 공유 캐시이므로 임의로 삭제·초기화하지 않는다.
+- **디스크 공간 부족 시 Chromium 임시 프로필 정리 권고**: 빌드 캐시 정리에 앞서 종료된
+  검증용 Chromium/Puppeteer 임시 프로필의 용량을 확인하고 삭제를 검토한다. Linux Snap의
+  `/tmp/snap-private-tmp/snap.chromium/tmp/` 등이 대상이며, 기본 후보는 24시간 이상 지난
+  미사용 항목이다. 경과 시간만으로 종료를 판단하지 않고 실행 중인 프로세스의 경로·열린 파일
+  참조와 잠금 PID를 확인한다. 현재 사용 중인 프로필·일반 사용자 프로필·검증 증적은 보존하며,
+  삭제 경로·사용 중 아님을 확인한 근거·전후 여유 공간을 기록한다. 구체적인 절차는
+  [디스크 공간 정리](mydocs/manual/dev_environment_guide.md#디스크-공간이-부족할-때)를 따른다.
+- **종료된 증분 캐시 정리 권고**: 디스크 공간이 부족하면 `target/pr-review` 안의 종료된
+  오래된 증분 캐시도 정리 후보로 확인한다. 공유 target을 사용하는 Cargo·rustc·wasm-pack·
+  wasm-opt 작업이 모두 종료된 뒤, 사용하지 않는 정확한 `incremental` 하위 캐시 경로만
+  지정해 삭제한다. target 전체·프로필 디렉터리·실행 파일·`deps`·`.fingerprint`와 다른 작업의
+  산출물은 보존한다. 삭제 목록·확인 근거·전후 여유 공간을 기록하며 캐시는 이후 빌드에서
+  재생성될 수 있다. 세부 확인은 위 디스크 공간 정리 절차를 따른다.
 - **Studio 개발 서버에 WASM 반영**: Rust/WASM 변경을 `npx vite --host 0.0.0.0 --port 7700`
   같은 `rhwp-studio` 개발 서버에서 확인할 때는 반드시 **저장소 루트
   (`scripts/`·`pkg/`·`rhwp-studio/`가 함께 있는 디렉터리)**에서

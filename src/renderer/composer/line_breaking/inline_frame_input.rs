@@ -16,6 +16,14 @@ pub(super) fn project(
         .zip(source.control_utf16_positions())
         .filter_map(|((control, position), raw)| {
             let (width, height) = inline_control_occupied_size_hwp(control, styles, dpi)?;
+            // 글자 없는 원시 문단의 제어문은 서로 다른 UTF-16 슬롯을 갖지만
+            // 가시 문자 축에서는 모두 유일한 빈 경계에 속한다. 순차 인덱스
+            // 폴백을 가시 글자로 해석하면 두 번째 이후 개체가 입력에서 빠진다.
+            let position = if chars.is_empty() && source.char_offsets.is_empty() {
+                0
+            } else {
+                position
+            };
             (position <= chars.len()).then_some((control, position, raw, width, height))
         })
         .collect();
@@ -25,6 +33,7 @@ pub(super) fn project(
     let mut input = source.clone();
     input.text.clear();
     input.char_offsets.clear();
+    input.layout_field_values.clear();
     let mut controls = Vec::with_capacity(slots.len());
     let mut scalar_index = 0;
     for position in 0..=chars.len() {
@@ -47,6 +56,15 @@ pub(super) fn project(
                 && source.char_offsets.get(position) == Some(&raw);
         }
         if let Some(&character) = chars.get(position).filter(|_| !represented) {
+            if let Some((_, value)) = source
+                .layout_field_values
+                .iter()
+                .find(|(at, _)| *at == position)
+            {
+                input
+                    .layout_field_values
+                    .push((scalar_index, value.clone()));
+            }
             input.text.push(character);
             input
                 .char_offsets

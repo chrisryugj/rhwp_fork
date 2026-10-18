@@ -7,9 +7,11 @@ license = "MIT"
 repository = "https://github.com/edwardkim/rhwp"
 autotests = false
 autoexamples = false
+autobins = false
 
 [workspace]
-members = [".", "crates/*", "tools/rhwp-subsecond", "bindings/Native", "tools/batch-convert", "tools/llm_verifier/verdict_protocol", "tools/llm_verifier/claim_bind", "tools/llm_verifier/criteria_decomp"]
+exclude = ["vendor/rhwp-pdf-import-backend", "vendor/rhwp-zune-jpeg", "vendor/rhwp-jpeg-decoder"]
+members = ["crates/*", "tools/rhwp-subsecond", "bindings/Native", "tools/batch-convert", "tools/llm_verifier/verdict_protocol", "tools/llm_verifier/claim_bind", "tools/llm_verifier/criteria_decomp"]
 default-members = [".", "crates/*"]
 resolver = "2"
 
@@ -23,6 +25,16 @@ crate-type = ["rlib", "cdylib"]
 [[bin]]
 name = "rhwp"
 path = "src/main.rs"
+# CLI 는 `wasm_api::HwpDocument` 를 쓴다 — 아래 `wasm-api` feature 참고.
+required-features = ["wasm-api"]
+
+[[bin]]
+name = "rhwp-q"
+path = "src/bin/rhwp-q/main.rs"
+
+[[bin]]
+name = "rhwp-agent"
+path = "src/bin/rhwp-agent/main.rs"
 
 [[bin]]
 name = "font-metric-gen"
@@ -229,6 +241,10 @@ path = "tests/overflow_cell_baseline.rs"
 rhwp-contracts = { path = "crates/rhwp-contracts" }
 rhwp-ooxml-chart = { path = "crates/rhwp-ooxml-chart" }
 rhwp-password-crypto = { path = "crates/rhwp-password-crypto" }
+pdf_oxide = { package = "rhwp-pdf-import-backend", path = "vendor/rhwp-pdf-import-backend", version = "=0.3.78-rhwp.1", default-features = false, optional = true }
+# pdf_oxide 0.3.78's DocumentIR initializer is incompatible with office_oxide 0.1.13.
+# Keep the compatibility constraint for library consumers that do not use our lockfile.
+office_oxide = { version = "=0.1.9", default-features = false, optional = true }
 wasm-bindgen = "0.2"
 cfb = "0.15"
 crc32fast = "1"
@@ -287,6 +303,7 @@ unicode-segmentation = "1.12.0"
 unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 unicode-width = "0.2.2"
 image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png", "tiff"] }
+tiny-skia = { version = "0.12", optional = true, default-features = false, features = ["std", "simd"] }
 pcx = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -300,7 +317,16 @@ console_error_panic_hook = { version = "0.1", optional = true }
 subsecond = { version = "=0.7.10", optional = true }
 
 [features]
-default = ["console_error_panic_hook"]
+default = ["console_error_panic_hook", "pdf-import", "wasm-api"]
+pdf-import = ["dep:pdf_oxide", "dep:office_oxide", "dep:tiny-skia"]
+# 브라우저 JS 바인딩(`wasm_api`)과 자동 panic hook 초기화·`version` export.
+# npm 패키지·Studio·CLI·Native FFI는 기본값을 사용한다. 다른 wasm-bindgen 앱이
+# 라이브러리로 링크할 때는 `default-features = false`로 facade와 자동 start를 제외한다.
+# 의존성의 start가 있으면 일반 Rust main은 자동 실행되지 않지만, 명시적 start끼리는 연결된다.
+# export를 제외하면 쓰지 않는 렌더러·편집 코드도 링커가 제거할 수 있다.
+# 기본값을 끈 Rust 소비자가 `wasm_api`를 쓰려면 `wasm-api`를 명시적으로 켠다.
+# Cargo feature는 합쳐지므로 다른 의존성이 이 feature를 켜면 다시 포함된다.
+wasm-api = []
 native-skia = ["dep:resvg", "dep:skia-safe", "dep:icy_sixel"]
 subsecond-dev = ["dep:subsecond"]
 
@@ -320,6 +346,8 @@ web-sys = { version = "0.3", features = [
     "CanvasRenderingContext2d",
     "CanvasGradient",
     "CanvasPattern",
+    "DomMatrix",
+    "DomMatrixReadOnly",
     "HtmlCanvasElement",
     "HtmlImageElement",
     "ImageData",
@@ -469,6 +497,10 @@ path = "tools/fixture_generators/build_issue_5800_fixture.rs"
 [[example]]
 name = "font_metric_coverage_worker"
 path = "tools/diagnostics/font_metric_coverage_worker.rs"
+
+[profile.dev]
+# 로컬 실행 파일의 크기를 줄이되 함수·파일·줄 단위 역추적 정보는 유지한다.
+debug = 1
 
 [profile.release]
 lto = true

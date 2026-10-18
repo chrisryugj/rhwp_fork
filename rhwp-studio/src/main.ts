@@ -41,9 +41,11 @@ import { toolCommands } from '@/command/commands/tool';
 import { installPwaFileHandling, type FileHandlingWindowLike } from '@/command/pwa-file-handling';
 import {
   isSupportedDocumentFileName,
+  documentFileInputAccept,
+  unsupportedDocumentMessage,
   type FileSystemFileHandleLike,
 } from '@/command/file-system-access';
-import { forgetConvertedHmlSaveHandle } from '@/command/save-target';
+import { forgetConvertedHmlSaveHandle, forgetConvertedPdfSaveHandle } from '@/command/save-target';
 import { ContextMenu } from '@/ui/context-menu';
 import { CommandPalette } from '@/ui/command-palette';
 import { MODAL_DIALOG_CLOSED_EVENT } from '@/ui/dialog';
@@ -104,6 +106,7 @@ import { CENTER_ZOOM_ANCHOR } from '@/view/zoom-anchor';
 import { withBusyCursor } from '@/view/busy-cursor';
 import { formatPageIndicator } from '@/view/page-indicator';
 import { installEmbedRuntime } from '@/embed/runtime';
+import { subscribeFieldChanges } from '@/embed/field-events';
 import type { EmbedRendererRuntimeRequestV1 } from '@/embed/rpc-router';
 import { enrichFontDecisionTrace } from '@/core/font-decision-trace';
 import { DocumentAgentController } from '@/document-agent/controller';
@@ -253,7 +256,7 @@ function getContext(): EditorContext {
     showControlCodes: wasm.getShowControlCodes(),
     showParagraphMarks: wasm.getShowParagraphMarks(),
     isDirty: documentState.isDirty(),
-    sourceFormat: hasDoc ? (wasm.getSourceFormat() as 'hwp' | 'hwpx' | 'hml') : undefined,
+    sourceFormat: hasDoc ? (wasm.getSourceFormat() as 'hwp' | 'hwpx' | 'hml' | 'pdf') : undefined,
   };
 }
 
@@ -957,6 +960,7 @@ function setupGlobalShortcuts(): void {
 
 function setupFileInput(): void {
   const fileInput = document.getElementById('file-input') as HTMLInputElement;
+  fileInput.accept = documentFileInputAccept(wasm.hasPdfImportCapability());
 
   fileInput.addEventListener('change', async (e) => {
     const input = e.target as HTMLInputElement;
@@ -964,8 +968,8 @@ function setupFileInput(): void {
     delete input.dataset.skipUnsavedGuard;
     const file = input.files?.[0];
     if (!file) return;
-    if (!isSupportedDocumentFileName(file.name)) {
-      alert('HWP/HWPX/HML 파일만 지원합니다.');
+    if (!isSupportedDocumentFileName(file.name, wasm.hasPdfImportCapability())) {
+      alert(unsupportedDocumentMessage(file.name, wasm.hasPdfImportCapability()));
       fileInput.value = '';
       return;
     }
@@ -994,12 +998,12 @@ function setupFileInput(): void {
     const dropName = file.name.toLowerCase();
     const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
     const isImage = imageExts.some(ext => dropName.endsWith(ext));
-    const isDoc = isSupportedDocumentFileName(dropName);
+    const isDoc = isSupportedDocumentFileName(dropName, wasm.hasPdfImportCapability());
     // embed 프로파일: 문서 드롭은 호스트가 감지할 수 없는 문서 교체 경로이므로 무시한다.
     // 이미지 드롭은 수명주기가 아니라 편집 기능이라 그대로 둔다.
     if (chromeMode === 'embed' && isDoc) return;
     if (!isImage && !isDoc) {
-      alert('HWP/HWPX/HML 파일 또는 이미지 파일만 지원합니다.');
+      alert(unsupportedDocumentMessage(dropName, wasm.hasPdfImportCapability(), true));
       return;
     }
 
@@ -1624,6 +1628,9 @@ async function loadBytes(
     eventBus.emit('document-swapped');
     await updateLoadProgress(45, '자동 저장 준비 중...');
     forgetConvertedHmlSaveHandle(fileHandle);
+    forgetConvertedPdfSaveHandle(fileHandle);
+    // Imported PDF handles are retained for identity checks/recent files; resolveSaveTarget
+    // forces a different output until a converted HWP/HWPX handle has been published.
     wasm.currentFileHandle = fileHandle;
 
     // 최근 문서 기록 — 문서 로드 성공 직후, 폰트/모달 등 블로킹 UI 단계 이전에 기록한다.
@@ -2016,6 +2023,16 @@ installEmbedRuntime({
   hostWindow: window,
   parentWindow: window.parent,
   subscribeDocumentChanged: (listener) => eventBus.on('document-agent-changed', listener),
+  subscribeFieldChanged: (listener) => {
+    // 연결마다 새로 센다 — 직전 누름틀 기억이 다른 세션으로 새지 않게.
+    return subscribeFieldChanges(eventBus, (fieldId) => {
+      try {
+        return wasm.getFieldList().find((field) => field.fieldId === fieldId && !field.cellField)?.name ?? '';
+      } catch {
+        return '';
+      }
+    }, listener);
+  },
   handlers: {
     async ready() {
       await initPromise;
@@ -2060,9 +2077,11 @@ installEmbedRuntime({
         },
       );
     },
-    async getPageSvg(page) {
+    async getPageSvg(page, profile) {
       await initPromise;
-      return wasm.renderPageSvg(page);
+      // 인자 없는 기존 호출은 종전 경로 그대로(화면 렌더). 인쇄·PDF 호스트는 'print' 를 넘겨
+      // editor_only 노드(#3375/#4379)를 뺀 SVG 를 받는다.
+      return profile === undefined ? wasm.renderPageSvg(page) : wasm.renderPageSvgWithProfile(page, profile);
     },
     async exportHwp() {
       await initPromise;

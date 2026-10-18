@@ -44,6 +44,8 @@ use crate::renderer::DEFAULT_DPI;
 
 mod canvas_metrics;
 mod hyperlink;
+#[cfg(all(feature = "pdf-import", target_arch = "wasm32"))]
+mod pdf_import;
 /// 어떤 렌더 export가 교체 가능한 경계 뒤에 있는지 선언하는 곳 (#4577, #4642).
 mod render_patch_boundary;
 mod table_cell_bboxes;
@@ -193,6 +195,7 @@ fn render_page_to_canvas_filtered_with_profile_impl(
     canvas.set_height(scaled_canvas_extent(tree.page_height, scale));
 
     let mut renderer = WebCanvasRenderer::new(canvas)?;
+    renderer.set_hft_outline_fonts(&document.hft_outline_fonts);
     renderer.show_paragraph_marks = document.show_paragraph_marks;
     renderer.show_control_codes = document.show_control_codes;
     renderer.set_scale(scale);
@@ -258,6 +261,7 @@ fn render_page_patch_to_canvas_filtered_with_profile_impl(
     }
 
     let mut renderer = WebCanvasRenderer::new(canvas)?;
+    renderer.set_hft_outline_fonts(&document.hft_outline_fonts);
     renderer.show_paragraph_marks = document.show_paragraph_marks;
     renderer.show_control_codes = document.show_control_codes;
     renderer.set_scale(scale);
@@ -568,6 +572,7 @@ fn source_format_name(format: crate::parser::FileFormat) -> &'static str {
     match format {
         crate::parser::FileFormat::Hwpx => "hwpx",
         crate::parser::FileFormat::Hml => "hml",
+        crate::parser::FileFormat::Pdf => "pdf",
         _ => "hwp",
     }
 }
@@ -594,6 +599,64 @@ impl HwpDocument {
         DocumentCore::from_bytes(data)
             .map(|core| HwpDocument { core })
             .map_err(|e| e.into())
+    }
+
+    /// 현재 WASM 빌드에서 PDF 입력을 사용할 수 있는지 문서 생성 전에 조회한다.
+    #[wasm_bindgen(js_name = supportsPdfImport)]
+    pub fn supports_pdf_import() -> bool {
+        cfg!(all(feature = "pdf-import", target_arch = "wasm32"))
+    }
+
+    /// Worker가 입력을 복사하기 전에 제품의 실제 요청 한도를 조회한다.
+    #[wasm_bindgen(js_name = getPdfImportPolicy)]
+    pub fn get_pdf_import_policy() -> String {
+        #[cfg(feature = "pdf-import")]
+        {
+            serde_json::to_string(&crate::parser::pdf::PdfImportPolicy::default())
+                .expect("PDF policy serialization cannot fail")
+        }
+        #[cfg(not(feature = "pdf-import"))]
+        {
+            "null".to_owned()
+        }
+    }
+
+    /// PDF 전체 또는 선택 쪽을 공통 IR로 가져온다 (기본 포함 `pdf-import`).
+    /// options.sourcePages는 0-based 증가 배열이며 생략하면 전체 쪽이다.
+    /// 동기 실행이므로 브라우저에서 취소/시간 제한이 필요하면 Worker에서 호출한다.
+    #[wasm_bindgen(js_name = importPdf)]
+    pub fn import_pdf(data: &[u8], options: JsValue) -> Result<HwpDocument, JsValue> {
+        #[cfg(all(feature = "pdf-import", target_arch = "wasm32"))]
+        {
+            let options = pdf_import::options(options)?;
+            DocumentCore::from_pdf_bytes(data, &options)
+                .map(|core| HwpDocument { core })
+                .map_err(JsValue::from)
+        }
+        #[cfg(not(all(feature = "pdf-import", target_arch = "wasm32")))]
+        {
+            let _ = (data, options);
+            Err(JsValue::from_str(if cfg!(feature = "pdf-import") {
+                "PDF_IMPORT_OPTIONS: JS options require a WASM runtime; use DocumentCore::from_pdf_bytes in Rust"
+            } else {
+                "PDF_IMPORT_DISABLED: rebuild with --features pdf-import"
+            }))
+        }
+    }
+
+    /// 가져온 PDF의 원본 쪽/출력 구역 대응·경고·임시 문단 정책을 JSON으로 반환한다.
+    /// 편집 후 현재 쪽수가 아닌 가져오기 시점의 진단이다. 다른 형식은 `null`이다.
+    #[wasm_bindgen(js_name = getPdfImportDiagnostics)]
+    pub fn get_pdf_import_diagnostics(&self) -> String {
+        #[cfg(feature = "pdf-import")]
+        {
+            serde_json::to_string(&self.core.pdf_metadata())
+                .expect("PDF import metadata serialization cannot fail")
+        }
+        #[cfg(not(feature = "pdf-import"))]
+        {
+            "null".to_string()
+        }
     }
 
     /// 비밀번호로 보호된 HWP/HWPX 파일을 비밀번호와 함께 로드한다.
@@ -657,6 +720,18 @@ impl HwpDocument {
             face_index,
         )
         .map_err(JsValue::from)
+    }
+
+    /// 실제 FontFace의 원본 HFT 프로그램을 paint 전용으로 등록한다. 재조판하지 않는다.
+    #[wasm_bindgen(js_name = registerHftOutlineFont)]
+    pub fn register_hft_outline_font(
+        &mut self,
+        family: &str,
+        bytes: &[u8],
+        face_index: u32,
+    ) -> Result<bool, JsValue> {
+        self.register_hft_outline_font_native(family, bytes, face_index)
+            .map_err(JsValue::from)
     }
 
     /// 이미 등록된 exact font source slot에 명시 variable-font instance 요청을 설정한다.
@@ -836,6 +911,7 @@ impl HwpDocument {
         canvas.set_height(scaled_canvas_extent(tree.page_height, scale));
 
         let mut renderer = WebCanvasRenderer::new(canvas)?;
+        renderer.set_hft_outline_fonts(&self.hft_outline_fonts);
         renderer.show_paragraph_marks = self.show_paragraph_marks;
         renderer.show_control_codes = self.show_control_codes;
         renderer.set_scale(scale);
@@ -875,6 +951,7 @@ impl HwpDocument {
         canvas.set_height(scaled_canvas_extent(tree.root.bbox.height, scale));
 
         let mut renderer = WebCanvasRenderer::new(canvas)?;
+        renderer.set_hft_outline_fonts(&self.hft_outline_fonts);
         renderer.show_paragraph_marks = self.show_paragraph_marks;
         renderer.show_control_codes = self.show_control_codes;
         renderer.set_scale(scale);
@@ -978,6 +1055,7 @@ impl HwpDocument {
         canvas.set_height(scaled_canvas_extent(tree.root.bbox.height, scale));
 
         let mut renderer = WebCanvasRenderer::new(canvas)?;
+        renderer.set_hft_outline_fonts(&self.hft_outline_fonts);
         renderer.show_paragraph_marks = self.show_paragraph_marks;
         renderer.show_control_codes = self.show_control_codes;
         renderer.set_scale(scale);
@@ -6921,7 +6999,7 @@ impl HwpDocument {
         ))
     }
 
-    /// 원본 파일 형식을 반환한다 ("hwp", "hwpx", 또는 "hml").
+    /// 원본 파일 형식을 반환한다 ("hwp", "hwpx", "hml", 또는 "pdf").
     #[wasm_bindgen(js_name = getSourceFormat)]
     pub fn get_source_format(&self) -> String {
         source_format_name(self.core.source_format).to_string()

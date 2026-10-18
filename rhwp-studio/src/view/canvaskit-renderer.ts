@@ -1,4 +1,5 @@
 import { CanvasKitBundledFontFamily } from './canvaskit/font-style-selection.ts';
+import { textRequiresComplexShaping } from './canvaskit/nominal-text-replay.ts';
 import CanvasKitInit from 'canvaskit-wasm';
 import { blake3 } from '@noble/hashes/blake3.js';
 import type {
@@ -67,6 +68,7 @@ import {
   type CanvasKitSurfaceRequest,
 } from './render-backend';
 import { imageCropSelectionIsEmpty } from './image-crop-scale.ts';
+import { magnificationFiltering } from './image-sampling.ts';
 import {
   boundedCanvasKitSourceImageKey,
   canvasKitImageCacheKey,
@@ -148,7 +150,7 @@ export interface CanvasKitLayerRendererOptions {
   requirePreparedFontFamilies?: boolean;
 }
 
-const OLD_HANGUL_FONT_FAMILY = 'Source Han Serif K Old Hangul';
+const OLD_HANGUL_FONT_FAMILY = 'RHWP Old Hangul';
 const VERTICAL_PRESENTATION_BASE_TEXT = new Map<string, string>([
   ['\uFE19', '\u2026'],
   ['\uFE31', '\u2014'],
@@ -172,7 +174,6 @@ const VERTICAL_PRESENTATION_BASE_TEXT = new Map<string, string>([
   ['\uFE43', '\u300E'],
   ['\uFE44', '\u300F'],
 ]);
-const COMPLEX_SHAPING_UNICODE_CATEGORY = /[\p{M}\p{Cf}]/u;
 type LayerColorGraph = NonNullable<NonNullable<LayerGlyphOutlineOp['colorLayers']>['paintGraph']>;
 type LayerColorGraphNode = NonNullable<LayerColorGraph['nodes']>[number];
 interface CanvasKitSurfaceTarget {
@@ -209,33 +210,6 @@ function normalizedFontFamily(value: string | null | undefined): string {
     .toLocaleLowerCase('en-US');
 }
 
-function textRequiresComplexShaping(text: string): boolean {
-  for (const character of text) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    const isOldHangul = (codePoint >= 0x1100 && codePoint <= 0x11ff)
-      || (codePoint >= 0xa960 && codePoint <= 0xa97f)
-      || (codePoint >= 0xd7b0 && codePoint <= 0xd7ff);
-    const isBoxedPua = codePoint >= 0xf02b1 && codePoint <= 0xf02c4;
-    if (isOldHangul || isBoxedPua) continue;
-
-    const nominalGlyphReplayIsSafe = codePoint <= 0x02ff
-      || (codePoint >= 0x0370 && codePoint <= 0x058f)
-      || (codePoint >= 0x1e00 && codePoint <= 0x1fff)
-      || (codePoint >= 0x2000 && codePoint <= 0x2fff)
-      || (codePoint >= 0x2e80 && codePoint <= 0xd7af)
-      || (codePoint >= 0xe000 && codePoint <= 0xf8ff)
-      || (codePoint >= 0xf900 && codePoint <= 0xfb06)
-      || (codePoint >= 0xfe10 && codePoint <= 0xfe1f)
-      || (codePoint >= 0xfe30 && codePoint <= 0xfe6f)
-      || (codePoint >= 0xff00 && codePoint <= 0xffef)
-      || (codePoint >= 0x1d400 && codePoint <= 0x1d7ff)
-      || (codePoint >= 0x20000 && codePoint <= 0x323af);
-    if (!nominalGlyphReplayIsSafe || COMPLEX_SHAPING_UNICODE_CATEGORY.test(character)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 function textRunHasPaintEffects(style: NonNullable<LayerTextRunOp['style']>): boolean {
   const shadeColor = (style.shadeColor ?? '#ffffff').toLowerCase();
@@ -504,7 +478,7 @@ export class CanvasKitLayerRenderer {
     private readonly defaultFontUrl: string = 'fonts/NotoSansKR-Regular.woff2',
     private readonly requirePreparedFontFamilies: boolean = false,
     private readonly oldHangulTypeface: CanvasKitLocalTypeface | null = null,
-    private readonly oldHangulFontUrl: string = 'fonts/SourceHanSerifK-OldHangul-subset.woff2',
+    private readonly oldHangulFontUrl: string = 'fonts/RHWPOldHangul-Regular.woff2',
     private readonly defaultFontBytes?: ArrayBuffer,
     private readonly webgpuDeviceContext: WebGPUDeviceContext | null = null,
     private readonly webgpuDevice: GPUDevice | null = null,
@@ -597,7 +571,7 @@ export class CanvasKitLayerRenderer {
     }
     let oldHangulTypeface: CanvasKitLocalTypeface | null = null;
     const oldHangulFontUrl = options.oldHangulFontUrl
-      ?? 'fonts/SourceHanSerifK-OldHangul-subset.woff2';
+      ?? 'fonts/RHWPOldHangul-Regular.woff2';
     let oldHangulNativeTypeface: Typeface | null = null;
     let oldHangulFontManager: FontMgr | null = null;
     try {
@@ -2039,7 +2013,7 @@ export class CanvasKitLayerRenderer {
   }
 
   private renderPath(canvas: SkCanvas, op: LayerPathOp): void {
-    const path = this.pathFromCommands(op.commands ?? [], op.bbox.x, op.bbox.y);
+    const path = this.createCommandPath(op.commands ?? [], op.bbox.x, op.bbox.y);
     const style: LayerShapeStyle = op.style ?? (op.lineStyle ? {} : {
       strokeColor: '#000000',
       strokeWidth: 1,
@@ -2087,7 +2061,7 @@ export class CanvasKitLayerRenderer {
     path.delete?.();
   }
 
-  private pathFromCommands(commands: readonly LayerPathCommand[], x = 0, y = 0): Path {
+  private createCommandPath(commands: readonly LayerPathCommand[], x = 0, y = 0): Path {
     const builder = new this.canvasKit.PathBuilder();
     try {
       for (const command of commands) [x, y] = this.applyPathCommand(builder, command, x, y);
@@ -2199,7 +2173,7 @@ export class CanvasKitLayerRenderer {
         const placement = this.affineToCanvasKitMatrix(op.placement?.runToPage);
         if (placement) canvas.concat(placement);
         for (const layer of op.colorLayers.layers ?? []) {
-          const path = this.pathFromCommands(layer.commands ?? []);
+          const path = this.createCommandPath(layer.commands ?? []);
           const paint = new this.canvasKit.Paint();
           canvas.save();
           try {
@@ -2354,7 +2328,7 @@ export class CanvasKitLayerRenderer {
     try {
       (canvas as unknown as { concat: (matrix: number[]) => void }).concat(matrix);
       for (const outline of op.paths) {
-        const path = this.pathFromCommands(outline.commands ?? []);
+        const path = this.createCommandPath(outline.commands ?? []);
         try {
           this.applyGlyphPathFillRule(path, outline.fillRule);
           if (stroke && op.stroke?.paintOrder === 'strokeThenFill') canvas.drawPath(path, stroke);
@@ -2421,7 +2395,7 @@ export class CanvasKitLayerRenderer {
         return;
       }
       if (node.kind === 'clip' && node.clip?.clipCommands && node.clip.childNodeId !== undefined) {
-        const path = this.pathFromCommands(node.clip.clipCommands);
+        const path = this.createCommandPath(node.clip.clipCommands);
         canvas.save();
         try {
           this.applyFillRule(path, node.clip.fillRule);
@@ -2438,7 +2412,7 @@ export class CanvasKitLayerRenderer {
         this.unsupportedOps.add('glyphOutline:replayInvariant');
         return;
       }
-      const path = this.pathFromCommands(pathNode.commands);
+      const path = this.createCommandPath(pathNode.commands);
       this.applyFillRule(path, pathNode.fillRule);
       const paint = new this.canvasKit.Paint();
       let shader: unknown | undefined;
@@ -2596,13 +2570,25 @@ export class CanvasKitLayerRenderer {
       const src = crop
         ? this.canvasKit.XYWHRect(crop.x, crop.y, crop.width, crop.height)
         : this.canvasKit.XYWHRect(0, 0, imageWidth, imageHeight);
-      const effectWasApplied = !!canvasKitImageEffectKey(op);
-      const useMipmaps = bitmapFiltering === undefined && !effectWasApplied
+      // imageForOp rejects failed preprocessing before replay. Only binary
+      // source-pixel effects need nearest to preserve their threshold/dither;
+      // grayscale and tone retain the profile's ordinary sampling policy.
+      const binaryEffectWasApplied = !!canvasKitImageEffectKey(op)
+        && (op.effect === 'blackWhite' || op.effect === 'pattern8x8');
+      const matrix = canvas.getTotalMatrix?.();
+      const sourceFiltering = magnificationFiltering(
+        op.imageInterpolation,
+        crop?.width ?? imageWidth, crop?.height ?? imageHeight,
+        dstW * (matrix ? Math.hypot(matrix[0], matrix[3]) : 1),
+        dstH * (matrix ? Math.hypot(matrix[1], matrix[4]) : 1),
+      );
+      const explicitFiltering = bitmapFiltering ?? (binaryEffectWasApplied ? 'nearest' : sourceFiltering);
+      const useMipmaps = explicitFiltering === undefined && !binaryEffectWasApplied
         && this.currentProfile !== 'fastPreview' && this.preferRasterDepth === 0
         && (this.renderMode === 'compat' || this.currentProfile === 'print' || this.currentProfile === 'highQuality')
         && ((crop?.width ?? imageWidth) > dstW * 1.2 || (crop?.height ?? imageHeight) > dstH * 1.2);
       this.drawImageRect(canvas, image, src, this.canvasKit.XYWHRect(dstX, dstY, dstW, dstH), opacity,
-        bitmapFiltering ?? (effectWasApplied ? 'nearest' : 'linear'), useMipmaps);
+        explicitFiltering ?? (binaryEffectWasApplied ? 'nearest' : 'linear'), useMipmaps);
     };
 
     const fillMode = op.fillMode ?? 'fitToSize';
@@ -4395,19 +4381,22 @@ export class CanvasKitLayerRenderer {
       }
       case 'limit': {
         const size = this.equationFontSizeFromBox(layout, fontSize);
-        const limitDrawn = this.drawEquationText(
-          canvas,
-          layout.kind.isUpper ? 'Lim' : 'lim',
-          x,
-          y + size * 0.8,
-          size,
-          color,
-          false,
-          false,
-          layout.width,
-          false,
-          '함초롬바탕',
-        );
+        // 이름의 글리프·폭·em 크기는 producer가 함께 정한다.
+        const limitDrawn = layout.kind.name
+          ? child(layout.kind.name, layout.kind.name.height, false, false)
+          : this.drawEquationText(
+            canvas,
+            layout.kind.isUpper ? 'Lim' : 'lim',
+            x,
+            y + size * 0.8,
+            size,
+            color,
+            false,
+            false,
+            layout.width,
+            false,
+            '함초롬바탕',
+          );
         return limitDrawn && (layout.kind.sub
           ? child(layout.kind.sub, fontSize * 0.7, false, false)
           : true);
@@ -4710,7 +4699,7 @@ export class CanvasKitLayerRenderer {
         } else if (primitive.kind === 'circle') {
           canvas.drawCircle(primitive.x, primitive.y, primitive.radius, paint);
         } else if (primitive.points.length > 0) {
-          const path = this.pathFromCommands([
+          const path = this.createCommandPath([
             { type: 'moveTo', x: primitive.points[0][0], y: primitive.points[0][1] },
             ...primitive.points.slice(1).map(([x, y]) => ({ type: 'lineTo' as const, x, y })),
             ...(primitive.closed ? [{ type: 'closePath' as const }] : []),
@@ -5042,7 +5031,7 @@ export class CanvasKitLayerRenderer {
       return;
     }
     for (const head of heads ?? []) {
-      const path = this.pathFromCommands(head.commands, 0, 0);
+      const path = this.createCommandPath(head.commands, 0, 0);
       const fill = this.makeFillPaint(head.filled ? color : '#ffffff');
       const outline = head.filled ? null : this.makeStrokePaint(color, Math.max(0.5, width * 0.3), 1);
       try {

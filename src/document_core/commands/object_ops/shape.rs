@@ -1338,6 +1338,7 @@ impl DocumentCore {
                 Some(TextBox {
                     list_attr: 0x20,
                     vertical_all: false,
+                    text_margin_explicit: false,
                     vertical_align: crate::model::table::VerticalAlign::Top,
                     margin_left: 283,
                     margin_right: 283,

@@ -421,8 +421,8 @@ export interface ParaProperties {
   // 탭 설정 탭 속성
   tabAutoLeft?: boolean;
   tabAutoRight?: boolean;
-  tabStops?: { position: number; type: number; fill: number }[];
-  defaultTabSpacing?: number;    // HWPUNIT (읽기 전용, 구역 기본 탭 간격)
+  tabStops?: { position: number; type: number; fill: number }[];  // position 은 HWPUNIT×2 (core/tab-units.ts)
+  defaultTabSpacing?: number;    // HWPUNIT×2 (읽기 전용, 구역 기본 탭 간격)
   // 테두리/배경 탭 속성
   borderFillId?: number;
   borderLeft?: { type: number; width: number; color: string };
@@ -1376,6 +1376,8 @@ export interface LayerPathOp {
 export interface LayerImageOp {
   type: 'image';
   bbox: LayerBounds;
+  /** Explicit source sampling; absent preserves the output profile policy. */
+  imageInterpolation?: 'nearest' | 'linear';
   mime?: string;
   base64?: string;
   imageRef?: number | string;
@@ -1464,7 +1466,7 @@ export type LayerEquationLayoutKind =
   | { type: 'subscript'; base: LayerEquationLayoutBox; sub: LayerEquationLayoutBox }
   | { type: 'subSup'; base: LayerEquationLayoutBox; sub: LayerEquationLayoutBox; sup: LayerEquationLayoutBox }
   | { type: 'bigOp'; symbol: string; sub?: LayerEquationLayoutBox; sup?: LayerEquationLayoutBox }
-  | { type: 'limit'; isUpper: boolean; sub?: LayerEquationLayoutBox }
+  | { type: 'limit'; isUpper: boolean; name?: LayerEquationLayoutBox; sub?: LayerEquationLayoutBox }
   | { type: 'matrix'; style: LayerEquationMatrixStyle; cells: LayerEquationLayoutBox[][] }
   | { type: 'rel'; arrow: LayerEquationLayoutBox; over: LayerEquationLayoutBox; under?: LayerEquationLayoutBox }
   | { type: 'eqAlign'; rows: Array<{ left: LayerEquationLayoutBox; right: LayerEquationLayoutBox }> }

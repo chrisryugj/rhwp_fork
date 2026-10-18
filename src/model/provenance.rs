@@ -20,6 +20,8 @@ pub enum SourceFormat {
     Hwp3,
     /// Standalone HWPML
     Hml,
+    /// PDF frontend에서 컴파일한 공통 IR.
+    Pdf,
 }
 
 /// 문서 출처 서명 — 파서가 확정하며 이후 read-only.

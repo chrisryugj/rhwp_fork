@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { LayerGlyphOutlineOp, LayerPathCommand } from '../src/core/types.ts';
+import type { LayerGlyphOutlineOp, LayerPathCommand, LayerTextRunOp } from '../src/core/types.ts';
+import { selectLayerTextVariantsForLeaf } from '../src/view/canvaskit/text-variant-selection.ts';
 import {
   glyphOutlinePayloadResourceKey,
   glyphOutlinePayloadStatus,
@@ -199,6 +200,49 @@ test('run baseline rejects finite f64 overflow and accepts both exact f32 limits
   }
 });
 
+test('monochrome fill and stroke require a complete run transform before admission', () => {
+  for (const create of [monochrome, stroked]) {
+    expectAccepted(create());
+    for (const placement of [undefined, {}, { baselineY: 0 }, { runToPage: undefined }]) {
+      const op: LayerGlyphOutlineOp = create();
+      op.placement = placement;
+      expectRejected(op);
+    }
+    const incomplete: LayerGlyphOutlineOp = create();
+    incomplete.placement!.runToPage = { a: 1, b: 0, c: 0, d: 1, e: 0 } as ReturnType<typeof affine>;
+    expectRejected(incomplete);
+  }
+});
+
+test('missing monochrome run transforms keep the whole TextRun fallback selected', () => {
+  for (const create of [monochrome, stroked]) {
+    const outline: LayerGlyphOutlineOp = {
+      ...create(),
+      variant: { equivalenceGroup: 'run', variantId: 'outline', variantKind: 'glyphOutline' },
+    };
+    const fallback: LayerTextRunOp = {
+      type: 'textRun', bbox: outline.bbox, text: '가',
+      variant: { equivalenceGroup: 'run', variantId: 'text', variantKind: 'textRun', isDefaultFallback: true },
+    };
+    const select = () => selectLayerTextVariantsForLeaf(
+      [outline, fallback], op => glyphOutlinePayloadStatus(op, ALL_PAYLOADS).supported,
+    );
+    assert.deepEqual([...select()], [outline]);
+    delete outline.placement!.runToPage;
+    assert.deepEqual([...select()], [fallback]);
+  }
+});
+
+test('payload-local transforms remain optional for color, bitmap and SVG glyphs', () => {
+  const color: LayerGlyphOutlineOp = colrv0();
+  const image: LayerGlyphOutlineOp = bitmap();
+  const vector: LayerGlyphOutlineOp = svg();
+  delete color.colorLayers!.layers![0].transformToRun;
+  delete image.bitmapGlyph!.transformToRun;
+  delete vector.svgGlyph!.transformToRun;
+  for (const op of [color, image, vector]) expectAccepted(op);
+});
+
 const AFFINE_CASES = [
   { name: 'run placement', create: monochrome, transform: (op: LayerGlyphOutlineOp) => op.placement!.runToPage! },
   { name: 'COLRv0 layer', create: colrv0, transform: (op: LayerGlyphOutlineOp) => op.colorLayers!.layers![0].transformToRun! },
@@ -250,6 +294,16 @@ for (const [kind, fields] of [
 const BOUNDS_CASES = [
   { name: 'bitmap placement', create: bitmap, bounds: (op: LayerGlyphOutlineOp) => op.bitmapGlyph!.placement! },
   { name: 'SVG viewBox', create: svg, bounds: (op: LayerGlyphOutlineOp) => op.svgGlyph!.viewBox! },
+  { name: 'SVG destination', create: svg, bounds: (op: LayerGlyphOutlineOp) => op.bbox },
+  {
+    name: 'SVG fontEmBox destination',
+    create: () => {
+      const op: LayerGlyphOutlineOp = svg();
+      op.svgGlyph!.fontEmBox = { x: -16, y: -12, width: 32, height: 48 };
+      return op;
+    },
+    bounds: (op: LayerGlyphOutlineOp) => op.svgGlyph!.fontEmBox!,
+  },
 ];
 
 for (const fixture of BOUNDS_CASES) {
@@ -264,6 +318,43 @@ for (const fixture of BOUNDS_CASES) {
     });
   }
   for (const [origin, extent] of [['x', 'width'], ['y', 'height']] as const) {
+    test(`${fixture.name} rejects ${extent} that narrows to zero`, () => {
+      for (const size of [1e-100, 2 ** -150]) {
+        const op = fixture.create();
+        Object.assign(fixture.bounds(op), { [origin]: 0, [extent]: size });
+        expectRejected(op);
+      }
+    });
+    test(`${fixture.name} rejects ${origin} endpoints that collapse after f32 narrowing`, () => {
+      // The first rect collapses in both backends. The next two distinguish
+      // Native's f32 addition from CanvasKit XYWHRect's f64-then-f32 addition.
+      for (const [position, size] of [
+        [1, 2 ** -25],
+        [1 + 2 ** -25, 3 * 2 ** -26],
+        [1 - 2 ** -26, 5 * 2 ** -26],
+      ]) {
+        const op = fixture.create();
+        Object.assign(fixture.bounds(op), { [origin]: position, [extent]: size });
+        expectRejected(op);
+      }
+    });
+    test(`${fixture.name} rejects ${origin} endpoint overflow from narrowed components`, () => {
+      // The exact f64 endpoint is F32_MAX, but separately rounding both
+      // components makes their f32 sum overflow to infinity.
+      const op = fixture.create();
+      Object.assign(fixture.bounds(op), {
+        [origin]: F32_MAX - 2 ** 103 + 2 ** 77,
+        [extent]: 2 ** 103 - 2 ** 77,
+      });
+      expectRejected(op);
+    });
+    test(`${fixture.name} rejects ${extent} that the three-decimal JSON wire rounds to zero`, () => {
+      for (const size of [2 ** -149, 3 * 2 ** -151, 0.00049]) {
+        const op = fixture.create();
+        Object.assign(fixture.bounds(op), { [origin]: 0, [extent]: size });
+        expectRejected(op);
+      }
+    });
     test(`${fixture.name} rejects overflowing ${origin} + ${extent} with finite f32 components`, () => {
       const op = fixture.create();
       Object.assign(fixture.bounds(op), { [origin]: F32_MAX, [extent]: F32_MAX });
@@ -277,9 +368,100 @@ for (const fixture of BOUNDS_CASES) {
       }
     });
   }
+  test(`${fixture.name} narrowing failure keeps the whole two-part TextRun fallback`, () => {
+    const outlines: LayerGlyphOutlineOp[] = [0, 1].map(partIndex => ({
+      ...fixture.create(),
+      variant: { equivalenceGroup: 'run', variantId: 'outline', variantKind: 'glyphOutline', partIndex, partCount: 2 },
+    }));
+    const fallback: LayerTextRunOp = {
+      type: 'textRun', bbox: monochrome().bbox, text: '가나',
+      variant: { equivalenceGroup: 'run', variantId: 'text', variantKind: 'textRun', isDefaultFallback: true },
+    };
+    const select = () => selectLayerTextVariantsForLeaf(
+      [...outlines, fallback], op => glyphOutlinePayloadStatus(op, ALL_PAYLOADS).supported,
+    );
+    assert.deepEqual([...select()], outlines);
+    for (const bounds of [
+      { x: 0, y: 0, width: 1e-100, height: 1 },
+      { x: 1, y: 0, width: 2 ** -25, height: 1 },
+      { x: 1 + 2 ** -25, y: 0, width: 3 * 2 ** -26, height: 1 },
+      { x: 1 - 2 ** -26, y: 0, width: 5 * 2 ** -26, height: 1 },
+    ]) {
+      Object.assign(fixture.bounds(outlines[1]), bounds);
+      assert.deepEqual([...select()], [fallback]);
+    }
+  });
 }
 
+test('SVG destination bounds must exist and have positive extents', () => {
+  for (const bounds of [undefined, null,
+    { x: 0, y: 0, width: 0, height: 1 },
+    { x: 0, y: 0, width: 1, height: -1 },
+  ]) {
+    const op = svg();
+    op.bbox = bounds as typeof op.bbox;
+    expectRejected(op);
+  }
+});
+
+test('SVG destination overflow keeps the complete TextRun fallback selected', () => {
+  const outline: LayerGlyphOutlineOp = {
+    ...svg(),
+    variant: { equivalenceGroup: 'run', variantId: 'svg', variantKind: 'glyphOutline' },
+  };
+  const fallback: LayerTextRunOp = {
+    type: 'textRun', bbox: outline.bbox, text: '가',
+    variant: { equivalenceGroup: 'run', variantId: 'text', variantKind: 'textRun', isDefaultFallback: true },
+  };
+  const select = () => selectLayerTextVariantsForLeaf(
+    [outline, fallback], op => glyphOutlinePayloadStatus(op, ALL_PAYLOADS).supported,
+  );
+  assert.deepEqual([...select()], [outline]);
+  for (const bounds of [
+    { x: 1e100, y: 0, width: 1, height: 1 },
+    { x: F32_MAX, y: 0, width: F32_MAX, height: 1 },
+  ]) {
+    outline.bbox = bounds;
+    assert.deepEqual([...select()], [fallback]);
+  }
+});
+
+test('SVG fontEmBox is the replay destination instead of the logical bbox', () => {
+  const op: LayerGlyphOutlineOp = svg();
+  op.svgGlyph!.fontEmBox = { x: -16, y: -12, width: 32, height: 48 };
+  for (const bounds of [undefined, null,
+    { x: 1e100, y: 0, width: 1, height: 1 },
+    { x: F32_MAX, y: 0, width: F32_MAX, height: 1 },
+  ]) {
+    op.bbox = bounds as typeof op.bbox;
+    expectAccepted(op);
+  }
+});
+
+test('an invalid SVG fontEmBox does not silently fall back to the logical bbox', () => {
+  for (const bounds of [null,
+    { x: 0, y: 0, width: 0, height: 1 },
+    { x: 0, y: 0, width: 1, height: -1 },
+  ]) {
+    const op: LayerGlyphOutlineOp = svg();
+    op.svgGlyph!.fontEmBox = bounds as NonNullable<typeof op.svgGlyph>['fontEmBox'];
+    expectRejected(op);
+  }
+});
+
 for (const field of ['width', 'height'] as const) {
+  test(`SVG intrinsic ${field} must remain positive after f32 narrowing`, () => {
+    for (const value of [1e-100, 2 ** -150]) {
+      const op = svg();
+      op.svgGlyph.intrinsicSize[field] = value;
+      expectRejected(op);
+    }
+    for (const value of [2 ** -149, 3 * 2 ** -151, 0.00000049]) {
+      const op = svg();
+      op.svgGlyph.intrinsicSize[field] = value;
+      expectRejected(op);
+    }
+  });
   test(`SVG intrinsic ${field} rejects finite f64 overflow and accepts exact f32::MAX`, () => {
     for (const value of OVERFLOW_VALUES) {
       const op = svg();
@@ -326,4 +508,184 @@ test('null bitmap placement and SVG viewBox are rejected without throwing', () =
   svgOp.svgGlyph.viewBox = null as unknown as typeof svgOp.svgGlyph.viewBox;
   expectRejected(bitmapOp);
   expectRejected(svgOp);
+});
+
+
+test('decimal wire rejection keeps whole-run fallback selection before and after JSON parsing', () => {
+  for (const fixture of BOUNDS_CASES) {
+    for (const extent of [2 ** -149, 0.00049]) {
+      const outline: LayerGlyphOutlineOp = {
+        ...fixture.create(),
+        variant: { equivalenceGroup: 'wire', variantId: 'outline', variantKind: 'glyphOutline' },
+      };
+      Object.assign(fixture.bounds(outline), { x: 0, width: extent });
+      const fallback: LayerTextRunOp = {
+        type: 'textRun', bbox: monochrome().bbox, text: 'A',
+        variant: { equivalenceGroup: 'wire', variantId: 'text', variantKind: 'textRun', isDefaultFallback: true },
+      };
+      const wire: LayerGlyphOutlineOp = JSON.parse(JSON.stringify(outline));
+      fixture.bounds(wire).width = 0; // Real Rust bbox writer uses exactly three decimals.
+      for (const candidate of [outline, wire]) {
+        const selected = selectLayerTextVariantsForLeaf(
+          [candidate, fallback], op => glyphOutlinePayloadStatus(op, ALL_PAYLOADS).supported,
+        );
+        assert.deepEqual([...selected], [fallback]);
+        assert.equal(glyphOutlinePayloadResourceKey(candidate), null);
+      }
+    }
+    const representable = fixture.create();
+    Object.assign(fixture.bounds(representable), { x: 0, width: 0.001 });
+    expectAccepted(representable);
+  }
+  const intrinsic = svg();
+  intrinsic.svgGlyph.intrinsicSize.width = 0.000001;
+  expectAccepted(intrinsic);
+});
+
+
+const LARGE_KEY_SCALARS = [
+  { value: 1e21, integer: '1000000000000000000000' },
+  { value: F32_MAX, integer: '340282346638528859811704183484516925440' },
+];
+
+for (const { value, integer } of LARGE_KEY_SCALARS) {
+  test(`bitmap and SVG keys keep full fixed decimals for ${value}`, () => {
+    const image = bitmap();
+    Object.assign(image.bitmapGlyph.placement, { x: 0, width: value });
+    image.bitmapGlyph.transformToRun.e = -value;
+    const imageKey = glyphOutlinePayloadResourceKey(image)!;
+    assert.ok(imageKey.includes(`placement:0.000,-8.000,${integer}.000,24.000:`));
+    assert.ok(imageKey.includes(`transform:1.000000,0.000000,0.000000,1.000000,-${integer}.000000,-8.000000`));
+    const vector = svg();
+    Object.assign(vector.svgGlyph.viewBox, { x: 0, width: value });
+    vector.svgGlyph.intrinsicSize.width = value;
+    vector.svgGlyph.transformToRun.f = value;
+    const vectorKey = glyphOutlinePayloadResourceKey(vector)!;
+    assert.ok(vectorKey.includes(`viewBox:0.000,-8.000,${integer}.000,24.000:`));
+    assert.ok(vectorKey.includes(`intrinsicSize:${integer}.000000,24.000000:`));
+    assert.ok(vectorKey.includes(`transform:1.000000,0.000000,0.000000,1.000000,-4.000000,${integer}.000000`));
+    // These are exactly the integral values emitted by Rust's {:.3}/{:.6}
+    // writers. Parsing the wire may not change the resource identity.
+    for (const op of [image, vector]) {
+      const parsed: LayerGlyphOutlineOp = JSON.parse(JSON.stringify(op));
+      assert.equal(glyphOutlinePayloadResourceKey(parsed), glyphOutlinePayloadResourceKey(op));
+      expectAccepted(parsed);
+    }
+  });
+}
+
+test('resource keys preserve negative zero from Rust fixed-decimal geometry', () => {
+  for (const create of [bitmap, svg]) {
+    const op = create();
+    const bounds = 'bitmapGlyph' in op ? op.bitmapGlyph.placement : op.svgGlyph.viewBox;
+    const transform = 'bitmapGlyph' in op ? op.bitmapGlyph.transformToRun : op.svgGlyph.transformToRun;
+    // Rust deliberately preserves the sign in its existing key and JSON wire;
+    // JSON.parse retains it, whereas JavaScript Number.toFixed() erases -0.
+    bounds.x = JSON.parse('-0.000');
+    transform.e = JSON.parse('-0.000000');
+    const key = glyphOutlinePayloadResourceKey(op)!;
+    assert.ok(key.includes('-0.000,-8.000,16.000,24.000'));
+    assert.ok(key.includes('transform:1.000000,0.000000,0.000000,1.000000,-0.000000,-8.000000'));
+    expectAccepted(op);
+  }
+});
+
+
+const SVG_MAPPING_FAILURES = [
+  { name: 'horizontal scale overflow', view: { x: 0, y: 0, width: 0.001, height: 1 }, dest: { x: 0, y: 0, width: F32_MAX, height: 1 } },
+  { name: 'vertical scale overflow', view: { x: 0, y: 0, width: 1, height: 0.001 }, dest: { x: 0, y: 0, width: 1, height: F32_MAX } },
+  { name: 'scaled source origin overflow', view: { x: 1e20, y: 0, width: 1e14, height: 1 }, dest: { x: 0, y: 0, width: 1e36, height: 1 } },
+  { name: 'composed destination translation overflow', view: { x: -4, y: 0, width: 1, height: 1 }, dest: { x: F32_MAX * 0.75, y: 0, width: F32_MAX * 0.125, height: 1 } },
+  { name: 'scale overflow only after decimal wire rounding', view: { x: 0, y: 0, width: 0.00149, height: 1 }, dest: { x: 0, y: 0, width: F32_MAX * 0.00125, height: 1 } },
+];
+
+for (const fixture of SVG_MAPPING_FAILURES) {
+  test(`SVG ${fixture.name} keeps the complete TextRun fallback`, () => {
+    const outline: LayerGlyphOutlineOp = {
+      ...svg(),
+      bbox: fixture.dest,
+      variant: { equivalenceGroup: 'mapped-svg', variantId: 'outline', variantKind: 'glyphOutline' },
+    };
+    outline.svgGlyph!.viewBox = fixture.view;
+    const fallback: LayerTextRunOp = {
+      type: 'textRun', bbox: monochrome().bbox, text: 'A',
+      variant: { equivalenceGroup: 'mapped-svg', variantId: 'text', variantKind: 'textRun', isDefaultFallback: true },
+    };
+    expectRejected(outline);
+    const selected = selectLayerTextVariantsForLeaf(
+      [outline, fallback], op => glyphOutlinePayloadStatus(op, ALL_PAYLOADS).supported,
+    );
+    assert.deepEqual([...selected], [fallback]);
+  });
+}
+
+test('SVG finite viewBox-to-destination mapping retains outline admission', () => {
+  for (const [view, dest] of [
+    [{ x: 0, y: 0, width: 0.001, height: 1 }, { x: 0, y: 0, width: 1, height: 1 }],
+    [{ x: -4, y: -8, width: 16, height: 24 }, { x: -10, y: -10, width: 20, height: 20 }],
+  ]) {
+    const op = svg();
+    op.svgGlyph.viewBox = view;
+    op.bbox = dest;
+    expectAccepted(op);
+  }
+});
+
+
+test('SVG mapping admission follows the explicit font em viewport', () => {
+  for (const [compatibilityWidth, emWidth, supported] of [[F32_MAX, 1, true], [1, F32_MAX, false]] as const) {
+    const op: LayerGlyphOutlineOp = svg();
+    op.bbox = { x: 0, y: 0, width: compatibilityWidth, height: 1 };
+    op.svgGlyph!.viewBox = { x: 0, y: 0, width: 0.001, height: 1 };
+    op.svgGlyph!.fontEmBox = { x: 0, y: 0, width: emWidth, height: 1 };
+    if (supported) expectAccepted(op);
+    else expectRejected(op);
+  }
+});
+
+
+function expectWholeRunWireSelection(candidate: LayerGlyphOutlineOp, supported: boolean) {
+  const outline: LayerGlyphOutlineOp = {
+    ...candidate,
+    variant: { equivalenceGroup: 'decimal-wire', variantId: 'outline', variantKind: 'glyphOutline' },
+  };
+  const fallback: LayerTextRunOp = {
+    type: 'textRun', bbox: monochrome().bbox, text: 'A',
+    variant: { equivalenceGroup: 'decimal-wire', variantId: 'text', variantKind: 'textRun', isDefaultFallback: true },
+  };
+  assert.deepEqual([...selectLayerTextVariantsForLeaf(
+    [outline, fallback], op => glyphOutlinePayloadStatus(op, ALL_PAYLOADS).supported,
+  )], [supported ? outline : fallback]);
+}
+
+for (const family of ['stroke', 'radial'] as const) {
+  test(`${family} admission preserves positivity on the six-decimal wire`, () => {
+    for (const value of [2 ** -149, 1e-7, 1e-6]) {
+      const op: LayerGlyphOutlineOp = family === 'stroke' ? stroked() : colrv1('radialGradientPath');
+      if (family === 'stroke') op.stroke!.width = value;
+      else op.colorLayers!.paintGraph!.nodes![1].radialGradientPath!.gradient!.radius = value;
+      const wire: LayerGlyphOutlineOp = structuredClone(op);
+      if (family === 'stroke') wire.stroke!.width = Number(value.toFixed(6));
+      else wire.colorLayers!.paintGraph!.nodes![1].radialGradientPath!.gradient!.radius = Number(value.toFixed(6));
+      for (const candidate of [op, wire]) {
+        if (value === 1e-6) expectAccepted(candidate);
+        else expectRejected(candidate);
+        expectWholeRunWireSelection(candidate, value === 1e-6);
+      }
+    }
+  });
+}
+
+test('COLRv1 sweep must remain a full circle after six-decimal export', () => {
+  for (const [start, end, supported] of [[0.0000004998, 360.0000005002, false], [0.000001, 360.000001, true]] as const) {
+    const op = colrv1('sweepGradientPath');
+    Object.assign(op.colorLayers!.paintGraph!.nodes![1].sweepGradientPath!.gradient!, { startAngleDegrees: start, endAngleDegrees: end });
+    const wire: LayerGlyphOutlineOp = structuredClone(op);
+    Object.assign(wire.colorLayers!.paintGraph!.nodes![1].sweepGradientPath!.gradient!, { startAngleDegrees: Number(start.toFixed(6)), endAngleDegrees: Number(end.toFixed(6)) });
+    for (const candidate of [op, wire]) {
+      if (supported) expectAccepted(candidate);
+      else expectRejected(candidate);
+      expectWholeRunWireSelection(candidate, supported);
+    }
+  }
 });

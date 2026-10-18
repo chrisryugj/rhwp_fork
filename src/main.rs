@@ -125,6 +125,7 @@ fn main() {
         Some("chart-to-csv") => exit_with(cli::outputs::tabular::chart_to_csv(&args[2..])),
         Some("csv-to-chart") => exit_with(cli::commands::tabular_import::csv_to_chart(&args[2..])),
         Some("export-hwpx") => exit_with(cli::commands::conversion::export_hwpx(&args[2..])),
+        Some("import-pdf") => exit_with(cli::commands::pdf_import::import_pdf(&args[2..])),
         Some("export-hml") => cli::commands::conversion::export_hml(&args[2..]),
         Some("export-doclang") => exit_with(cli::outputs::doclang::export_doclang(&args[2..])),
         Some("export-ir-schema") => exit_with(cmd_export_ir_schema(&args[2..])),
@@ -496,12 +497,16 @@ fn info_json_value(
         rhwp::parser::FileFormat::Hwpx => "hwpx",
         rhwp::parser::FileFormat::Hwp3 => "hwp3",
         rhwp::parser::FileFormat::Hml => "hml",
+        rhwp::parser::FileFormat::Pdf => "pdf",
         // 파싱이 성공한 뒤에는 도달하지 않지만, 계약상 문자열은 고정해 둔다.
         rhwp::parser::FileFormat::DrmProtected => "drm-protected",
         rhwp::parser::FileFormat::Empty => "empty",
         rhwp::parser::FileFormat::Unknown => "unknown",
     };
-    let version = if detected_format == rhwp::parser::FileFormat::Hml {
+    let version = if matches!(
+        detected_format,
+        rhwp::parser::FileFormat::Hml | rhwp::parser::FileFormat::Pdf
+    ) {
         serde_json::Value::Null
     } else {
         serde_json::Value::String(format!(

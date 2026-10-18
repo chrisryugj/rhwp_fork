@@ -1,7 +1,7 @@
 use resvg::{tiny_skia, usvg};
 use skia_safe::{
-    canvas::SrcRectConstraint, color_filters, image::RequiredProperties, Color, Data, FilterMode,
-    IRect, Image, Matrix, MipmapMode, Paint, Rect, SamplingOptions, TileMode,
+    canvas::SrcRectConstraint, color_filters, image::RequiredProperties, Color, ColorSpace, Data,
+    FilterMode, IRect, Image, Matrix, MipmapMode, Paint, Rect, SamplingOptions, TileMode,
 };
 use std::sync::{Arc, OnceLock};
 
@@ -160,9 +160,9 @@ pub(super) fn draw_image_bytes(
     let brightness_contrast_filter = |brightness: i8, contrast: i8| {
         let brightness = brightness.clamp(-100, 100) as f32 / 100.0;
         let slope = (100.0 + contrast.clamp(-100, 100) as f32) / 100.0;
-        // Skia color-matrix의 translation 열은 0..255 색상 범위를 쓴다.
-        // SVG filter의 정규화된 intercept와 동일한 색조가 되도록 변환한다.
-        let intercept = ((0.5 - 0.5 * slope) + brightness) * 255.0;
+        // Skia의 matrix_4x5는 정규화된 RGBA에 적용된 뒤 0..1로 제한된다.
+        // SVG와 같은 절편을 전달한다. 255를 곱하면 양수 밝기의 그림이 흰색으로 소실된다.
+        let intercept = (0.5 - 0.5 * slope) + brightness;
         color_filters::matrix_row_major(
             &[
                 slope, 0.0, 0.0, 0.0, intercept, 0.0, slope, 0.0, 0.0, intercept, 0.0, 0.0, slope,
@@ -224,7 +224,9 @@ pub(super) fn draw_image_bytes(
         .then(|| (width, height, canvas_raster_scale(canvas)));
     let binary_effect =
         matches!(effect, ImageEffect::BlackWhite | ImageEffect::Pattern8x8).then_some(effect);
-    let key = byte_key(b"decoded-image", bytes, &(svg_size, binary_effect));
+    // 같은 원본의 중립 캐시가 색조 변환을 우회하지 않도록 변환 조건도 구분한다.
+    let tone = (brightness != 0 || contrast != 0).then_some((effect, brightness, contrast));
+    let key = byte_key(b"decoded-image", bytes, &(svg_size, binary_effect, tone));
     let cached = cache.get(key, binary_effect.is_some());
     let (image, binary_preprocessed) = if let Some(CachedImageResource::Decoded {
         image,
@@ -244,6 +246,32 @@ pub(super) fn draw_image_bytes(
             None
         };
         let encoded_bytes = normalized_bytes.as_deref().unwrap_or(bytes);
+        // 한컴 색조를 원본 픽셀에 먼저 확정하고 동일 캐시·배치 경로로 재생한다.
+        // 재귀 입력은 보정 PNG와 중립 효과이므로 색조를 두 번 적용하지 않는다.
+        if let Some(adjusted) = crate::renderer::image_resolver::adjusted_picture_bytes(
+            encoded_bytes,
+            effect,
+            brightness,
+            contrast,
+        ) {
+            return draw_image_bytes(
+                canvas,
+                cache,
+                &adjusted,
+                x,
+                y,
+                width,
+                height,
+                fill_mode,
+                original_size,
+                crop,
+                crop_reference_size,
+                ImageEffect::RealPic,
+                0,
+                0,
+                sampling,
+            );
+        }
         // Binary effects are applied in source pixels before placement/filtering.
         // Embedded SVG is keyed by destination and device scale above, so its
         // raster-specific dither cannot leak to a differently sized placement.
@@ -296,6 +324,9 @@ pub(super) fn draw_image_bytes(
     let dst = Rect::from_xywh(x, y, width, height);
     let mut paint = Paint::default();
     paint.set_anti_alias(true);
+    let has_adjustments = brightness != 0 || contrast != 0;
+    let use_linear_adjustments =
+        has_adjustments && matches!(effect, ImageEffect::RealPic | ImageEffect::GrayScale);
     let effect_key = byte_key(b"image-effect", &[], &(filter_effect, brightness, contrast));
     let cached_effect = cache.get(effect_key, false);
     let color_filter = if let Some(CachedImageResource::Effect(filter)) = cached_effect {
@@ -305,6 +336,9 @@ pub(super) fn draw_image_bytes(
         let adjustment_filter = (brightness != 0 || contrast != 0)
             .then(|| brightness_contrast_filter(brightness, contrast));
         let filter = match (effect_filter, adjustment_filter) {
+            (Some(effect), Some(adjustment)) if use_linear_adjustments => {
+                color_filters::compose(effect, adjustment)
+            }
             (Some(effect), Some(adjustment)) => color_filters::compose(adjustment, effect),
             (Some(effect), None) => Some(effect),
             (None, Some(adjustment)) => Some(adjustment),
@@ -316,6 +350,17 @@ pub(super) fn draw_image_bytes(
         filter
     };
     if let Some(color_filter) = color_filter {
+        // SVG 필터의 기본 색 공간은 linearRGB다. 검증한 일반 그림·회색조의
+        // 보정 체인 전체를 같은 공간에서 계산한다.
+        let color_filter = if use_linear_adjustments {
+            let Some(filter) = color_filter.with_working_color_space(ColorSpace::new_srgb_linear())
+            else {
+                return false;
+            };
+            filter
+        } else {
+            color_filter
+        };
         paint.set_color_filter(color_filter);
     }
 
@@ -345,6 +390,25 @@ pub(super) fn draw_image_bytes(
     });
 
     let draw_image_rect = |src: Option<Rect>, dst: Rect| {
+        let matrix = canvas.local_to_device_as_3x3();
+        let source = src.unwrap_or(Rect::from_xywh(0., 0., decoded_width, decoded_height));
+        let interpolation = super::super::image_resolver::png_sampling::magnification(
+            super::super::image_resolver::png_sampling::interpolation(bytes),
+            (source.width() as f64, source.height() as f64),
+            (
+                (dst.width() * matrix.scale_x().hypot(matrix.skew_y())) as f64,
+                (dst.height() * matrix.skew_x().hypot(matrix.scale_y())) as f64,
+            ),
+        );
+        let sampling = if binary_preprocessed {
+            sampling
+        } else {
+            match interpolation {
+                Some(false) => ImageSampling::nearest(),
+                Some(true) => ImageSampling::linear(),
+                None => sampling,
+            }
+        };
         if let Some(src) = src.as_ref() {
             canvas.draw_image_rect_with_sampling_options(
                 &image,

@@ -25,8 +25,10 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 try:
     from scripts.visual_sweep_workers import ordered_page_map
+    from scripts.visual_sweep_images import open_page_rgb, page_rgb
 except ModuleNotFoundError:
     from visual_sweep_workers import ordered_page_map
+    from visual_sweep_images import open_page_rgb, page_rgb
 
 
 LABEL_FONT_ENV = "RHWP_VISUAL_SWEEP_LABEL_FONT"
@@ -109,7 +111,7 @@ COLUMN_X_OVERLAP_LIMIT = 0.55
 QUESTION_MARKER_Y_DRIFT_LIMIT_PX = 42.0
 DEFAULT_PIXEL_DIFF_THRESHOLD = 32
 SILHOUETTE_METHOD = "threshold_boundary_color_support_v1"
-PR_REVIEW_MIN_TOLERANT_CONTENT_MATCH_PERCENT = 90.0
+PR_REVIEW_MIN_RAW_MATCH_PERCENT = 90.0
 VISUAL_SWEEP_RUN_SCHEMA_VERSION = 2
 VISUAL_SWEEP_PAGE_SCHEMA_VERSION = 1
 LARGE_INK_TILE_SIZE = 16
@@ -561,6 +563,11 @@ def ensure_default_rhwp_binary_is_current(root: Path, rhwp_bin: str) -> None:
         )
 
 
+def image_decoding_provenance() -> dict[str, str]:
+    source = Path(__file__).with_name("visual_sweep_images.py")
+    return {"alpha_background": "#ffffff", "script_sha256": sha256_file(source)}
+
+
 def sweep_provenance(
     root: Path,
     hwp: Path,
@@ -576,6 +583,7 @@ def sweep_provenance(
             "path": safe_rel_str(root, Path(__file__).resolve()),
             "sha256": sha256_file(Path(__file__).resolve()),
         },
+        "image_decoding": image_decoding_provenance(),
         "svg_rasterizer": svg_rasterizer,
         "pdf_rasterizer": {"program": "pdftoppm", "thin_line_mode": "shape"},
         "comparison_profile": "print",
@@ -1036,12 +1044,22 @@ def overlay_summary_for_metrics(
         for item in metrics
         if isinstance(item.get("tolerant_content_match_percent"), (int, float))
     ]
+    raw_matches = [
+        float(item["silhouette_raw_match_percent"])
+        for item in metrics
+        if isinstance(item.get("silhouette_raw_match_percent"), (int, float))
+    ]
     worst_pixel = min(pixel_matches) if pixel_matches else None
     worst_ink = min(ink_matches) if ink_matches else None
     worst_proxy = min(proxy_matches) if proxy_matches else None
     worst_tolerant = min(tolerant_matches) if tolerant_matches else None
     return {
         "compared_pages": len(metrics),
+        "average_silhouette_raw_match_percent": round(sum(raw_matches) / len(raw_matches), 5)
+        if raw_matches else None,
+        "worst_silhouette_raw_match_percent": round(min(raw_matches), 5)
+        if raw_matches else None,
+
         "pixel_diff_threshold": pixel_diff_threshold,
         "average_pixel_match_percent": round(sum(pixel_matches) / len(pixel_matches), 5)
         if pixel_matches
@@ -1088,7 +1106,7 @@ def pr_review_gate(
 ) -> dict[str, object]:
     """생성한 검토 PNG의 PR 검토 판정을 반환한다.
 
-    2px 관용 실루엣 일치율이 90% 미만이면 승인 근거가 되지 않는다.
+    색상 경계 보정 전2px 실루엣(raw) 일치율이 90% 미만이면 승인 근거가 되지 않는다.
     원인 진단용 래스터 산출물은 모두 보존하되 결과 명세에 재검토 필요를 기록하고
     main은 실패로 끝난다. 근거를 갖춘 해결 불가능한 글꼴 차이는 직접 검토한 쪽의
     낮은 점수만 예외로 인정하며 측정 누락은 면제하지 않는다."""
@@ -1099,14 +1117,14 @@ def pr_review_gate(
         page = item.get("page")
         if isinstance(page, int):
             measured_pages.add(page)
-        value = item.get("tolerant_content_match_percent")
+        value = item.get("silhouette_raw_match_percent")
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 100:
             unavailable.append(page)
-        elif value < PR_REVIEW_MIN_TOLERANT_CONTENT_MATCH_PERCENT:
+        elif value < PR_REVIEW_MIN_RAW_MATCH_PERCENT:
             below_threshold.append(
                 {
                     "page": page,
-                    "tolerant_content_match_percent": round(float(value), 5),
+                    "silhouette_raw_match_percent": round(float(value), 5),
                 }
             )
 
@@ -1135,7 +1153,8 @@ def pr_review_gate(
         status = "passed"
     return {
         "status": status,
-        "minimum_tolerant_content_match_percent": PR_REVIEW_MIN_TOLERANT_CONTENT_MATCH_PERCENT,
+        "metric": "silhouette_raw_match_percent",
+        "minimum_silhouette_raw_match_percent": PR_REVIEW_MIN_RAW_MATCH_PERCENT,
         "below_threshold_pages": below_threshold,
         "unavailable_metric_pages": unavailable,
         "font_mismatch_evidence": font_mismatch_evidence,
@@ -1147,7 +1166,7 @@ def pr_review_gate(
 def review_gate_reason(gate: dict[str, object]) -> str:
     """검출된 점수·지표·쪽수 결함을 실제 사유로 표시한다."""
     reasons = [
-        f"p{item.get('page')}={item.get('tolerant_content_match_percent')}%"
+        f"p{item.get('page')}={item.get('silhouette_raw_match_percent')}%"
         for item in gate.get("below_threshold_pages", [])
         if isinstance(item, dict)
     ]
@@ -1864,7 +1883,7 @@ def subpixel_tolerant_content_match_details(
     안티앨리어싱·서브픽셀 차이를 구분해 보여 주는 보조 지표다."""
     if radius_px < 0:
         raise ValueError("radius_px must be non-negative")
-    rhwp, pdf = padded_pair(rhwp.convert("RGB"), pdf.convert("RGB"))
+    rhwp, pdf = padded_pair(rhwp, pdf)
     # 8비트 RGB에서 채널차>24이면 최소 채널은230 이하이므로,
     # 기존 is_content_pixel의 내용 픽셀 판정은 최소 채널<232와 정확히 같다.
     # PIL 연산으로 같은 마스크를 만들며 임계값이나 비교 영역은 바꾸지 않는다.
@@ -1962,7 +1981,7 @@ def is_horizontal_rule_pixel(pixel: tuple[int, int, int]) -> bool:
 
 
 def detect_frame(image: Image.Image) -> tuple[int, int, int, int]:
-    rgb = image.convert("RGB")
+    rgb = page_rgb(image)
     w, h = rgb.size
     px = rgb.load()
 
@@ -2037,7 +2056,7 @@ def horizontal_rule_candidates(
     frame: tuple[int, int, int, int],
     expected_length_px: float | None = None,
 ) -> list[dict[str, float]]:
-    rgb = image.convert("RGB")
+    rgb = page_rgb(image)
     px = rgb.load()
     left, top, right, bottom = frame
     frame_w = right - left
@@ -2261,7 +2280,7 @@ def content_bounds(
     y_min: int,
     y_max: int,
 ) -> tuple[int, int, int, int, int] | None:
-    rgb = image.convert("RGB")
+    rgb = page_rgb(image)
     w, h = rgb.size
     px = rgb.load()
     x_min = max(0, x_min)
@@ -2296,7 +2315,7 @@ def row_bands(
     min_pixels_per_row: int,
     gap: int = 2,
 ) -> list[dict[str, float]]:
-    rgb = image.convert("RGB")
+    rgb = page_rgb(image)
     px = rgb.load()
     left, top, right, bottom = frame
     rows: list[tuple[int, int, int, int]] = []
@@ -3746,7 +3765,7 @@ def render_tree_equation_overlap_candidates(
     tree = load_render_tree(tree_path)
     if tree is None:
         return []
-    rhwp_image = Image.open(rhwp_image_path).convert("RGB") if rhwp_image_path else None
+    rhwp_image = open_page_rgb(rhwp_image_path) if rhwp_image_path else None
 
     equations: list[dict[str, object]] = []
     text_runs: list[dict[str, object]] = []
@@ -4046,7 +4065,7 @@ def render_tree_frame_tail_candidates(
     left, top, right, bottom = frame
     mid_x = (left + right) / 2.0
     candidates: list[dict[str, object]] = []
-    raster_pixels = raster_image.convert("RGB").load() if raster_image is not None else None
+    raster_pixels = page_rgb(raster_image).load() if raster_image is not None else None
     for line in collect_render_tree_text_lines(tree):
         tree_box = line["bbox"]
         assert isinstance(tree_box, tuple)
@@ -4204,8 +4223,8 @@ def analyze_page(
     endnote_shape: dict[str, object],
     pixel_diff_threshold: int,
 ) -> dict[str, object]:
-    rhwp = Image.open(rhwp_path).convert("RGB")
-    pdf = Image.open(pdf_path).convert("RGB")
+    rhwp = open_page_rgb(rhwp_path)
+    pdf = open_page_rgb(pdf_path)
     rhwp_frame = detect_frame(rhwp)
     pdf_frame = detect_frame(pdf)
     frame_is_interior_decoration = frames_are_interior_decorations(
@@ -5091,8 +5110,8 @@ def padded_pair(left_image: Image.Image, right_image: Image.Image) -> tuple[Imag
     height = max(left_image.height, right_image.height)
     left = Image.new("RGB", (width, height), "white")
     right = Image.new("RGB", (width, height), "white")
-    left.paste(left_image.convert("RGB"), (0, 0))
-    right.paste(right_image.convert("RGB"), (0, 0))
+    left.paste(page_rgb(left_image), (0, 0))
+    right.paste(page_rgb(right_image), (0, 0))
     return left, right
 
 
@@ -5128,8 +5147,8 @@ def make_overlay_page(
     *,
     pixel_diff_threshold: int,
 ) -> dict[str, object]:
-    rhwp_raw = Image.open(rhwp_path).convert("RGB")
-    pdf_raw = Image.open(pdf_path).convert("RGB")
+    rhwp_raw = open_page_rgb(rhwp_path)
+    pdf_raw = open_page_rgb(pdf_path)
     rhwp, pdf = padded_pair(rhwp_raw, pdf_raw)
     width, height = rhwp.size
     overlay = Image.new("RGB", (width, height), "white")
@@ -5284,18 +5303,19 @@ def make_overlay_compares(
 
 
 def review_comment_line(metrics: dict[str, object] | None) -> str:
-    strict_percent = metrics.get("visual_accuracy_proxy_percent") if metrics else None
-    tolerant_percent = metrics.get("tolerant_content_match_percent") if metrics else None
-    if isinstance(strict_percent, (int, float)) and isinstance(tolerant_percent, (int, float)):
-        raw = metrics.get("silhouette_raw_match_percent") if metrics else None
-        boundary_note = f" 이진화 원값 {raw:.2f}%." if isinstance(raw, (int, float)) else ""
-        return (
-            "코멘트: 2px 이웃 관용 내용 실루엣 일치율 보조값 = 약 "
-            f"{tolerant_percent:.2f}% (엄격 내용 픽셀: {strict_percent:.2f}%)." + boundary_note
-        )
-    if isinstance(strict_percent, (int, float)):
-        return f"코멘트: 내용 픽셀 중심 자동 일치율 보조값 = 약 {strict_percent:.2f}%."
-    return "코멘트: 내용 픽셀 중심 자동 일치율 보조값 = 확인 불가."
+    if not metrics:
+        return "코멘트: raw 실루엣 판정값 = 확인 불가."
+    raw = metrics.get("silhouette_raw_match_percent")
+    if not isinstance(raw, (int, float)):
+        return "코멘트: raw 실루엣 판정값 = 확인 불가."
+    notes = [f"코멘트: 판정값 raw 실루엣(2px 이웃) = {raw:.2f}%."]
+    adjusted = metrics.get("tolerant_content_match_percent")
+    if isinstance(adjusted, (int, float)):
+        notes.append(f"색상 경계 보정값(진단용) {adjusted:.2f}%.")
+    strict = metrics.get("visual_accuracy_proxy_percent")
+    if isinstance(strict, (int, float)):
+        notes.append(f"엄격 내용 픽셀 {strict:.2f}%.")
+    return " ".join(notes)
 
 
 def make_review_panels(
@@ -5312,8 +5332,8 @@ def make_review_panels(
         overlay_path = overlays_by_page.get(page)
         if overlay_path is None:
             continue
-        compare = Image.open(compare_path).convert("RGB")
-        overlay = Image.open(overlay_path).convert("RGB")
+        compare = open_page_rgb(compare_path)
+        overlay = open_page_rgb(overlay_path)
         width = compare.width + gutter + overlay.width
         # 겹침 이미지 자체가 상단 대상 키와 하단 한국어 지표를 이미 포함한다. 검토 이미지에서 같은
         # 하단 설명을 다시 만들면 지표가 두 번 출력되므로 두 패널의 최대 높이만 사용한다.
@@ -5334,8 +5354,8 @@ def make_compares(rhwp_pngs: list[Path], pdf_pngs: list[Path], out_dir: Path, ke
     font = label_font()
     pages: list[Path] = []
     for index in range(count):
-        rhwp = Image.open(rhwp_pngs[index]).convert("RGB")
-        pdf = Image.open(pdf_pngs[index]).convert("RGB")
+        rhwp = open_page_rgb(rhwp_pngs[index])
+        pdf = open_page_rgb(pdf_pngs[index])
         page_number = page_num(rhwp_pngs[index])
         width = max(rhwp.width, pdf.width)
         height = max(rhwp.height, pdf.height)
@@ -5368,7 +5388,7 @@ def make_contact_sheet(compare_pages: list[Path], out_path: Path) -> Path:
     font = label_font()
     thumbs: list[Image.Image] = []
     for page in compare_pages:
-        image = Image.open(page).convert("RGB")
+        image = open_page_rgb(page)
         ratio = thumb_w / image.width
         thumb = image.resize((thumb_w, max(1, int(image.height * ratio))))
         labeled = Image.new("RGB", (thumb.width, thumb.height + 26), "white")
@@ -5434,7 +5454,7 @@ def write_silhouette_tsv(
         for page, details, inputs_for_page in ordered_page_map(silhouette_pair_metrics, pairs, workers):
             value = details["tolerant_content_match_percent"]
             metrics.append({"page": page, **details})
-            stream.write(f"{page}\t{value:.5f}\t{int(value < PR_REVIEW_MIN_TOLERANT_CONTENT_MATCH_PERCENT)}"
+            stream.write(f"{page}\t{value:.5f}\t{int(details['silhouette_raw_match_percent'] < PR_REVIEW_MIN_RAW_MATCH_PERCENT)}"
                          f"\t{details['silhouette_raw_match_percent']:.5f}"
                          f"\t{details['silhouette_boundary_reconciled_pixels']}\n")
             inputs.append(inputs_for_page)
@@ -5447,6 +5467,7 @@ def write_silhouette_tsv(
         "completed_pages": [page for page, _, _ in pairs],
         "missing_pages": [], "tsv": str(tsv), "radius_px": 2,
         "inputs": inputs, "metrics": metrics, "silhouette_method": SILHOUETTE_METHOD,
+        "image_decoding": image_decoding_provenance(),
         "color_tolerance": DEFAULT_PIXEL_DIFF_THRESHOLD, "pr_review_gate": gate,
     }
     write_json_atomic(out_dir / "silhouette_manifest.json", manifest)

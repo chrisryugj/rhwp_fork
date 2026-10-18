@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-10-09
+last_verified: 2026-10-18
 ---
 
 # PR 접수와 리뷰 기록
@@ -13,7 +13,7 @@ merge, merge 후속 처리는 기본 경로 문서와 [merge 후속 처리](post
 ## 페이지별 TSV와 PR 재검토 필수 조건
 
 조판·렌더링에 영향을 주는 변경은 **검증 대상 각 문서의 전체 페이지 TSV를 먼저 산출**한다.
-`tolerant_content_match_percent`(2px 이웃 관용 내용 실루엣 일치율)를 페이지별로 확인하며,
+`silhouette_raw_match_percent`(색상 경계 보정 전2px 내용 실루엣 일치율)를 페이지별로 확인하며,
 **한 페이지라도 90% 미만이면 PR을 재검토한다.** 평균값이나 대표 페이지의 높은 점수로
 미달 쪽을 상쇄하지 않는다. 정확히 90%는 통과한다.
 
@@ -33,12 +33,38 @@ merge, merge 후속 처리는 기본 경로 문서와 [merge 후속 처리](post
 먼저 reviewer를 assign한다. 대량 PR은 [다수 PR과 update branch](multi_pr_update_branch.md)의 사전 분류 뒤,
 각 원 PR마다 assign한다.
 
+순서는 **최소 사전 분류 → 원 PR별 reviewer 지정·API 재확인 → 상세 metadata·본문·파일·코멘트 조사 →
+local fetch·체리픽 → 검증·review 기록**이다. 사전 분류에서는 대상 PR 번호, 작성자, open/draft 상태,
+base와 통합 그룹을 식별하는 정보만 확인한다. 상세 조사를 끝낸 뒤 reviewer를 지정하지 않는다.
+체리픽 통합 PR을 따로 만들더라도 지정 대상은 **각 원 PR**이며, 통합 PR 하나의 지정으로 대신하지 않는다.
+
+작업지시자가 지정한 reviewer를 사용하고 기존 reviewer는 제거하지 않는다. 이미 지정돼 있으면 추가 요청을
+반복하지 않고 API로 확인한다. 명령 성공만으로 배정 완료를 단정하지 않으며, API 응답의 `users`에 대상
+login이 있어야 다음 단계로 진행한다. 지정 실패·확인 불가이면 해당 원 PR의 상세 조사·fetch·체리픽을 보류하고
+실패 이유를 보고한다. 승인된 검토 범위 안의 reviewer 지정 때문에 작업지시자 승인을 다시 요청하지 않는다.
+
 collaborator 자신의 self PR은 reviewer를 지정하지 않는다. 이 경우 review 문서에 작성자 self-review임을
 기록하고, 최신 CI와 merge 조건을 독립적으로 확인한다.
 
+`pr_number`와 `reviewer`는 실제 대상 값으로 바꾼다. 여러 PR은 원 PR마다 이 단계를 완료한다.
+
 ~~~bash
-gh pr edit N --repo edwardkim/rhwp --add-reviewer <reviewer>
+pr_number=N
+reviewer=REVIEWER_LOGIN
+assigned_reviewers=$(gh api "repos/edwardkim/rhwp/pulls/$pr_number/requested_reviewers") || exit 1
+if ! printf '%s\n' "$assigned_reviewers" \
+  | jq -e --arg reviewer "$reviewer" 'any(.users[]; .login == $reviewer)' >/dev/null; then
+  gh api --method POST "repos/edwardkim/rhwp/pulls/$pr_number/requested_reviewers" \
+    -f "reviewers[]=$reviewer" || exit 1
+fi
+# jq -e가 실패하면 다음 상세 조사·fetch·체리픽을 실행하지 않는다.
+gh api "repos/edwardkim/rhwp/pulls/$pr_number/requested_reviewers" \
+  | jq -e --arg reviewer "$reviewer" 'any(.users[]; .login == $reviewer)' || exit 1
 ~~~
+
+`gh pr edit --add-reviewer`를 사용했더라도 같은 API 재확인을 수행한다. Projects classic GraphQL 오류 등으로
+CLI 편집이 실패하면 위 REST POST 경로를 사용한다. reviewer login과 확인 결과를 검토 기록에 남기며,
+인증 토큰은 출력하지 않는다.
 
 ## 2.2 기본 metadata
 
@@ -137,7 +163,7 @@ PR review의 공통 항목**이다. 작성자·역할·PR 크기로 생략하지
 | 줄 소속과 점유 높이 | 저장 LineSeg·재조판 경로 각각의 적용 여부와 소속 결정 근거, 기준선·여백·줄간격 반영 | 충족/미충족/미검증/비해당 |
 | 사례와 증거의 독립성 | 해당 경계·반례의 실제 실행 결과, 합성 계약/정상 한컴 출력/미검증 구분 | 충족/미충족/미검증/비해당 |
 | 기준값 변경 | baseline·golden·허용치 전후 diff, 발생 환경·노드·경계 좌표, 정상 변화의 독립 근거; 변경 없으면 비해당 | 충족/미충족/미검증/비해당 |
-| 회귀 추가·변경의 선행 조건 | 같은 원본·독립 Print PDF의 관련 모든 페이지에서 Native/fresh WASM 최저 90% 이상 확인 후 검사 추가·변경; 관계 검사를 기본으로 하며 완료된 해당 페이지의 양쪽 실루엣100%·직접 판독 조건을 충족하면 ±2px 좌표 고정도 허용 | 충족/미충족/미검증/비해당 |
+| 회귀 추가·변경의 선행 조건 | 같은 원본·독립 Print PDF의 관련 모든 페이지에서 Native/fresh WASM 최저 raw 90% 이상 확인 후 검사 추가·변경; 관계 검사를 기본으로 하며 완료된 해당 페이지의 양쪽 raw 실루엣 98% 이상·직접 판독 조건을 충족하면 ±2px 좌표 고정도 허용 | 충족/미충족/미검증/비해당 |
 | 90% 통과 후 확대 판독 | 변경·알려진 차이·사용자 지적 영역의 같은 배율 Print/Native/fresh WASM 대조; 수식 모양·장평·기준선·첨자·장식과 관계 기호·본문·보기 번호·탭·줄 사이 간격의 관측·원인·처리 결과 | 충족/미충족/미검증/비해당 |
 | 주장과 검증 범위 | source SHA·명령·결과·직접 확인한 산출물, 남은 미검증과 코드 검토상 우려/실행 검출 회귀의 구분 | 충족/미충족/미검증/비해당 |
 
@@ -187,23 +213,30 @@ DPI/좌표계와 Native/fresh WASM 증거를 함께 대조한다.
 ## 2.8 검증 입력 커밋 확인
 
 이 항목도 역할·작성자와 관계없이 모든 정식 PR review에 적용한다. 직접 검증에 사용한 HWP/HWPX와
-기준·비교 PDF는 **수용 판정 전에 검토 대상 commit에 포함**되어야 한다. `korea_downloads` 같은 개인
-다운로드 경로, `/tmp`, output, GitHub 첨부 URL에만 있는 파일은 저장소에 보존된 입력으로 세지 않는다.
+50 MiB 미만 기준·비교 PDF는 **수용 판정 전에 검토 대상 commit에 포함**되어야 한다.
+**50 MiB(52,428,800바이트) 이상 PDF는 로컬에만 보관하고 PR에서 제외**하며 아래 별도 확인을 적용한다.
+그 외 파일은 `korea_downloads` 같은 개인 다운로드 경로, `/tmp`, output, GitHub 첨부 URL에만 있으면
+저장소에 보존된 입력으로 세지 않는다.
 테스트 통과·파일 존재·`git add`만으로 커밋 포함을 확인했다고 쓰지 않는다.
 
 1. 시각 검증, focused 회귀, Native/WASM 비교 등에 실제 사용한 입력과 기준 PDF를 열거한다.
    입력 파일을 만들지 않고 코드에서 생성·소비하는 단위 테스트는 별도 파일을 만들 필요가 없다.
-2. 기존에 커밋된 동일 파일은 그 경로를 재사용한다. 누락한 원본·PDF와 파일로 사용한 합성·축소 변형은
+2. 위 커밋 대상 중 기존에 커밋된 동일 파일은 그 경로를 재사용한다. 누락한 원본·PDF와 파일로 사용한 합성·축소 변형은
    [원본 fixture 보존 절차](visual_fixture_evidence.md#원본-fixture와-기준-pdf-보존)에 따라 같은 검토 branch에 추가한다.
 3. 최종 검증 명령은 저장소 경로를 사용한다. 외부 경로에서 먼저 실행했다면 저장소 파일 및 commit과
    SHA-256이 같은지 대조하고 경로 변경과 동일성 확인을 기록한다. 내용이 달라졌으면 영향받는 검증을 다시 실행한다.
 4. 검토 대상 commit의 파일 내용과 실행한 파일을 대조한다. 각 입력의 저장소 경로, 출처·역할,
    SHA-256, 확인한 commit SHA를 review Markdown 또는 정식 fixture manifest에 남긴다.
    Git LFS 대상이면 pointer의 존재만 확인하지 않고 실제 object의 확보와 내용 해시까지 확인한다.
+5. 50 MiB 이상 PDF는 commit 포함 검사에서 제외한다. [대용량 PDF 보존](visual_fixture_evidence.md#원본-fixture와-기준-pdf-보존)에
+   따라 실제 로컬 파일의 경로·바이트 수·SHA-256·출처·전체 쪽수와 생성/검증 명령을 기록하고,
+   전쪽 Native/fresh WASM TSV 및 대표 PNG를 연결한다. 파일을 확보해 같은 SHA로 검증했고 PR에서
+   제외했으면 `충족 — 대용량 PDF 로컬 보관`으로 기록한다. 크기만으로 검증 자체를 생략하지 않는다.
 
 review 문서에는 `충족`, `미충족`, `미검증`, `비해당`과 근거를 적는다. HWP/HWPX/PDF 파일을 사용하지
 않았을 때만 이유를 적어 `비해당`으로 처리한다. 개인 경로에서만 재현되거나 필수 입력이 누락됐으면
-`머지 보류`로 기록하고, 누락 파일의 커밋과 동일 입력 검증을 해제 조건으로 적는다.
+`머지 보류`로 기록하고, 누락 파일의 확보·해당 크기별 보존 및 동일 입력 검증을 해제 조건으로 적는다.
+위 대용량 PDF 로컬 보관을 충족한 경우에는 그 PDF의 커밋을 요구하지 않는다.
 합성 입력의 내부 계약과 실제 한컴 원본·PDF의 시각 증거는 구분하며, 파일을 커밋했다는 사실만으로
 합성 입력에 한컴 기준 출력이 있다고 주장하지 않는다.
 

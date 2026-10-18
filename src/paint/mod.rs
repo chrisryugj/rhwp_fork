@@ -4,17 +4,19 @@
 
 pub(crate) const MAX_POSITIONED_CONTROL_MARKS_PER_RUN: usize = 4096;
 pub(crate) const MAX_PORTABLE_FONT_BLOB_BYTES: usize = 32 * 1024 * 1024;
-pub(crate) const MAX_GLYPH_FONT_SIZE_PX: f64 = 4096.0;
+pub(crate) use font_size::MAX_GLYPH_FONT_SIZE_PX;
 pub(crate) const MAX_PORTABLE_GLYPHS_PER_RUN: usize = 4096;
 
 pub mod builder;
 pub mod color_glyph;
 pub mod font;
 pub mod font_glyph;
+mod font_size;
 mod json;
 pub mod layer_tree;
 mod paint_bounds;
 pub mod paint_op;
+mod paper_viewport;
 pub mod profile;
 pub mod replay_order;
 pub mod resources;

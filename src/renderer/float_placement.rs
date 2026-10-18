@@ -2,6 +2,8 @@
 
 mod column_ole;
 pub(crate) use column_ole::column_ole_placement;
+mod overlay_outer_frame;
+pub(crate) use overlay_outer_frame::overlay_table_outer_margin_left_hu;
 
 mod stored_cell_flow_picture;
 pub(crate) use stored_cell_flow_picture::{
@@ -10,9 +12,13 @@ pub(crate) use stored_cell_flow_picture::{
 mod stored_closed_cell_frame;
 mod stored_empty_host_frame;
 mod stored_nested_before_host;
+mod stored_nested_closing_host;
+mod stored_nested_terminal_line;
 pub(crate) use stored_nested_before_host::{
     stored_nested_before_host_placement, stored_table_before_host_frame,
 };
+pub(crate) use stored_nested_closing_host::stored_nested_host_closes_after_previous_line;
+pub(crate) use stored_nested_terminal_line::stored_nested_terminal_host_line_height_hu;
 mod stored_cut_outer_frame;
 mod stored_header_frame;
 pub(crate) use stored_cut_outer_frame::stored_hwpx_cut_owns_outer_frame;
@@ -41,6 +47,11 @@ use super::hwpunit_to_px;
 use super::layout::picture_flow_frame_size_hu;
 use super::layout_frame::{FrameExclusion, FrameExclusionPolicy, LayoutFrame};
 use super::page_layout::LayoutRect;
+
+mod stored_square_top_band;
+pub(crate) use stored_square_top_band::{
+    stored_empty_line_has_closed_source_box, stored_square_top_band, table_reserved_height_hu,
+};
 
 /// Required box for saved text in a cell. The declaration already owns its
 /// padding when the saved line box fills it; otherwise actual text plus active
@@ -1569,7 +1580,7 @@ pub(crate) fn column_rowbreak_fragment_opens_outer_top(
     // 표제의 쪽나눔 유무는 Para 앵커가 소유하는 바깥 여백을 바꾸지 않는다.
     // 표제의 글줄 잉크와 표의 바깥 여백은 별도로 소유하며 캡션 간격도 별도로 계산한다.
     let native_object_frame = native_host.is_some_and(|para| {
-        if object_only_saved_table_anchor(para, table) {
+        if object_only_saved_table_anchor(para, table) || reflow_empty_table_host(para, table) {
             return true;
         }
         // 각주·미주는 호스트 글줄에 속하며 표의 독립 바깥 프레임을 없애지 않는다.
@@ -2730,6 +2741,7 @@ pub(crate) fn stored_column_top_spacing_before(
 /// not a height to add to a cursor that may already include leading spacing.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StoredParagraphSuccessorFlow {
+    flow_origin_hu: i32,
     content_bottom_hu: i32,
     flow_end_hu: i32,
 }
@@ -2747,10 +2759,16 @@ impl StoredParagraphSuccessorFlow {
         dpi: f64,
     ) -> Option<(f64, f64)> {
         let base = base_hu?;
+        let flow_origin = anchor_y + hwpunit_to_px(self.flow_origin_hu.checked_sub(base)?, dpi);
         let content_bottom =
             anchor_y + hwpunit_to_px(self.content_bottom_hu.checked_sub(base)?, dpi);
         let flow_end = anchor_y + hwpunit_to_px(self.flow_end_hu.checked_sub(base)?, dpi);
-        (current_y.is_finite() && current_y <= content_bottom && content_bottom <= flow_end)
+        // 앞 개체의 실제 점유가 저장 시작을 넘겼으면 같은 저장 축이 아니다.
+        // 내용 하단만 검사하면 짧은 제목을 이미 지난 저장 끝으로 되감게 된다.
+        (current_y.is_finite()
+            && current_y <= flow_origin + hwpunit_to_px(1, dpi)
+            && flow_origin <= content_bottom
+            && content_bottom <= flow_end)
             .then_some((content_bottom, flow_end))
     }
 }
@@ -2936,26 +2954,33 @@ pub(crate) fn stored_paragraph_successor_flow(
     if after.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY != 0 {
         return None;
     }
-    let spacing_after = styles
-        .para_styles
-        .get(para.para_shape_id as usize)?
-        .spacing_after;
+    let own_style = styles.para_styles.get(para.para_shape_id as usize)?;
+    let spacing_before = own_style.spacing_before;
+    let spacing_after = own_style.spacing_after;
     let next_before = styles
         .para_styles
         .get(next.para_shape_id as usize)?
         .spacing_before;
     let hu_per_px = 1.0 / hwpunit_to_px(1, dpi);
+    let flow_origin_hu = para
+        .line_segs
+        .first()?
+        .vertical_pos
+        .checked_sub((spacing_before * hu_per_px).round() as i32)?;
     let content_bottom_hu = last.vertical_pos.checked_add(last.line_height)?;
     let flow_end_hu = content_bottom_hu
         .checked_add(last.line_spacing)?
         .checked_add((spacing_after * hu_per_px).round() as i32)?;
-    (spacing_after.is_finite()
+    (spacing_before.is_finite()
+        && spacing_before >= 0.0
+        && spacing_after.is_finite()
         && spacing_after >= 0.0
         && next_before.is_finite()
         && next_before >= 0.0
         && flow_end_hu.checked_add((next_before * hu_per_px).round() as i32)
             == Some(after.vertical_pos))
     .then_some(StoredParagraphSuccessorFlow {
+        flow_origin_hu,
         content_bottom_hu,
         flow_end_hu,
     })
@@ -5451,11 +5476,18 @@ pub(crate) fn float_pushed_line_spacing_before(
 /// whitespace hosts retain their own line boxes; negative/absolute positions
 /// and saved frames have different origins.
 pub(crate) fn reflow_empty_table_host(para: &Paragraph, table: &Table) -> bool {
+    // 구역·단 설정은 표 앵커와 함께 저장되지만 가시 글줄이나 개체가 아니다.
+    // 실제 표 하나만 이 빈 호스트의 포맷 상자를 소유한다.
+    let mut objects = para
+        .controls
+        .iter()
+        .filter(|control| !matches!(control, Control::SectionDef(_) | Control::ColumnDef(_)));
+    let only_table = matches!(objects.next(), Some(Control::Table(_))) && objects.next().is_none();
     para.text.is_empty()
         // An implementation-tagged LineSeg still describes a computed line.
         // Lack of a trustworthy saved anchor does not erase that line box.
         && para.line_segs.is_empty()
-        && matches!(para.controls.as_slice(), [Control::Table(_)])
+        && only_table
         && is_para_topbottom_float(&table.common)
         && matches!(table.common.vert_align, VertAlign::Top)
         && signed_hwpunit(table.common.vertical_offset) >= 0
@@ -6022,7 +6054,11 @@ pub(crate) fn rowbreak_fragment_frame_bottom(
     dpi: f64,
     body_filling_source_frame: bool,
 ) -> f64 {
-    if body_filling_source_frame {
+    // 한 행에 속한 셀의 반복 프레임은 기존 본문 끝 inset을 공유한다.
+    // 다행·다열이라는 이유만으로 이 계약을 버리지 않는다. 걸친 셀의
+    // 물리 잔여와 본문 전체를 선언한 개체 상자에는 inset을 중복 계상하지 않는다.
+    let has_spanning_cells = table.cells.iter().any(|cell| cell.row_span > 1);
+    if body_filling_source_frame || has_spanning_cells {
         body_bottom - hwpunit_to_px(i32::from(table.outer_margin_bottom), dpi)
     } else {
         single_cell_page_fragment_bottom(table, body_bottom, dpi)

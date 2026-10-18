@@ -1102,10 +1102,14 @@ fn color_gradient_stops_are_valid(stops: &[ColorGradientStop]) -> bool {
 }
 
 fn color_sweep_is_supported_full_circle(start_angle_degrees: f64, end_angle_degrees: f64) -> bool {
+    let is_full_circle = |start: f64, end: f64| start < end && (end - start - 360.0).abs() <= 1e-9;
     portable_glyph_scalar(start_angle_degrees)
         && portable_glyph_scalar(end_angle_degrees)
-        && start_angle_degrees < end_angle_degrees
-        && (end_angle_degrees - start_angle_degrees - 360.0).abs() <= 1e-9
+        && is_full_circle(start_angle_degrees, end_angle_degrees)
+        && is_full_circle(
+            glyph_geometry_wire_scalar(start_angle_degrees, 6),
+            glyph_geometry_wire_scalar(end_angle_degrees, 6),
+        )
 }
 
 fn graph_leaf_metadata_is_valid(node: &ColorPaintGraphNode) -> bool {
@@ -1205,6 +1209,7 @@ impl ColorPaintGraphPayload {
                         || !portable_glyph_scalar(gradient_path.gradient.cy)
                         || !portable_glyph_scalar(gradient_path.gradient.radius)
                         || gradient_path.gradient.radius <= 0.0
+                        || glyph_geometry_wire_scalar(gradient_path.gradient.radius, 6) <= 0.0
                         || !color_gradient_stops_are_valid(&gradient_path.gradient.stops)
                     {
                         return false;
@@ -1560,6 +1565,19 @@ pub struct SvgGlyphPayload {
 }
 
 impl SvgGlyphPayload {
+    /// CanvasKit composes T(destination) * S(destination / viewBox) * T(-viewBox).
+    /// Both the producer geometry and its fixed-decimal JSON form must fit the
+    /// f32 matrix used by replay before the TextRun fallback can be suppressed.
+    pub fn has_portable_view_box_mapping(&self, destination: BoundingBox) -> bool {
+        bbox_is_finite_positive(self.view_box)
+            && bbox_is_finite_positive(destination)
+            && svg_view_box_mapping_is_portable(self.view_box, destination)
+            && svg_view_box_mapping_is_portable(
+                glyph_geometry_wire_bbox(self.view_box),
+                glyph_geometry_wire_bbox(destination),
+            )
+    }
+
     pub fn has_static_sanitized_contract(&self) -> bool {
         text_source_range_is_non_empty(self.source_range_utf8)
             && self.glyph_range.is_non_empty()
@@ -1570,8 +1588,10 @@ impl SvgGlyphPayload {
                 .map(|size| {
                     portable_glyph_scalar(size.dx)
                         && portable_glyph_scalar(size.dy)
-                        && size.dx > 0.0
-                        && size.dy > 0.0
+                        && (size.dx as f32) > 0.0
+                        && (size.dy as f32) > 0.0
+                        && glyph_geometry_wire_scalar(size.dx, 6) > 0.0
+                        && glyph_geometry_wire_scalar(size.dy, 6) > 0.0
                 })
                 .unwrap_or(true)
             && self.static_sanitized
@@ -1603,15 +1623,72 @@ fn layer_affine_is_finite(transform: LayerAffineTransform) -> bool {
         && portable_glyph_scalar(transform.f)
 }
 
-fn bbox_is_finite_positive(bbox: BoundingBox) -> bool {
+pub(crate) fn bbox_is_finite_positive(bbox: BoundingBox) -> bool {
+    // Selection happens before JSON export. The fixed-decimal wire rectangle
+    // must also survive both replay backends, or preflight would omit a font
+    // that the browser's whole-TextRun fallback still requires.
+    bbox_is_positive_in_replay_space(bbox)
+        && bbox_is_positive_in_replay_space(glyph_geometry_wire_bbox(bbox))
+}
+
+fn glyph_geometry_wire_bbox(bbox: BoundingBox) -> BoundingBox {
+    BoundingBox::new(
+        glyph_geometry_wire_scalar(bbox.x, 3),
+        glyph_geometry_wire_scalar(bbox.y, 3),
+        glyph_geometry_wire_scalar(bbox.width, 3),
+        glyph_geometry_wire_scalar(bbox.height, 3),
+    )
+}
+
+fn svg_view_box_mapping_is_portable(view_box: BoundingBox, destination: BoundingBox) -> bool {
+    [
+        (view_box.x, view_box.width, destination.x, destination.width),
+        (
+            view_box.y,
+            view_box.height,
+            destination.y,
+            destination.height,
+        ),
+    ]
+    .into_iter()
+    .all(|(origin, extent, destination_origin, destination_extent)| {
+        let scale = destination_extent / extent;
+        let scaled_origin = origin * scale;
+        let narrowed_scale = scale as f32;
+        let narrowed_origin = (origin as f32) * narrowed_scale;
+        portable_glyph_scalar(scale)
+            && narrowed_scale > 0.0
+            && portable_glyph_scalar(scaled_origin)
+            && portable_glyph_scalar(destination_origin - scaled_origin)
+            && narrowed_origin.is_finite()
+            && ((destination_origin as f32) - narrowed_origin).is_finite()
+    })
+}
+
+pub(crate) fn glyph_geometry_wire_scalar(value: f64, precision: usize) -> f64 {
+    // Match json.rs: bbox components use 3 decimals, other glyph geometry uses 6.
+    format!("{value:.precision$}").parse().unwrap_or(f64::NAN)
+}
+
+fn bbox_is_positive_in_replay_space(bbox: BoundingBox) -> bool {
+    let [x, y, width, height] = [bbox.x, bbox.y, bbox.width, bbox.height].map(|v| v as f32);
+    // Native Skia narrows the components before adding; CanvasKit's XYWHRect
+    // adds the f64 components before storing f32 edges. Both must remain
+    // finite and retain a positive span before suppressing the TextRun.
     portable_glyph_scalar(bbox.x)
         && portable_glyph_scalar(bbox.y)
         && portable_glyph_scalar(bbox.width)
         && portable_glyph_scalar(bbox.height)
-        && bbox.width > 0.0
-        && bbox.height > 0.0
         && portable_glyph_scalar(bbox.x + bbox.width)
         && portable_glyph_scalar(bbox.y + bbox.height)
+        && width > 0.0
+        && height > 0.0
+        && [
+            (x + width, y + height),
+            ((bbox.x + bbox.width) as f32, (bbox.y + bbox.height) as f32),
+        ]
+        .into_iter()
+        .all(|(right, bottom)| right.is_finite() && bottom.is_finite() && right > x && bottom > y)
 }
 
 #[derive(Debug, Clone)]
@@ -1652,6 +1729,7 @@ impl GlyphOutlineStrokeStyle {
     pub fn is_strict_subset(&self) -> bool {
         portable_glyph_scalar(self.width)
             && self.width > 0.0
+            && glyph_geometry_wire_scalar(self.width, 6) > 0.0
             && portable_glyph_scalar(self.miter_limit)
             && self.miter_limit >= 1.0
             && matches!(self.join, GlyphOutlineStrokeJoin::Miter)

@@ -751,6 +751,7 @@ fn test_layout_with_composed_styles() {
 
     let styles = ResolvedStyleSet {
         page_number_char_style_id: None,
+        page_number_font_is_hft: false,
         hwp3_variant: false,
         hft_ascii_halfwidth: false,
         char_styles: vec![
@@ -898,6 +899,7 @@ fn test_layout_multi_run_x_position() {
     let composed: Vec<_> = paragraphs.iter().map(|p| compose_paragraph(p)).collect();
     let styles = ResolvedStyleSet {
         page_number_char_style_id: None,
+        page_number_font_is_hft: false,
         hwp3_variant: false,
         hft_ascii_halfwidth: false,
         char_styles: vec![
@@ -995,6 +997,7 @@ fn test_resolved_to_text_style() {
 
     let styles = ResolvedStyleSet {
         page_number_char_style_id: None,
+        page_number_font_is_hft: false,
         hwp3_variant: false,
         hft_ascii_halfwidth: false,
         char_styles: vec![ResolvedCharStyle {
@@ -1033,6 +1036,7 @@ fn test_resolved_to_text_style_with_ratio() {
 
     let styles = ResolvedStyleSet {
         page_number_char_style_id: None,
+        page_number_font_is_hft: false,
         hwp3_variant: false,
         hft_ascii_halfwidth: false,
         char_styles: vec![ResolvedCharStyle {
@@ -2004,16 +2008,17 @@ fn test_square_bullet_with_space_preserves_layout() {
         "positions[1] expected 18.4, got {}",
         positions[1]
     );
-    // 공백: 반각(10) + 자간(10×-8% = -0.8) = advance 9.2 (min_clamp 5.0 미작동)
+    // 공백: [#7702] 한/글 장치 격자(ppem 375) — 반각 187.5 를 공백은 내려 187 단위,
+    // 자간 187×-8% = -14.96 → -15 단위, 172 단위 × 4/75 = 9.1733 (min_clamp 5.0 미작동)
     assert!(
-        (positions[2] - 27.6).abs() < 0.01,
-        "positions[2] expected 27.6, got {}",
+        (positions[2] - (18.4 + 172.0 * 4.0 / 75.0)).abs() < 0.01,
+        "positions[2] expected 27.573, got {}",
         positions[2]
     );
     // 가: 전각(20) + 자간(-1.6) = advance 18.4
     assert!(
-        (positions[3] - 46.0).abs() < 0.01,
-        "positions[3] expected 46.0, got {}",
+        (positions[3] - (18.4 + 172.0 * 4.0 / 75.0 + 18.4)).abs() < 0.01,
+        "positions[3] expected 45.973, got {}",
         positions[3]
     );
 }
@@ -2050,6 +2055,7 @@ fn test_tac_leading_width_block_table_full_line() {
         footnote_positions: Vec::new(),
         tab_extended: Vec::new(),
         horizontal_shaping: None,
+        frame_geometry: None,
     };
     let styles = ResolvedStyleSet {
         page_number_char_style_id: None,
@@ -2148,6 +2154,7 @@ fn test_tac_leading_width_inline_table_partial() {
         footnote_positions: Vec::new(),
         tab_extended: Vec::new(),
         horizontal_shaping: None,
+        frame_geometry: None,
     };
     let styles = ResolvedStyleSet {
         page_number_char_style_id: None,

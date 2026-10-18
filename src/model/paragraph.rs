@@ -3,6 +3,15 @@
 use super::control::{Control, FieldType, CTRL_CHAR_CODE_UNITS};
 use serde::{Deserialize, Serialize};
 
+/// 편집 입력의 줄바꿈을 LF로 통일한다. CR은 HWP5에서 문단 종료 코드다.
+pub fn normalize_text_newlines(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains('\r') {
+        std::borrow::Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
 /// 문자 offset 단위의 글자 모양 복원 구간. IR의 UTF-16 위치와 구분한다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -45,6 +54,10 @@ pub struct Paragraph {
     /// 각 항목은 해당 LineSeg의 text_start와 결합하며, 줄 교체 시 함께 교체한다.
     #[serde(skip_serializing)]
     pub layout_space_metrics: Vec<(u32, SpaceMetric)>,
+    /// 본문 동적 필드의 확정 표시값. 모델 문자 위치는 유지하며 측정과 paint가 함께 읽는다.
+    /// 직렬화하지 않고, 재페이지네이션이 실제 쪽 소속에서 다시 결정한다.
+    #[serde(skip_serializing)]
+    pub layout_field_values: Vec<(usize, String)>,
     /// [#5961] `line_segs[*].text_start` 를 HWP5 문단 축으로 올리는 데 필요한 보정폭.
     ///
     /// `LineSeg::text_start` 는 파서가 **파일 값을 그대로** 담으므로 출처마다 축이 다르다.
@@ -833,6 +846,7 @@ impl Paragraph {
     #[inline]
     pub fn invalidate_layout_inputs(&mut self) {
         self.stored_text_partition_dirty = true;
+        self.layout_field_values.clear();
     }
 
     #[inline]
@@ -1882,6 +1896,7 @@ impl Paragraph {
                 fr.control_idx = new_idx;
             }
         }
+        self.layout_field_values.clear();
         self.controls = kept_controls;
         self.ctrl_data_records = kept_ctrl_data;
         // 나눈 자리 갭(글자 `split_pos` 바로 앞)에 있다가 새 문단으로 가는 컨트롤 수.
@@ -1923,6 +1938,7 @@ impl Paragraph {
             char_shapes: new_char_shapes,
             line_segs: new_line_segs,
             layout_space_metrics: Vec::new(),
+            layout_field_values: Vec::new(),
             // 분리된 문단의 줄은 새로 계산된 것이라 조판 전용 보강 줄이 없다 (#4677).
             layout_only_fill_lines: 0,
             // 편집으로 갈라진 문단의 원본 vertpos 스냅샷은 무효다 (#5847).

@@ -186,9 +186,12 @@ pub struct DocumentCore {
     /// 해소된 스타일 세트
     pub(crate) styles: ResolvedStyleSet,
     pub(crate) canvas_metrics: Option<canvas_metrics::CanvasMetricSession>,
+    pub(crate) hft_outline_fonts: crate::renderer::hft_outline::HftOutlineFonts,
     pub(crate) font_environment: Option<crate::renderer::font_environment::FontEnvironment>,
     /// 구역별 구성된 문단 목록
     pub(crate) composed: Vec<Vec<ComposedParagraph>>,
+    /// 본문 동적 필드의 쪽 소속/표시값이 수렴하지 않으면 출력을 명시적으로 거부한다.
+    pub(crate) body_page_field_error: Option<String>,
     /// [#2308] source IR로부터 재생성되는 revision 기반 render normalization state.
     /// #2004 immutable compatibility projection과 #2195 sparse width overlay를 소유하며,
     /// **원본 `document`는 무손상**이고 deferred edit은 projection을 직접 mirror하지 않는다.
@@ -309,6 +312,9 @@ pub struct DocumentCore {
     pub(crate) source_format: crate::parser::FileFormat,
     /// HML 입력에서만 유지되는 버전·인코딩·손실 진단.
     pub(crate) hml_metadata: Option<crate::parser::HmlImportMetadata>,
+    /// PDF 가져오기 당시의 원본 쪽 대응·미지원 진단. 편집 후 현재 페이지 번호와 구분한다.
+    #[cfg(feature = "pdf-import")]
+    pub(crate) pdf_metadata: Option<crate::parser::pdf::PdfImportMetadata>,
     /// HWPX 비표준 감지 등 문서 검증 경고.
     /// `from_bytes` 에서 자동 생성되며, 사용자 고지·선택적 reflow 에 사용 (#177).
     pub(crate) validation_report: validation::ValidationReport,
@@ -525,8 +531,10 @@ impl DocumentCore {
             pagination: Vec::new(),
             styles: ResolvedStyleSet::default(),
             canvas_metrics: None,
+            hft_outline_fonts: Default::default(),
             font_environment: None,
             composed: Vec::new(),
+            body_page_field_error: None,
             render_normalization: RenderNormalizationState::default(),
             dpi: DEFAULT_DPI,
             fallback_font: DEFAULT_FALLBACK_FONT.to_string(),
@@ -573,6 +581,8 @@ impl DocumentCore {
             para_offset: Vec::new(),
             source_format: crate::parser::FileFormat::Hwp,
             hml_metadata: None,
+            #[cfg(feature = "pdf-import")]
+            pdf_metadata: None,
             validation_report: validation::ValidationReport::new(),
         }
     }
@@ -580,6 +590,12 @@ impl DocumentCore {
     /// HML 열기 메타데이터. 다른 입력 포맷은 `None`이다.
     pub fn hml_metadata(&self) -> Option<&crate::parser::HmlImportMetadata> {
         self.hml_metadata.as_ref()
+    }
+
+    /// PDF를 가져온 시점의 진단. HWP/HWPX 저장본 재열기에서는 `None`이다.
+    #[cfg(feature = "pdf-import")]
+    pub fn pdf_metadata(&self) -> Option<&crate::parser::pdf::PdfImportMetadata> {
+        self.pdf_metadata.as_ref()
     }
 
     /// 문서 검증 리포트에 대한 참조를 반환한다.

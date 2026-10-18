@@ -1,5 +1,9 @@
 //! 문서 생성/로딩/저장/설정 관련 native 메서드
 
+mod hft_outline_fonts;
+mod initial_fields;
+mod reflowed_table_frames;
+
 use crate::document_core::validation::{
     CellPath, ValidationReport, ValidationWarning, WarningKind,
 };
@@ -171,6 +175,17 @@ impl DocumentCore {
         Self::from_bytes_inner(data, Some(password))
     }
 
+    /// PDF의 전체 또는 선택한 원본 쪽을 직접 IR로 가져와 공통 Core를 초기화한다.
+    #[cfg(feature = "pdf-import")]
+    pub fn from_pdf_bytes(
+        data: &[u8],
+        options: &crate::parser::pdf::PdfImportOptions,
+    ) -> Result<DocumentCore, HwpError> {
+        let parsed = crate::parser::parse_pdf_with_metadata(data, options)
+            .map_err(|e| HwpError::InvalidFile(e.to_string()))?;
+        Self::from_parsed_document(parsed, crate::parser::FileFormat::Pdf)
+    }
+
     fn from_bytes_inner(data: &[u8], password: Option<&[u8]>) -> Result<DocumentCore, HwpError> {
         let source_format = crate::parser::detect_format(data);
         let parsed = match password {
@@ -178,8 +193,17 @@ impl DocumentCore {
             None => crate::parser::parse_document_with_metadata(data),
         }
         .map_err(|e| HwpError::InvalidFile(e.to_string()))?;
+        Self::from_parsed_document(parsed, source_format)
+    }
+
+    fn from_parsed_document(
+        parsed: crate::parser::ParsedDocument,
+        source_format: crate::parser::FileFormat,
+    ) -> Result<DocumentCore, HwpError> {
         let mut document = parsed.document;
         let hml_metadata = parsed.hml_metadata;
+        #[cfg(feature = "pdf-import")]
+        let pdf_metadata = parsed.pdf_metadata;
 
         // [#4813] 손상 입력 DoS 방어 — 파싱 직후, compose/pagination/layout 이 저장
         // line_seg 를 소비하기 전에 물리적으로 불가능한 과다 line_seg 배열을 제거한다.
@@ -285,8 +309,10 @@ impl DocumentCore {
             pagination: Vec::new(),
             styles,
             canvas_metrics: None,
+            hft_outline_fonts: Default::default(),
             font_environment: None,
             composed: Vec::new(),
+            body_page_field_error: None,
             render_normalization: super::super::RenderNormalizationState::default(),
             dpi: DEFAULT_DPI,
             fallback_font: DEFAULT_FALLBACK_FONT.to_string(),
@@ -333,6 +359,8 @@ impl DocumentCore {
             para_offset: Vec::new(),
             source_format,
             hml_metadata,
+            #[cfg(feature = "pdf-import")]
+            pdf_metadata,
             validation_report,
         };
 
@@ -504,6 +532,7 @@ impl DocumentCore {
         let profile = document.layout_profile();
         let source_table_frames = !profile.session_edited()
             && (profile.hwpx_stored_layout() || profile.hwp5_stored_pagination_layout());
+        let is_hwp3_variant = document.is_hwp3_variant;
         for section in &mut document.sections {
             // [#4898] 이 구역의 저장 lineseg 가 배치 권위를 갖는지 먼저 판정한다 —
             // 권위가 있으면 0높이 lineseg(한컴이 접어 둔 숨은 블록)를 재조판하지 않는다.
@@ -801,6 +830,11 @@ impl DocumentCore {
                 // 끼워 넣더라도 뒤의 원본 앵커가 확보한 공간을 삭제하지 않는다.
                 // 합성 내용이 자랐으면 이미 소비한 끝점을 유지하여 되감지 않는다.
                 let mut source_anchor_end: Option<(i32, i32)> = None;
+                // [#7824] 앞 문단(줄 보유)의 아래 간격(HWPUNIT). 재구성 사다리는 줄 전진만
+                // 쌓으므로, 저장 좌표가 원점을 정하지 않은 문단 경계에서는 편집 경로
+                // (`recalculate_section_vpos`)와 같은 문단 간격 `앞 아래 + 뒤 위` 를 더한다.
+                let mut previous_spacing_after_hu: Option<(i32, bool)> = None;
+
                 for (pi, para) in section.paragraphs.iter_mut().enumerate() {
                     let was_reflowed = reflowed_paras.contains(&pi);
                     // 필드는 저장 글줄 안의 텍스트 범위를 표시할 뿐 별도 높이를
@@ -914,6 +948,7 @@ impl DocumentCore {
                                         first_source.expect("저장 첫 줄").line_height,
                                     ) > body_height_hu
                             });
+                    let accumulated_vpos = running_vpos;
                     if source_page_break || source_tac_reset || source_plain_reset {
                         running_vpos = first_source.expect("저장 프레임 원점").vertical_pos;
                     } else if !was_reflowed
@@ -981,6 +1016,33 @@ impl DocumentCore {
                             // 기존 #1920 규칙은 쪽 하단 고정 틀 host 문단만 봐서
                             // 일반 본문 문단인 이 형상을 잡지 못한다.
                             running_vpos = 0;
+                        }
+                    }
+                    // [#7824] 저장 쪽 리셋이 원점을 정하지 않았으면 문단 간격을 더한다.
+                    // 원본 앵커(아래)는 저장 간격을 그대로 옮기므로 큰 쪽을 쓴다.
+                    if running_vpos == accumulated_vpos && !para.line_segs.is_empty() {
+                        if let Some((spacing_after, _)) =
+                            previous_spacing_after_hu.filter(|(_, previous_has_source_span)| {
+                                // 양쪽의 저장 줄이 있으면 그 원점 차이가 문단 간격을 이미
+                                // 소유한다. 스타일 간격은 합성 줄이 경계에 참여할 때만
+                                // 재구성하며 저장 간격에 다시 더하지 않는다.
+                                !*previous_has_source_span || orig_span[pi].is_none()
+                            })
+                        {
+                            let spacing_before = styles
+                                .para_styles
+                                .get(para.para_shape_id as usize)
+                                .map(|style| {
+                                    crate::renderer::hwp3_variant_flow_spacing_before(
+                                        style.spacing_before,
+                                        is_hwp3_variant,
+                                    )
+                                })
+                                .unwrap_or(0.0);
+                            running_vpos =
+                                running_vpos.saturating_add(spacing_after).saturating_add(
+                                    crate::renderer::px_to_hwpunit(spacing_before, dpi),
+                                );
                         }
                     }
                     if let (Some((original_first, _)), Some((source_end, rebuilt_end))) =
@@ -1151,6 +1213,18 @@ impl DocumentCore {
                     }
                     if let Some(v) = original_last_vpos {
                         prev_stored_last_vpos = v;
+                    }
+                    if !para.line_segs.is_empty() {
+                        previous_spacing_after_hu = Some((
+                            styles
+                                .para_styles
+                                .get(para.para_shape_id as usize)
+                                .map(|style| {
+                                    crate::renderer::px_to_hwpunit(style.spacing_after, dpi)
+                                })
+                                .unwrap_or(0),
+                            orig_span[pi].is_some(),
+                        ));
                     }
                 }
             }
@@ -1831,6 +1905,10 @@ impl DocumentCore {
         self.snapshot_store.clear();
         self.next_snapshot_id = 0;
         self.source_format = crate::parser::FileFormat::Hwp;
+        #[cfg(feature = "pdf-import")]
+        {
+            self.pdf_metadata = None;
+        }
         self.validation_report = ValidationReport::new();
 
         self.convert_to_editable_native()?;
@@ -1843,6 +1921,11 @@ impl DocumentCore {
 
     /// Document IR을 HWP 5.0 CFB 바이너리로 직렬화 (네이티브 에러 타입)
     pub fn export_hwp_native(&self) -> Result<Vec<u8>, HwpError> {
+        // PDF has no original HWP wire metadata to preserve. Both public save
+        // entry points must use the same format-lowered, disposable snapshot.
+        if self.source_format == crate::parser::FileFormat::Pdf {
+            return self.export_hwp_with_adapter();
+        }
         // [#7114] 어댑터 없는 경로도 같은 저장 프레임을 낸다 — 두 진입점이 다른 조판을
         // 저장하면 «저장본을 다시 열면 배치가 달라진다» 가 경로마다 갈린다.
         // 재래핑된 표가 없으면 복제 없이 live IR 을 그대로 쓴다.
@@ -1879,6 +1962,9 @@ impl DocumentCore {
     /// 공간이 아닌 조각(rowspan 블록 분할·중첩 행 커서)은 이 매핑으로 줄 자리를 정할 수
     /// 없으므로 그 표의 사다리를 그대로 둔다 — 종전 동작이다.
     fn writeback_reflowed_table_frames(&self, snapshot: &mut Document) {
+        use self::reflowed_table_frames::{
+            generated_block_host_lines, mark_generated_host_lines, CellFrameWriteback,
+        };
         use crate::model::control::Control;
         use crate::renderer::layout::table_layout::CellUnitLineAnchor;
         use crate::renderer::pagination::PageItem;
@@ -1890,15 +1976,7 @@ impl DocumentCore {
 
         // 1단계 — 고칠 자리를 live IR 에서 정한다. 유닛 캐시가 live 셀 포인터로 메모이즈
         // 돼 있으므로 스냅숏 포인터를 캐시에 넣지 않는다.
-        struct FrameWriteback {
-            section: usize,
-            paragraph: usize,
-            control: usize,
-            cell: usize,
-            resets: Vec<(usize, usize)>,
-            preserved_frames: Vec<((usize, usize), (usize, usize))>,
-        }
-        let mut plans = Vec::new();
+        let mut plans: Vec<CellFrameWriteback> = Vec::new();
         for (section_idx, section) in self.document.sections.iter().enumerate() {
             let Some(pagination) = self.pagination.get(section_idx) else {
                 continue;
@@ -2003,6 +2081,7 @@ impl DocumentCore {
                             }
                         }
                         let mut preserved_frames = Vec::new();
+                        let generated_host_lines = generated_block_host_lines(cell, &anchors);
                         let mut resets: Vec<(usize, usize)> = Vec::with_capacity(units.len());
                         for unit in units.iter() {
                             match anchors.get(*unit) {
@@ -2068,12 +2147,21 @@ impl DocumentCore {
                         if resets.is_empty() {
                             continue;
                         }
-                        plans.push(FrameWriteback {
-                            section: section_idx,
-                            paragraph: para_idx,
-                            control: control_idx,
-                            cell: cell_idx,
+                        // 줄간격을 계상하지 않은 중첩 표 host — 뒤의 되감김을 없앨 때
+                        // 사다리 등식(`lh + ls`)을 새로 만들지 않도록 채울 간격을 줄인다.
+                        let uncharged_hosts = self.layout_engine.cell_uncharged_nested_hosts(
+                            cell,
+                            table,
+                            &self.styles,
+                        );
+                        plans.push(CellFrameWriteback {
+                            section_idx,
+                            para_idx,
+                            control_idx,
+                            cell_idx,
                             resets,
+                            uncharged_hosts,
+                            generated_host_lines,
                             preserved_frames,
                         });
                     }
@@ -2087,12 +2175,14 @@ impl DocumentCore {
         // 나르고(조판의 `vpos_gap_before` 등이 읽는다), 촘촘한 사다리로 덮으면 그 신호가
         // 사라져 읽는 쪽이 더 채운다(실측: 문단 2276 편집에서 103쪽이 11낱말 더 먹었다).
         // 그래서 줄 사이 **원래 간격을 그대로 이어 붙이고**, 되감김만 실제 컷 자리로 옮긴다.
-        for FrameWriteback {
-            section: section_idx,
-            paragraph: para_idx,
-            control: control_idx,
-            cell: cell_idx,
+        for CellFrameWriteback {
+            section_idx,
+            para_idx,
+            control_idx,
+            cell_idx,
             resets,
+            uncharged_hosts,
+            generated_host_lines,
             preserved_frames,
         } in plans
         {
@@ -2112,7 +2202,15 @@ impl DocumentCore {
             for (cell_para_idx, cell_para) in cell.paragraphs.iter_mut().enumerate() {
                 for (line_idx, seg) in cell_para.line_segs.iter_mut().enumerate() {
                     let stored = seg.vertical_pos;
-                    let occupied = seg.line_height.saturating_add(seg.line_spacing);
+                    // 되감김이 사라진 자리를 채울 이 줄의 점유 높이. 중첩 표 host 의 줄간격은
+                    // 조판이 저장 사다리의 `lh + ls` 등식을 증거로만 계상한다(#6126). 편집 직후
+                    // 조판이 계상하지 않은 host 뒤를 `lh + ls` 로 채우면 재열기에서 없던 증거가
+                    // 생겨 그 줄간격이 조각에 더해진다 — 이 경우 줄 높이만 채운다.
+                    let occupied = if uncharged_hosts.contains(&cell_para_idx) {
+                        seg.line_height
+                    } else {
+                        seg.line_height.saturating_add(seg.line_spacing)
+                    };
                     let next = match previous {
                         None => stored,
                         Some((previous_stored, previous_new, previous_occupied)) => {
@@ -2147,6 +2245,17 @@ impl DocumentCore {
                     previous = Some((stored, next, occupied));
                 }
             }
+            let Some(Control::Table(original_table)) = self.document.sections[section_idx]
+                .paragraphs[para_idx]
+                .controls
+                .get(control_idx)
+            else {
+                continue;
+            };
+            let Some(original_cell) = original_table.cells.get(cell_idx) else {
+                continue;
+            };
+            mark_generated_host_lines(cell, original_cell, &generated_host_lines);
         }
     }
 
@@ -3129,163 +3238,7 @@ impl DocumentCore {
     /// start_char_idx != end_char_idx 상태가 된다.
     /// compose 전에 이 텍스트를 제거하여 빈 필드(start==end)로 정규화한다.
     fn clear_initial_field_texts(document: &mut Document) {
-        use crate::model::control::{Control, FieldType};
-        use crate::model::paragraph::Paragraph;
-
-        fn process_para(para: &mut Paragraph) {
-            // 삭제 대상 field_range 인덱스와 삭제할 문자 범위 수집
-            let mut removals: Vec<(usize, usize, usize)> = Vec::new(); // (fr_idx, start, end)
-            for (fri, fr) in para.field_ranges.iter().enumerate() {
-                if fr.start_char_idx >= fr.end_char_idx {
-                    continue;
-                }
-                if let Some(Control::Field(f)) = para.controls.get(fr.control_idx) {
-                    if f.field_type != FieldType::ClickHere {
-                        continue;
-                    }
-                    if f.properties & (1 << 15) != 0 {
-                        continue;
-                    } // 이미 수정된 상태
-                      // 필드 값이 안내문과 동일한지 확인
-                    if let Some(guide) = f.guide_text() {
-                        let chars: Vec<char> = para.text.chars().collect();
-                        if fr.end_char_idx <= chars.len() {
-                            let field_val: String =
-                                chars[fr.start_char_idx..fr.end_char_idx].iter().collect();
-                            // trailing 공백 제거 후 비교 (한컴이 안내문 뒤에 공백을 추가하는 경우)
-                            if field_val.trim_end() == guide || field_val == guide {
-                                removals.push((fri, fr.start_char_idx, fr.end_char_idx));
-                            }
-                        }
-                    }
-                }
-            }
-            // [Task #1893] 삭제 수술의 IR 불변성 완성용 스냅샷 — 삭제 전 char_offsets 는
-            // 원본 문자 인덱스→utf16 위치 매핑의 유일한 근거다. removal 좌표는 전부
-            // 수집-시점(원본) 인덱스이므로, 원본 스냅샷으로 utf16 범위를 구해
-            // char_shapes 경계를 함께 시프트해야 직렬화→재파스가 고정점이 된다.
-            // (종전엔 text/field_ranges 만 고쳐 char_offsets/char_count/char_shapes 가
-            // stale — 그 불일치 IR 을 저장하면 재파스 정준형과 조판이 갈라져
-            // 라운드트립 렌더 752px 분기·빈 줄 추가가 발생했다.)
-            let orig_offsets: Vec<u32> = para.char_offsets.clone();
-            let orig_chars: Vec<char> = para.text.chars().collect();
-            let offsets_valid = orig_offsets.len() == orig_chars.len();
-            fn utf16_width(c: char) -> u32 {
-                if c == '\t' {
-                    8
-                } else if (c as u32) > 0xFFFF {
-                    2
-                } else {
-                    1
-                }
-            }
-            let mut any_removed = false;
-
-            // 뒤에서부터 삭제 (인덱스 안정성 유지)
-            for &(fri, start, end) in removals.iter().rev() {
-                let chars: Vec<char> = para.text.chars().collect();
-                // [Task #1620] 다중 removal 처리 중 앞선 removal 이 para.text 를 축소하면(특히
-                // 같은 범위를 가리키는 중첩 field_range) 이후 removal 의 수집-시점 (start,end) 가
-                // 현재 길이를 초과해 슬라이스 패닉(36396650). 현재 길이 기준 범위를 재검증해 skip.
-                if start > end || end > chars.len() {
-                    continue;
-                }
-                let removed_len = end - start;
-                let new_text: String = chars[..start].iter().chain(chars[end..].iter()).collect();
-                para.text = new_text;
-                para.field_ranges[fri].end_char_idx = start;
-                // 이후 field_ranges의 char_idx 조정
-                for i in 0..para.field_ranges.len() {
-                    if i == fri {
-                        continue;
-                    }
-                    let other = &mut para.field_ranges[i];
-                    if other.start_char_idx >= end {
-                        other.start_char_idx -= removed_len;
-                    }
-                    if other.end_char_idx >= end {
-                        other.end_char_idx -= removed_len;
-                    }
-                }
-                any_removed = true;
-
-                // [Task #1893] char_offsets/char_shapes/char_count 직접 수술 — 원본 utf16
-                // 좌표 기준. 역순 처리라 오른쪽 removal 의 시프트가 왼쪽 utf16 좌표에 영향
-                // 없고, 삭제 폭(u_end−u_start)은 원본 스냅샷 불변량이다. 컨트롤/필드 마커의
-                // 8유닛 갭 구조는 기존 오프셋에 이미 올바르게 인코딩되어 있으므로 감산만으로
-                // 보존된다.
-                if offsets_valid && start < end && end <= orig_offsets.len() {
-                    let u_start = orig_offsets[start];
-                    // [#3545] 지워진 본문 run 을 HWPX 저장에서 되살리기 위한 잔재 기록.
-                    // 한컴 정준형은 미기입 누름틀의 안내문을 파일에 본문 run 으로 남기므로
-                    // (form-01.hwpx), 기록 없이 저장하면 파일에서 영구 소실된다. 서식까지
-                    // 되살리도록 그 텍스트를 담던 run 의 char shape 도 함께 남긴다 — 아래
-                    // 수술이 zero-width 로 접기 전의 원본 좌표에서 조회해야 정확하다.
-                    let residue_shape_id = para
-                        .char_shapes
-                        .iter()
-                        .rev()
-                        .find(|cs| cs.start_pos <= u_start)
-                        .map(|cs| cs.char_shape_id)
-                        .unwrap_or(0);
-                    let residue_text: String = orig_chars[start..end].iter().collect();
-                    let ctrl_idx = para.field_ranges[fri].control_idx;
-                    if let Some(Control::Field(f)) = para.controls.get_mut(ctrl_idx) {
-                        f.guide_residue = Some(crate::model::control::GuideResidue {
-                            text: residue_text,
-                            char_shape_id: residue_shape_id,
-                        });
-                    }
-                    // 삭제 폭 = 삭제 문자들의 utf16 폭만. orig_offsets[end] 는 필드 end
-                    // 마커의 8유닛 갭을 건너뛴 다음 문자 위치라 갭까지 폭에 포함되어
-                    // 후속 오프셋에서 마커 갭이 소실된다(슬롯 방출 위치 붕괴).
-                    let u_end = orig_offsets[end - 1] + utf16_width(orig_chars[end - 1]);
-                    let width = u_end.saturating_sub(u_start);
-                    // 삭제 구간의 오프셋 엔트리 제거 + 후속 엔트리 감산.
-                    para.char_offsets.drain(start..end);
-                    for off in para.char_offsets.iter_mut().skip(start) {
-                        *off = off.saturating_sub(width);
-                    }
-                    para.char_count = para.char_count.saturating_sub(width);
-                    for cs in &mut para.char_shapes {
-                        if cs.start_pos >= u_end {
-                            cs.start_pos -= width;
-                        } else if cs.start_pos > u_start {
-                            // 삭제 범위 내부 경계 → zero-width run 으로 시작점에 고정
-                            // (한컴도 필드값 삭제 시 zero-width char run 을 남긴다 —
-                            // 원본 서식의 자식 없는 <hp:run/> 33개와 동일 표현).
-                            cs.start_pos = u_start;
-                        }
-                    }
-                }
-            }
-            if any_removed {}
-        }
-
-        fn process_table(table: &mut crate::model::table::Table) {
-            for cell in &mut table.cells {
-                for cp in &mut cell.paragraphs {
-                    process_para(cp);
-                    // 중첩 표 재귀 탐색
-                    for ctrl in &mut cp.controls {
-                        if let Control::Table(nested) = ctrl {
-                            process_table(nested);
-                        }
-                    }
-                }
-            }
-        }
-
-        for section in &mut document.sections {
-            for para in &mut section.paragraphs {
-                process_para(para);
-                for ctrl in &mut para.controls {
-                    if let Control::Table(table) = ctrl {
-                        process_table(table);
-                    }
-                }
-            }
-        }
+        initial_fields::clear(document);
     }
 }
 

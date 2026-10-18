@@ -886,11 +886,13 @@ pub(super) fn prepare_glyph_outline(
         }
         GlyphOutlinePayloadKind::SvgGlyph => {
             let payload = outline.svg_glyph.as_ref()?;
-            if !payload.has_static_sanitized_contract() {
+            let viewport = payload.font_em_box.unwrap_or(bbox);
+            if !payload.has_static_sanitized_contract()
+                || !payload.has_portable_view_box_mapping(viewport)
+            {
                 return None;
             }
             let fragment = resources.svg_fragment(payload.svg_ref)?;
-            let viewport = payload.font_em_box.unwrap_or(bbox);
             let (image, bytes) =
                 svg_glyph_image(fragment, payload.view_box, viewport, raster_scale)?;
             let transforms = optional_matrix(payload.transform_to_run)?;
@@ -912,26 +914,14 @@ pub(super) fn prepare_glyph_outline(
 }
 
 fn drawable_rect(bbox: BoundingBox) -> Option<Rect> {
-    ([
-        bbox.x,
-        bbox.y,
-        bbox.width,
-        bbox.height,
-        bbox.x + bbox.width,
-        bbox.y + bbox.height,
-    ]
-    .into_iter()
-    .all(finite_scalar)
-        && bbox.width > 0.0
-        && bbox.height > 0.0)
-        .then(|| {
-            Rect::from_xywh(
-                bbox.x as f32,
-                bbox.y as f32,
-                bbox.width as f32,
-                bbox.height as f32,
-            )
-        })
+    crate::paint::paint_op::bbox_is_finite_positive(bbox).then(|| {
+        Rect::from_xywh(
+            bbox.x as f32,
+            bbox.y as f32,
+            bbox.width as f32,
+            bbox.height as f32,
+        )
+    })
 }
 
 fn svg_glyph_image(

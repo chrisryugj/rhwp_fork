@@ -9,6 +9,7 @@ use crate::paint::{
     TextDirection, TextVariantKind, TextVariantQuality, WritingMode, MAX_PORTABLE_FONT_BLOB_BYTES,
     MAX_PORTABLE_GLYPHS_PER_RUN,
 };
+use crate::renderer::render_tree::BoundingBox;
 use crate::renderer::static_svg::static_svg_fragment_has_path_layer;
 use image::{ImageReader, Limits};
 use std::collections::{BTreeMap, BTreeSet};
@@ -477,7 +478,7 @@ struct TextVariantCandidate {
     present_parts: BTreeSet<u32>,
     duplicate_part: bool,
     glyph_runs: Vec<LayerGlyphRunPaint>,
-    glyph_outlines: Vec<LayerGlyphOutlinePaint>,
+    glyph_outlines: Vec<(BoundingBox, LayerGlyphOutlinePaint)>,
 }
 
 impl TextVariantCandidate {
@@ -500,10 +501,10 @@ impl TextVariantCandidate {
         self.glyph_runs.push(run.clone());
     }
 
-    fn add_glyph_outline(&mut self, outline: &LayerGlyphOutlinePaint) {
+    fn add_glyph_outline(&mut self, bbox: BoundingBox, outline: &LayerGlyphOutlinePaint) {
         self.part_counts.insert(outline.variant.part_count);
         self.duplicate_part |= !self.present_parts.insert(outline.variant.part_index);
-        self.glyph_outlines.push(outline.clone());
+        self.glyph_outlines.push((bbox, outline.clone()));
     }
 
     fn reject_reasons(
@@ -531,7 +532,7 @@ impl TextVariantCandidate {
                 }
             }
             TextVariantKind::GlyphOutline => {
-                let q3_variable_outline = self.glyph_outlines.iter().any(|outline| {
+                let q3_variable_outline = self.glyph_outlines.iter().any(|(_, outline)| {
                     outline.diagnostics.reason.as_deref() == Some("q3VariableOutlineProjectionV1")
                 });
                 if matches!(options.backend, VariantSelectionBackend::Canvas2D)
@@ -545,8 +546,14 @@ impl TextVariantCandidate {
                 {
                     reasons.insert(VariantRejectReason::BackendDoesNotSupportVariant);
                 }
-                for outline in &self.glyph_outlines {
-                    collect_glyph_outline_reject_reasons(outline, options, resources, &mut reasons);
+                for (bbox, outline) in &self.glyph_outlines {
+                    collect_glyph_outline_reject_reasons(
+                        *bbox,
+                        outline,
+                        options,
+                        resources,
+                        &mut reasons,
+                    );
                 }
             }
         }
@@ -610,7 +617,7 @@ fn collect_text_variant_groups(
                             });
                         candidate.add_glyph_run(run);
                     }
-                    PaintOp::GlyphOutline { outline, .. } => {
+                    PaintOp::GlyphOutline { bbox, outline } => {
                         let group = groups
                             .entry(outline.variant.equivalence_group.clone())
                             .or_default();
@@ -627,7 +634,7 @@ fn collect_text_variant_groups(
                                     outline.variant.variant_kind,
                                 )
                             });
-                        candidate.add_glyph_outline(outline);
+                        candidate.add_glyph_outline(*bbox, outline);
                     }
                     _ => {}
                 }
@@ -766,10 +773,7 @@ fn collect_glyph_run_reject_reasons(
         reasons.insert(VariantRejectReason::AdvanceNotFinite);
     }
     let font_size = run.shape_key.font_instance.size_px;
-    if !font_size.is_finite()
-        || font_size <= 0.0
-        || font_size > crate::paint::MAX_GLYPH_FONT_SIZE_PX
-    {
+    if !crate::paint::font::glyph_font_size_is_portable(font_size) {
         reasons.insert(VariantRejectReason::FontInstanceInvalid);
     }
 }
@@ -929,6 +933,7 @@ fn font_digest_matches_resource_digest(digest: &crate::paint::FontDigest, actual
 }
 
 fn collect_glyph_outline_reject_reasons(
+    bbox: BoundingBox,
     outline: &LayerGlyphOutlinePaint,
     options: TextVariantSelectionOptions,
     resources: &ResourceArena,
@@ -997,7 +1002,11 @@ fn collect_glyph_outline_reject_reasons(
             }
         },
         GlyphOutlinePayloadKind::SvgGlyph => match outline.svg_glyph.as_ref() {
-            Some(svg_glyph) if !svg_glyph.has_static_sanitized_contract() => {
+            Some(svg_glyph)
+                if !svg_glyph.has_static_sanitized_contract()
+                    || !svg_glyph
+                        .has_portable_view_box_mapping(svg_glyph.font_em_box.unwrap_or(bbox)) =>
+            {
                 reasons.insert(VariantRejectReason::UnsupportedSvgGlyph);
             }
             Some(_) if !options.allow_svg_glyph => {

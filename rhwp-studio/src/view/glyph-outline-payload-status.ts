@@ -45,7 +45,7 @@ const COLRV1_SUPPORTED_NODE_KINDS = new Set([
 
 function hasMonochromePaths(op: LayerGlyphOutlineOp): boolean {
   return Array.isArray(op.paths) && op.paths.length > 0 && op.paths.length <= 4096
-    && isOptionalFiniteAffine(op.placement?.runToPage)
+    && isFiniteAffine(op.placement?.runToPage)
     && op.paths.every(path => !!path && isValidPathCommands(path.commands)
       && (path.fillRule === undefined || isSupportedFillRule(path.fillRule)));
 }
@@ -71,8 +71,8 @@ export function glyphOutlinePayloadStatus(
   if (!hasExclusivePayloadFamily(op, payloadKind)) {
     return { payloadKind, supported: false, reason: 'unsupportedOutlinePayload', detail: 'mixedPayloadFamily' };
   }
-  // Legacy outline payloads may omit placement, but supplied values still have
-  // to fit the portable f32 scalar contract used by the producer and CanvasKit.
+  // Legacy non-monochrome payloads may omit placement; supplied values must
+  // fit the portable f32 scalar contract used by the producer and CanvasKit.
   if (!isOptionalFiniteAffine(op.placement?.runToPage)
     || (op.placement?.baselineY !== undefined && !isPortableGlyphScalar(op.placement.baselineY))) {
     return { payloadKind, supported: false, reason: 'unsupportedOutlinePayload', detail: 'invalidPlacement' };
@@ -241,6 +241,7 @@ function hasSupportedColrv1GraphContract(op: LayerGlyphOutlineOp): boolean {
             && isPortableGlyphScalar(node.radialGradientPath.gradient?.cy)
             && isPortableGlyphScalar(node.radialGradientPath.gradient?.radius)
             && (node.radialGradientPath.gradient?.radius ?? 0) > 0
+            && Number(node.radialGradientPath.gradient.radius.toFixed(6)) > 0
             && isValidColorGradientStops(node.radialGradientPath.gradient?.stops)
             && isSupportedFillRule(node.radialGradientPath.fillRule);
         case 'sweepGradientPath':
@@ -397,10 +398,11 @@ function isSupportedFullCircleSweepGradient(
   startAngleDegrees: number | undefined,
   endAngleDegrees: number | undefined,
 ): boolean {
+  const isFullCircle = (start: number, end: number) => start < end && Math.abs(end - start - 360) <= 1e-9;
   return isPortableGlyphScalar(startAngleDegrees)
     && isPortableGlyphScalar(endAngleDegrees)
-    && (startAngleDegrees ?? 0) < (endAngleDegrees ?? 0)
-    && Math.abs((endAngleDegrees ?? 0) - (startAngleDegrees ?? 0) - 360) <= 1e-9;
+    && isFullCircle(startAngleDegrees, endAngleDegrees)
+    && isFullCircle(Number(startAngleDegrees.toFixed(6)), Number(endAngleDegrees.toFixed(6)));
 }
 
 function isSupportedFillRule(fillRule: string | undefined): boolean {
@@ -426,6 +428,7 @@ function isStrictStroke(stroke: LayerGlyphOutlineOp['stroke']): boolean {
   return !!stroke
     && isPortableGlyphScalar(stroke.width)
     && (stroke.width ?? 0) > 0
+    && Number(stroke.width.toFixed(6)) > 0
     && stroke.join === 'miter'
     && stroke.cap === 'butt'
     && isPortableGlyphScalar(stroke.miterLimit)
@@ -445,6 +448,7 @@ function hasBitmapGlyphContract(op: LayerGlyphOutlineOp): boolean {
 
 function hasSvgGlyphContract(op: LayerGlyphOutlineOp): boolean {
   const glyph = op.svgGlyph;
+  const destination = glyph?.fontEmBox ?? op.bbox;
   return !!glyph
     && typeof glyph.svgRef === 'number'
     && glyph.staticSanitized === true
@@ -454,10 +458,16 @@ function hasSvgGlyphContract(op: LayerGlyphOutlineOp): boolean {
     && glyph.interactivityAllowed !== true
     && glyph.viewBox !== undefined
     && isPositiveBounds(glyph.viewBox)
+    && destination !== undefined
+    && isPositiveBounds(destination)
+    && isPortableSvgViewBoxMapping(glyph.viewBox, destination)
+    && isPortableSvgViewBoxMapping(wireBounds(glyph.viewBox), wireBounds(destination))
     && isOptionalFiniteAffine(glyph.transformToRun)
-    && (glyph.intrinsicSize === undefined || (
-      isPortableGlyphScalar(glyph.intrinsicSize?.width) && glyph.intrinsicSize.width > 0
-      && isPortableGlyphScalar(glyph.intrinsicSize?.height) && glyph.intrinsicSize.height > 0
+    && (glyph.intrinsicSize === undefined || (glyph.intrinsicSize !== null
+      && isPortableGlyphScalar(glyph.intrinsicSize.width) && Math.fround(glyph.intrinsicSize.width) > 0
+      && isPortableGlyphScalar(glyph.intrinsicSize.height) && Math.fround(glyph.intrinsicSize.height) > 0
+      && Number(glyph.intrinsicSize.width.toFixed(6)) > 0
+      && Number(glyph.intrinsicSize.height.toFixed(6)) > 0
     ))
     && (glyph.fontEmBox === undefined || isPositiveBounds(glyph.fontEmBox));
 }
@@ -554,17 +564,82 @@ function affineKey(transform: { a?: number; b?: number; c?: number; d?: number; 
 }
 
 function fixed(value: number | undefined): string {
-  return Number.isFinite(value) ? (value ?? 0).toFixed(6) : '-';
+  return fixedDecimalKey(value, 6);
 }
 
 function fixedBounds(value: number | undefined): string {
-  return Number.isFinite(value) ? (value ?? 0).toFixed(3) : '-';
+  return fixedDecimalKey(value, 3);
+}
+
+function fixedDecimalKey(value: number | undefined, precision: 3 | 6): string {
+  if (value === undefined || !Number.isFinite(value)) return '-';
+  // Rust's existing fixed-decimal wire/key preserves signed zero. JSON.parse
+  // preserves it too, but Number.toFixed() erases the sign of an exact -0.
+  if (Object.is(value, -0)) return `-0.${'0'.repeat(precision)}`;
+  // Number.toFixed() switches to exponent notation at 1e21. Every binary64
+  // number at that magnitude is integral, and BigInt(number) retains its exact
+  // integer rather than the shortest (potentially rounded) Number.toString().
+  if (Math.abs(value) >= 1e21) return `${BigInt(value)}.${'0'.repeat(precision)}`;
+  return value.toFixed(precision);
 }
 
 function isPositiveBounds(bounds: { x?: number; y?: number; width?: number; height?: number }): boolean {
-  return !!bounds && [bounds.x, bounds.y, bounds.width, bounds.height].every(isPortableGlyphScalar)
-    && (bounds.width ?? 0) > 0
-    && (bounds.height ?? 0) > 0
-    && isPortableGlyphScalar((bounds.x ?? 0) + (bounds.width ?? 0))
-    && isPortableGlyphScalar((bounds.y ?? 0) + (bounds.height ?? 0));
+  if (!isPositiveBoundsInReplaySpace(bounds)) return false;
+  // Match preflight before JSON export as well as already serialized payloads.
+  // The three-decimal wire must not turn an admitted extent into zero.
+  return isPositiveBoundsInReplaySpace(wireBounds(bounds));
+}
+
+function wireBounds(bounds: { x?: number; y?: number; width?: number; height?: number }) {
+  return {
+    x: Number(bounds.x!.toFixed(3)),
+    y: Number(bounds.y!.toFixed(3)),
+    width: Number(bounds.width!.toFixed(3)),
+    height: Number(bounds.height!.toFixed(3)),
+  };
+}
+
+function isPortableSvgViewBoxMapping(
+  viewBox: { x?: number; y?: number; width?: number; height?: number },
+  destination: { x?: number; y?: number; width?: number; height?: number },
+): boolean {
+  return [
+    [viewBox.x!, viewBox.width!, destination.x!, destination.width!],
+    [viewBox.y!, viewBox.height!, destination.y!, destination.height!],
+  ].every(([origin, extent, destinationOrigin, destinationExtent]) => {
+    const scale = destinationExtent / extent;
+    const scaledOrigin = origin * scale;
+    const narrowedScale = Math.fround(scale);
+    const narrowedOrigin = Math.fround(Math.fround(origin) * narrowedScale);
+    return isPortableGlyphScalar(scale) && narrowedScale > 0
+      && isPortableGlyphScalar(scaledOrigin)
+      && isPortableGlyphScalar(destinationOrigin - scaledOrigin)
+      && Number.isFinite(narrowedOrigin)
+      && Number.isFinite(Math.fround(Math.fround(destinationOrigin) - narrowedOrigin));
+  });
+}
+
+function isPositiveBoundsInReplaySpace(bounds: { x?: number; y?: number; width?: number; height?: number }): boolean {
+  if (bounds === null || !isPortableGlyphScalar(bounds.x)
+    || !isPortableGlyphScalar(bounds.y)
+    || !isPortableGlyphScalar(bounds.width)
+    || !isPortableGlyphScalar(bounds.height)
+    || !isPortableGlyphScalar(bounds.x + bounds.width)
+    || !isPortableGlyphScalar(bounds.y + bounds.height)) {
+    return false;
+  }
+  const x = Math.fround(bounds.x);
+  const y = Math.fround(bounds.y);
+  const width = Math.fround(bounds.width);
+  const height = Math.fround(bounds.height);
+  // Native Skia adds narrowed components; CanvasKit XYWHRect narrows f64
+  // endpoints instead. Both rectangles must remain finite and nonempty.
+  const nativeRight = Math.fround(x + width);
+  const nativeBottom = Math.fround(y + height);
+  const canvasKitRight = Math.fround(bounds.x + bounds.width);
+  const canvasKitBottom = Math.fround(bounds.y + bounds.height);
+  return width > 0 && height > 0
+    && Number.isFinite(nativeRight) && Number.isFinite(nativeBottom)
+    && nativeRight > x && nativeBottom > y
+    && canvasKitRight > x && canvasKitBottom > y;
 }

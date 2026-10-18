@@ -64,7 +64,9 @@ revision, `rgba8Premultiplied`/`srgb` 정보를 반환한다. 각 행은 위에�
 문서와 buffer handle은 **생성한 OS 스레드에서만** 사용한다. 다른 스레드·닫힌 handle은 오류다.
 요청은 동기 호출이며 재진입을 지원하지 않는다. thread마다 문서 8개, 보관 buffer 64개/128 MiB,
 요청 JSON 1 MiB로 제한한다. 이 제한은 파서·Skia의 전체 peak RSS 상한을 뜻하지 않는다.
-panic을 포착하면 해당 스레드의 handle을 모두 무효화한다. 잘못된 주소를 C 포인터로 넘기는 것은
+동기 요청의 panic을 포착하면 해당 스레드의 문서·버퍼 handle을 무효화한다.
+worker는 종료를 요청하되 handle을 보존하므로 workerStatus.isFinished 확인 후 workerRelease로
+해제해야 공유 library를 안전하게 unload할 수 있다. 잘못된 주소를 C 포인터로 넘기는 것은
 호출자 계약 위반이다. 입력 메모리는 호출 동안 유효해야 하며 포인터를 보관하지 않는다.
 
 Swift는 `Rhwp.session*`, C#은 `RhwpNative.Session*` 메서드를 제공한다. 외부 실행 예산·파일 I/O·
@@ -79,12 +81,19 @@ python3 bindings/Native/tests/session_contract.py /path/to/librhwp_native_ffi.so
 ## 화면 영역 출력 (P52)
 
 `{"op":"renderRegion","page":0,"x":20.5,"y":40,"width":320,"height":240,"scale":1.5}`는
-해당 영역 크기의 surface에 직접 그린다. `scale`은 host의 zoom × device pixel ratio다.
+전체 페이지와 동일한 원점의 제한된 scratch surface에 그린 뒤 해당 영역을 복사한다.
+`scale`은 host의 zoom × device pixel ratio다. 정수 원점 이동도 Skia의 antialiasing을
+바꿀 수 있으므로, 작은 surface에 평행 이동해 그리던 방식 대신 정확한 full-page crop을 사용한다.
 왼쪽/위는 floor, 오른쪽/아래는 ceil로 전체 페이지 픽셀 격자에 맞추며 `originX/originY`를 반환한다.
 버퍼 픽셀 `(px, py)`의 페이지 좌표는 `((originX+px)/scale, (originY+py)/scale)`다.
 음수/페이지 밖 영역은 허용하고 원본 페이지 픽셀 경계 밖은 배경색으로 채운다.
 좌표는 ±2²⁴픽셀, 출력 크기·픽셀 수는 기존 frame 한도로 제한한다.
-전체 페이지 bitmap을 만든 뒤 잘라내지 않지만, 화면 밖 subtree의 replay 생략이나 GPU 렌더링은 하지 않는다.
+출력 한도와 별개로 scratch는 축당 16,384픽셀·총 16,777,216픽셀 이하이고,
+scratch N32와 출력 RGBA의 합계는 128 MiB 이하다. 초과하면 할당 전에
+`limitExceeded`를 반환한다. 이는 두 bitmap의 상한이며 Skia 중간 surface·캐시·전체 RSS 상한은 아니다.
+따라서 큰 페이지의 작은 영역도 scratch 상한 때문에 거절될 수 있다. 전체 페이지와 겹치지 않는
+요청은 scratch 없이 배경색만 반환하지만, 먼저 geometry·출력 한도를 검증하고 출력 바이트에도
+128 MiB 상한을 적용한다. 화면 밖 subtree의 replay 생략이나 GPU 렌더링은 하지 않는다.
 
 ## 폰트와 frame 유효성 (P53)
 
@@ -242,6 +251,15 @@ P61의 텍스트 편집·clipboard는 전체 대상 문단에 floating object나
 `autosave(directory)`는 revision/시간 간격을 확인하여 별도 recovery artifact를 쓰고 save token은 취소하므로 원본과 dirty를 유지합니다. `read_recovery(path)`로 길이·버전·digest를 검증한 바이트를 읽어 별도 문서로 열 수 있습니다. 문서 128 MiB, recovery JSON header 64 KiB로 제한합니다. recovery 삭제·목록·사용자 확인 정책은 앱에서 결정합니다.
 
 `PublicationError`의 `published=True`와 `path`는 완성된 파일을 게시한 뒤 directory flush/정리/ack 등이 실패했음을 뜻합니다. 게시된 파일을 삭제하거나 저장 성공으로 표시하지 않고 확인해야 합니다. 외부 변경 검사는 다른 프로세스와의 원자적 compare-and-swap이 아니므로 앱 내부 저장을 직렬화해야 하며 Windows directory durability와 네트워크 파일시스템 보장은 별도 검증 대상입니다.
+
+
+### Native 접근성 snapshot (P64)
+
+session의 `accessibility` 요청은 `request:{}`를 기본으로 본문·표 셀 문단의 구조 순서 텍스트와 scalar 주소를 반환합니다. `selection`을 명시하면 조회에만 사용하고, 생략/null이면 editor의 현재 선택을 사용합니다. worker는 `accessibility {target,request}`를 받아 현재 선택의 snapshot을 `kind:"accessibility"`로 반환하며 revision을 검사합니다. capability는 `accessibilitySnapshots:true`입니다.
+
+요청은 최대 1000 nodes/UTF-8 text 1 MiB/깊이 32/방문 10000개로 제한합니다. `geometry:true`는 기존 core caret/selection query를 사용하며 최대 128 query/256 selection rect와 개별 문단 64 KiB 등 추가 상한을 적용합니다. `complete`, `truncated`, `limitations`를 확인해야 합니다. 노드 key는 revision+주소로 구성되며 revision 사이 identity를 보장하지 않습니다. worker는 완료를 읽을 때까지 snapshot에 8 MiB byte credit을 예약하며 이는 layout/Skia 전체 RSS 상한이 아닙니다.
+
+`native_scalar_to_utf16`/`native_utf16_to_scalar`는 OS adapter offset 변환을 지원하고 surrogate 내부 주소는 거절합니다. 이 API는 OS 접근성 등록이나 screen reader 지원의 증거가 아닙니다. header/footer·notes·shape text·읽기 순서 추론과 OS adapter 연결은 후속입니다.
 
 
 ### Native Qt 창 예제 (P63)

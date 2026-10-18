@@ -915,7 +915,7 @@ function runExecutableTextReplay(op, {
   renderer.unsupportedOps = unsupportedOps;
   if (usePreparedTypeface) {
     renderer.findPreparedTypeface = (fontFamily) => ({
-      typeface: fontFamily === 'Source Han Serif K Old Hangul'
+      typeface: fontFamily === 'RHWP Old Hangul'
         ? null
         : { face: 'primary' },
       fontManager: shapedTextAvailable ? {} : null,
@@ -1278,15 +1278,15 @@ function runExecutableTextSpecialReplay() {
   renderer.currentShowParagraphMarks = true;
   renderer.currentShowControlCodes = true;
   const incompleteOldHangulAlias = { typeface: { face: 'old-hangul-incomplete' }, fontManager: null };
-  renderer.bundledTypefaceAliases.set('source han serif k old hangul', [incompleteOldHangulAlias]);
-  const rejectedOldHangulAlias = renderer.findPreparedTypeface('Source Han Serif K Old Hangul');
+  renderer.bundledTypefaceAliases.set('rhwp old hangul', [incompleteOldHangulAlias]);
+  const rejectedOldHangulAlias = renderer.findPreparedTypeface('RHWP Old Hangul');
   const oldHangulAlias = {
     typeface: { face: 'old-hangul-alias' },
     fontManager: { family: 'old-hangul-manager' },
   };
-  renderer.bundledTypefaceAliases.set('source han serif k old hangul', [oldHangulAlias]);
+  renderer.bundledTypefaceAliases.set('rhwp old hangul', [oldHangulAlias]);
   renderer.invalidateFontCaches(); // Match the production font registration lifecycle.
-  const resolvedOldHangulAlias = renderer.findPreparedTypeface('Source Han Serif K Old Hangul');
+  const resolvedOldHangulAlias = renderer.findPreparedTypeface('RHWP Old Hangul');
 
   renderer.renderOp(canvas, {
     type: 'charOverlap',
@@ -2129,11 +2129,11 @@ requireSnippet(
 );
 requireSnippet(
   renderPathBody,
-  /this\.pathFromCommands\(op\.commands \?\? \[\], op\.bbox\.x, op\.bbox\.y\)[\s\S]*?this\.drawStyledPath/,
+  /this\.createCommandPath\(op\.commands \?\? \[\], op\.bbox\.x, op\.bbox\.y\)[\s\S]*?this\.drawStyledPath/,
   'path replay should build command paths before drawing the serialized style',
 );
 requireSnippet(
-  extractMethodBody(canvaskitSource, 'pathFromCommands'),
+  extractMethodBody(canvaskitSource, 'createCommandPath'),
   /new this\.canvasKit\.PathBuilder\(\)[\s\S]*?try\s*\{[\s\S]*?this\.applyPathCommand\(builder,[\s\S]*?return builder\.detach\(\);[\s\S]*?finally\s*\{\s*builder\.delete\(\);/,
   'command paths should use PathBuilder, detach the completed Path, and always release the builder',
 );
@@ -2154,7 +2154,7 @@ requireSnippet(
 );
 requireSnippet(
   canvaskitSource,
-  /private drawLineArrows\([\s\S]*?arrow:geometryMissing[\s\S]*?this\.pathFromCommands\(head\.commands, 0, 0\)[\s\S]*?head\.filled[\s\S]*?canvas\.drawPath\(path, fill\)/,
+  /private drawLineArrows\([\s\S]*?arrow:geometryMissing[\s\S]*?this\.createCommandPath\(head\.commands, 0, 0\)[\s\S]*?head\.filled[\s\S]*?canvas\.drawPath\(path, fill\)/,
   'arrow replay should consume producer geometry and fill rather than reinterpret ArrowStyle',
 );
 requireSnippet(
