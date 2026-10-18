@@ -1550,6 +1550,7 @@ impl TypesetEngine {
                 .cloned()
                 .map(|mut carry| {
                     carry.accepted_physical_height = None;
+                    carry.owns_blank_band = false;
                     carry
                 })
                 .collect()
@@ -2273,6 +2274,7 @@ impl TypesetEngine {
                     end_row
                 },
                 page_end_band,
+                plain_cut_owns_blank_band,
             );
         continuation.stored_block_frame = block_acceptance.map(|accepted| accepted.frame);
         continuation.advance(

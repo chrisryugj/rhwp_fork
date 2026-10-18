@@ -25750,6 +25750,7 @@ impl LayoutEngine {
                 Some(crate::renderer::pagination::StraddleCellCarry {
                     cell_index: index,
                     physical_height: previous.map_or(0.0, |carry| carry.physical_height),
+                    owns_blank_band: previous.is_some_and(|carry| carry.owns_blank_band),
                     accepted_physical_height: match previous {
                         Some(carry) => carry.accepted_physical_height.map(|before| before + height),
                         None if cell_row >= start_row => Some(height),
@@ -25840,6 +25841,7 @@ impl LayoutEngine {
         carried_bands: &[crate::renderer::pagination::StraddleCellCarry],
         next_row: usize,
         band: f64,
+        owns_blank_band: bool,
     ) -> Vec<crate::renderer::pagination::StraddleCellCarry> {
         table
             .cells
@@ -25869,6 +25871,8 @@ impl LayoutEngine {
                 crate::renderer::pagination::StraddleCellCarry {
                     cell_index: index,
                     physical_height: before + band.max(0.0),
+                    owns_blank_band: owns_blank_band
+                        || accepted.is_some_and(|carry| carry.owns_blank_band),
                     accepted_physical_height: accepted
                         .and_then(|carry| carry.accepted_physical_height),
                     next_unit: accepted.and_then(|carry| {
