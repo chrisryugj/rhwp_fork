@@ -5488,7 +5488,7 @@ impl LayoutEngine {
                             relaxed_pad,
                         );
                     let line_req = if let Some(height) =
-                        self.stored_plain_closed_cell_height(cell, table)
+                        self.stored_plain_closed_cell_height(cell, table, styles)
                     {
                         height
                     } else if let Some(end) = stored_frame_end {
@@ -5616,7 +5616,7 @@ impl LayoutEngine {
                         relaxed_pad,
                     );
                 let line_req = if let Some(height) =
-                    self.stored_plain_closed_cell_height(cell, table)
+                    self.stored_plain_closed_cell_height(cell, table, styles)
                 {
                     height
                 } else if let Some(end) = stored_frame_end {
@@ -17051,7 +17051,10 @@ impl LayoutEngine {
                 );
             }
         }
-        if self.stored_plain_closed_cell_height(cell, table).is_some() {
+        if self
+            .stored_plain_closed_cell_height(cell, table, styles)
+            .is_some()
+        {
             if let Some(unit) = units.last_mut() {
                 if let Some(line) = cell.paragraphs[unit.para_idx]
                     .line_segs
@@ -17063,7 +17066,7 @@ impl LayoutEngine {
                 }
             }
         }
-        if let Some(frame) = self.stored_editor_tail_frame(cell, table) {
+        if let Some(frame) = self.stored_editor_tail_frame(cell, table, styles) {
             let prefix = units
                 .iter()
                 .filter(|unit| unit.para_idx < frame.empty_from)
@@ -21187,6 +21190,7 @@ impl LayoutEngine {
         &self,
         cell: &crate::model::table::Cell,
         table: &crate::model::table::Table,
+        styles: &ResolvedStyleSet,
     ) -> Option<crate::renderer::float_placement::StoredEditorTailFrame> {
         let profile = self.profile.get();
         if profile.session_edited()
@@ -21198,13 +21202,14 @@ impl LayoutEngine {
         {
             return None;
         }
-        crate::renderer::float_placement::stored_editor_tail_frame(cell, table)
+        crate::renderer::float_placement::stored_editor_tail_frame(cell, table, styles)
     }
 
     fn stored_plain_closed_cell_height(
         &self,
         cell: &crate::model::table::Cell,
         table: &crate::model::table::Table,
+        styles: &ResolvedStyleSet,
     ) -> Option<f64> {
         let profile = self.profile.get();
         if !(profile.hwp5_stored_pagination_layout() || profile.hwpx_stored_layout())
@@ -21218,7 +21223,7 @@ impl LayoutEngine {
         }
         crate::renderer::float_placement::stored_plain_closed_cell_ink_height(cell, table)
             .or_else(|| {
-                self.stored_editor_tail_frame(cell, table)
+                self.stored_editor_tail_frame(cell, table, styles)
                     .map(|frame| frame.content_end_hu)
             })
             .map(|ink| {

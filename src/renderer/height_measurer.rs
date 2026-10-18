@@ -3985,8 +3985,10 @@ impl HeightMeasurer {
                         cell, table,
                     )
                     .or_else(|| {
-                        crate::renderer::float_placement::stored_editor_tail_frame(cell, table)
-                            .map(|frame| frame.content_end_hu)
+                        crate::renderer::float_placement::stored_editor_tail_frame(
+                            cell, table, styles,
+                        )
+                        .map(|frame| frame.content_end_hu)
                     })
                 })
                 .flatten()
@@ -4596,8 +4598,10 @@ impl HeightMeasurer {
                         cell, table,
                     )
                     .or_else(|| {
-                        crate::renderer::float_placement::stored_editor_tail_frame(cell, table)
-                            .map(|frame| frame.content_end_hu)
+                        crate::renderer::float_placement::stored_editor_tail_frame(
+                            cell, table, styles,
+                        )
+                        .map(|frame| frame.content_end_hu)
                     })
                 })
                 .flatten()
