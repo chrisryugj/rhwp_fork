@@ -51,8 +51,8 @@ QT_QPA_PLATFORM=offscreen .venv-qt/bin/python -B bindings/Native/tests/native_wi
 라이브러리를 지정하면 실제 blank→region 표시→합성 Qt 조합 ㄱ/가/각→commit→좌우 키 이동→undo/redo→HWPX 새 파일
 저장→재열기를 검사한다. 이 검사는 OS 한글 입력기·후보창, 한컴 시각 일치 또는 플랫폼 배포 패키지 검증을
 대체하지 않는다. `--screenshot`은 선택 사항이며 실행 중인 QWidget을 새 PNG 파일로 남긴다.
-실제 스모크에는 P60까지의 worker/editor/IME 문맥 ABI가 포함된 native-skia 라이브러리가 필요하다.
-창의 복사·잘라내기·붙여넣기 기능에는 P61 clipboard ABI도 필요하며 위 스모크는 그 기능을 검사하지 않는다.
+실제 스모크에는 P61까지의 worker/editor/IME 문맥·clipboard ABI가 포함된 native-skia 라이브러리가 필요하다.
+Ctrl+A/C/X/V로 Qt clipboard의 복사·잘라내기·붙여넣기와 한 번의 undo/redo도 검사한다.
 
 근거: [QInputMethodEvent](https://doc.qt.io/qtforpython-6/PySide6/QtGui/QInputMethodEvent.html),
 [QImage](https://doc.qt.io/qtforpython-6/PySide6/QtGui/QImage.html),

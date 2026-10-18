@@ -312,6 +312,20 @@ def actual_smoke(library, screenshot=None):
         pump(app, lambda: idle() and window.context.get("text") == "")
         window.command("redo")
         pump(app, lambda: idle() and window.context.get("text") == "각")
+        control = Qt.KeyboardModifier.ControlModifier
+        for key in (Qt.Key.Key_A, Qt.Key.Key_C):
+            QApplication.sendEvent(window.canvas, QKeyEvent(QEvent.Type.KeyPress, key, control))
+            pump(app, idle)
+        assert app.clipboard().text() == "각"
+        QApplication.sendEvent(window.canvas, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_X, control))
+        pump(app, lambda: idle() and window.context.get("text") == "")
+        QApplication.sendEvent(window.canvas, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_V, control))
+        pump(app, idle)
+        assert window.context.get("text") == "각", (window.context, window.errors, app.clipboard().mimeData().html())
+        window.command("undo")
+        pump(app, lambda: idle() and window.context.get("text") == "")
+        window.command("redo")
+        pump(app, lambda: idle() and window.context.get("text") == "각")
         window.zoom_at(1.25)
         pump(app, lambda: bool(window.frames) and idle())
         if screenshot is not None:
@@ -329,11 +343,12 @@ def actual_smoke(library, screenshot=None):
             pump(app, lambda: window.info["documentId"] != document_id and idle() and bool(window.frames))
             assert not window.info["isDirty"]
         assert not window.errors, window.errors
-        print('{"ok":true,"qtOffscreen":true,"nativeRender":true,"syntheticKoreanIME":true,"saveReopen":true,"osIMEVerified":false}')
+        print('{"ok":true,"qtOffscreen":true,"nativeRender":true,"syntheticKoreanIME":true,"clipboard":true,"saveReopen":true,"osIMEVerified":false}')
     finally:
         pump(app, lambda: not window.io_jobs)
         window.close()
         pump(app, lambda: window.finished)
+        app.clipboard().clear()
 
 
 if __name__ == "__main__":
