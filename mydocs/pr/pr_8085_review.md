@@ -5,6 +5,8 @@
 **머지 보류.** 이번 검토에서 합성 HWPX 원본과 편집·저장본의 독립 한컴 Print PDF를
 확보하고 전쪽 Native/fresh WASM Visual Sweep를 직접 실행했다. 두 문서 모두 90% gate와
 `devel` 대비 무회귀를 충족하며, 첫 글줄·표·뒤 문단의 소속과 순서를 직접 확인했다.
+사용자가 추가 제공한 한컴 2024 Print PDF에서도 원본 HWPX 1쪽의 Native/fresh WASM
+gate와 `devel` 대비 무회귀를 확인했다.
 다만 HWP 저장본은 한컴의 손상·변조 가능성 경고로 열기가 거부돼 Print 출력 검증이
 불가능했고, PR의 `#7642` 참조도 이 회귀와 다른 수식·글꼴 과제를 가리킨다.
 기여자의 본문에는 이번 독립 PDF·전쪽 TSV·대표 PNG도 아직 반영되지 않았다.
@@ -149,6 +151,53 @@ PDF와 입력·TSV·PNG·manifest의 로컬 보존 사본은
 무인 열기를 중단한 것이므로 PDF·Visual Sweep 결과는 없다. 지침에 따라 보안 경고를
 자동 승인하거나 engine/timeout을 바꿔 재시도하지 않았다. HWP 저장 경로의 실제
 한컴 출력 적합성은 **미검증**이다.
+
+### 2026-10-20 한컴 2024 Print 별도 대조
+
+사용자가 `win10-ted`의 `C:\temp\wide_tac_table-2024.pdf`를 제공하고 한컴오피스 2024의
+**파일 → 인쇄 → PDF 출력(1쪽씩)**으로 만들었다고 확인했다. Windows PowerShell에서
+원격 파일 11,011바이트, SHA-256
+`213e72124e66f5fe224a15f81e708d095e39e8fbc69bad0a5b529f460b60605a`를 읽었고,
+`scp`로 `/home/tsjang/rhwp/pdf/pr_8085/wide_tac_table-2024.pdf`에 복사한 뒤 같은 SHA를
+재확인했다. PDF `Creator`는 `Hwp 2024 13.0.0.3901`, `Producer`는
+`Hancom PDF 1.3.0.550`이다. A4 전체 1쪽이며 텍스트는 `CELL`,
+`NEXT PARAGRAPH`로 원본 HWPX에 대응한다. 출력 방법은 사용자의 확인에 근거한다.
+첨부 HWPX의 저장 제품은 2020이므로 이 PDF는 위 2020 기준을 대체하지 않는
+**2024 교차 버전 대조**다.
+
+동일 원본 HWPX SHA `a1bc3589f6add0676766388c092608037062161b3ffe5ff00d0bf57982042ce1`에
+`--compat 2024 --dpi 96`을 적용해 Native/fresh WASM 전쪽 TSV를 각각 산출했다.
+후보 worktree의 Native 명령은 다음과 같다. WASM은 같은 명령에
+`--wasm-pkg /home/tsjang/rhwp-pr8085-review/pkg`를 넣고 output을 `wasm`으로 바꿨다.
+
+```bash
+python3 scripts/visual_sweep.py --silhouette-only --key raw2024 \
+  --hwp tests/fixtures/issue_7642_unmarked_hwpx_edit_save/wide_tac_table.hwpx \
+  --pdf /home/tsjang/rhwp/pdf/pr_8085/wide_tac_table-2024.pdf \
+  --rhwp-bin /home/tsjang/rhwp/target/pr-review/debug/rhwp \
+  --compat 2024 --dpi 96 --out output/pr-review/8085/2024/head/native
+```
+
+후보 `output/pr-review/8085/2024/head/{native,wasm}`와 기준 `devel`
+`output/pr-review/8085/2024/base/{native,wasm}`에서 모두 1/1쪽, 누락 0쪽이다.
+manifest의 후보 Git SHA는 검토 문서만 더한 `b8f32ab291220595a8a68e7c68939d362796e32d`,
+기준은 `efc52afb738bd408ac821c4e156101b8d26e5cbd`이며 제품 소스는 PR head와 같다.
+Native raw `99.31338%`(TSV SHA-256
+`a56452c13efaab6f25a39df8b9381abebf214c3b40246c3903ad816224adbd67`),
+fresh WASM raw `99.34138%`(TSV SHA-256
+`8fb4b0a9d95e67ca1b7cf40bf0c443ba34a8a1b31641d8ea5e6627d0f727602e`)다.
+양쪽 모두 기준 대비 하락 `0.00000%p`이며 해당 backend의 기준·후보 PNG SHA도 일치한다.
+2024 PDF의 96dpi PDFium raster SHA `f8e12aa6865ac7fc1690f7225261a1a51e1762e6186f7c5ca54e95cc50e48b7c`는
+위 2020 Print PDF의 raster와도 동일하다. 이 비교는 PDF 파일 자체의 동일성을 뜻하지 않는다.
+
+일반 Sweep도 `--pages 1`로 `output/pr-review/8085/2024/head/{native_review,wasm_review}`에
+각각 실행했고 두 `pr_review_gate`가 `passed`였다. `review/review_001.png`와
+`overlay/overlay_001.png`를 직접 열어 표 안 `CELL`, 표 뒤 `NEXT PARAGRAPH`,
+표 외곽과 쪽 구성을 판독했다. 누락·중복은 보이지 않고 위에서 기록한 테두리 색상·
+안티앨리어싱 차이는 같다. PDF와 TSV·PNG·manifest의 보존 사본은
+`/home/tsjang/rhwp/pdf/pr_8085/evidence/hancom2024/{review_head,devel_base}`에 있다.
+편집 HWPX와 HWP 저장본에 대한 2024 PDF는 제공되지 않았으므로 이 별도 대조의 범위는
+원본 HWPX 1쪽이다.
 
 ## 보류 해제 조건
 
