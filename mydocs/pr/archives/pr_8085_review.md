@@ -142,6 +142,17 @@ PDF와 입력·TSV·PNG·manifest의 로컬 보존 사본은
 | 편집 HWPX | `99.22414%` / `cfba5f3974b425e171a7211bc00c6b4a29c97ecf1e3415d0d327d14f6e11f931` | `99.33946%` / `44a81e84c56ddada080a391b159168c019083114cf6ddf718a0d4e047a71de35` | 양쪽 `0.00000%p` |
 
 각 TSV의 `below_90=0`, 누락 쪽 0, Native·WASM·PDF 전체 쪽수는 모두 1이다.
+일반 모드 대표 1쪽의 별도 지표는 다음과 같다. `pixel_match_percent`는 흰 여백도
+포함하며, `visual_accuracy_proxy_percent`는 엄격한 잉크 일치 보조값이므로 raw
+실루엣이나 사람의 판독과 같은 뜻으로 해석하지 않는다.
+
+| Print 비교 | Native pixel / proxy | fresh WASM pixel / proxy |
+| --- | --- | --- |
+| 원본 HWPX / 한컴 2020 | `99.61038%` / `4.66905%` | `99.61700%` / `6.36663%` |
+| 편집 HWPX / 한컴 2020 | `99.63317%` / `6.09195%` | `99.64159%` / `8.29983%` |
+
+낮은 엄격 잉크 proxy는 픽셀 동일성을 주장할 수 없음을 뜻한다. 아래 직접 판독은
+첫 글줄·표 경계·뒤 문단의 배치와 내용 보존에 한정하며, 테두리의 명암 차이는 남는다.
 기준·후보의 대응 PNG SHA-256도 바이트 단위로 일치한다. `silhouette-only`의
 `not_evaluated`는 직접 판독 전 상태이고, 대표 PNG를 생성한 일반 모드의 gate는
 원본·편집본 Native/WASM 모두 `passed`였다. 대표 편집본의
@@ -198,6 +209,8 @@ Native raw `99.31338%`(TSV SHA-256
 fresh WASM raw `99.34138%`(TSV SHA-256
 `8fb4b0a9d95e67ca1b7cf40bf0c443ba34a8a1b31641d8ea5e6627d0f727602e`)다.
 양쪽 모두 기준 대비 하락 `0.00000%p`이며 해당 backend의 기준·후보 PNG SHA도 일치한다.
+일반 모드 대표 1쪽의 Native pixel/proxy는 `99.61038%`/`4.66905%`, fresh WASM은
+`99.61700%`/`6.36663%`로 한컴 2020 원본 대조와 동일하다.
 2024 PDF의 96dpi PDFium raster SHA `f8e12aa6865ac7fc1690f7225261a1a51e1762e6186f7c5ca54e95cc50e48b7c`는
 위 2020 Print PDF의 raster와도 동일하다. 이 비교는 PDF 파일 자체의 동일성을 뜻하지 않는다.
 
@@ -235,7 +248,9 @@ fresh WASM raw `99.34138%`(TSV SHA-256
 교차 검증은 `99.31338%`/`99.34138%`다. 해당 각 비교의 `pr_review_gate=passed`,
 `devel` 대비 `0.00000%p` 하락, 표 안 `CELL`·표 뒤 `NEXT PARAGRAPH` 및 편집본
 `MARKERX`를 직접 확인했음을 적는다. HWP 저장본의 한컴 Print 거부와 모델 검사 한계를
-숨기지 않는다. `#7642`는 별개 과제이므로 이 merge로 닫았다고 말하지 않는다.
+숨기지 않는다. 엄격 잉크 proxy가 원본 `4.66905%`/`6.36663%`, 편집본
+`6.09195%`/`8.29983%`로 낮아 픽셀 동일성을 주장하지 않는다. `#7642`는 별개
+과제이므로 이 merge로 닫았다고 말하지 않는다.
 
 대표 asset은 편집본 Native/fresh WASM의 `edited_{native,wasm}_{review,overlay}_001.png`와
 원본 2024 교차 검증의 `hancom2024_{native,wasm}_{review,overlay}_001.png`다.
