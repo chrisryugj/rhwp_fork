@@ -36,7 +36,7 @@ PR은 제품 소스 없이 테스트 `tests/cases/issue_7642_unmarked_hwpx_edit_
 
 - 관련 원 이슈 [#7526](https://github.com/edwardkim/rhwp/issues/7526)은 **마커 없는 HWPX 편집 후 재저장**을 명시적으로 범위 밖에 둔다. HWP5 계보 보정은 [통합 PR #7601](https://github.com/edwardkim/rhwp/pull/7601)의 merge `e8cc27778011ce8b54e823fa7edb446b979304a6`에 반영됐다.
 - 이 PR이 회귀로 지키려는 후속 parser 보정은 `ef642bb0e1b64cdd57a777fc52f038862838df67`이며, [PR #8064](https://github.com/edwardkim/rhwp/pull/8064)에서 병합됐다. 이 변경은 명시적 rhwp 생산자 마커가 있을 때만 구역 슬롯을 올린다.
-- [#7642](https://github.com/edwardkim/rhwp/issues/7642)는 한컴산뜻돋움 폭·수식·페이지 배치 과제다. PR 제목, 테스트 파일·fixture 디렉터리와 본문의 `Refs #7642`는 테스트의 원인·입력과 일치하지 않는다. 관련 이슈를 #7526 후속 또는 정확한 새 이슈로 연결해야 한다.
+- [#7642](https://github.com/edwardkim/rhwp/issues/7642)는 한컴산뜻돋움 폭·수식·페이지 배치 과제다. PR 제목, 테스트 파일·fixture 디렉터리와 본문의 `Refs #7642`는 테스트의 원인·입력과 일치하지 않는다. 관련 이슈 표기는 후속 정리 대상이며 이 PR이 #7642를 해결했다고 해석하지 않는다.
 
 ## 로컬 검증
 
@@ -51,7 +51,7 @@ PR은 제품 소스 없이 테스트 `tests/cases/issue_7642_unmarked_hwpx_edit_
 기여자는 `ef642bb0e`의 parser 변경을 되돌린 진단에서 2 FAIL, 수정 head에서 2 PASS를
 PR 본문에 제시했다. 이번 로컬 검증은 최종 head의 2 PASS를 독립 실행했고, 수정 전 진단은
 반복하지 않았다. exact code head의 GitHub Full CI가 성공했으므로 광범위 전체 nextest와
-Native Skia, lint 묶음은 [동일 head 재사용 조건](../manual/pr_review/local_validation.md#430-pr-검토의-github-full-ci-재사용)에 따라 반복하지 않았다.
+Native Skia, lint 묶음은 [동일 head 재사용 조건](../../manual/pr_review/local_validation.md#430-pr-검토의-github-full-ci-재사용)에 따라 반복하지 않았다.
 
 검증 입력 `tests/fixtures/issue_7642_unmarked_hwpx_edit_save/wide_tac_table.hwpx`는
 검토 head에 포함됐고 4,163바이트, SHA-256
@@ -84,6 +84,8 @@ PR 본문은 독립 한컴 정본, Native/fresh WASM, 페이지별 TSV, 직접 �
 `export_hwpx_native` 경로이며 저장 후 IR 검증 `diffCount=0`이다. 입력 SHA-256은
 원본 `a1bc3589f6add0676766388c092608037062161b3ffe5ff00d0bf57982042ce1`,
 편집 HWPX `9ecc6cbe7696d77fa1e9b511c8f390c790794c60b64e9d4de70b2f03bc7031f6`이다.
+검증에 사용한 편집 입력은
+[`edited_wide_tac_table.hwpx`](../assets/pr_8085/edited_wide_tac_table.hwpx)로 커밋했다.
 
 HWP 2024 MCP client의 `start → status → download`에 `--engine 2020`, `--target pdf`,
 출력 파일명 `-2020.pdf`를 명시했다. 두 job의 실제 한컴 버전은 `11.0.0.9136`,
@@ -94,6 +96,10 @@ HWP 2024 MCP client의 `start → status → download`에 `--engine 2020`, `--ta
 | --- | --- | --- |
 | 원본 HWPX / `00d32c70-1f43-4937-8898-1130f3a12383` | `/home/tsjang/rhwp/pdf/pr_8085/wide_tac_table-2020.pdf` / `38fd72fcf9f44bb9dbc10e1979f64819c8ee17652c52c4d8e72b9b3f4fb8b5fd` | 1 |
 | 편집 HWPX / `7ef70fe5-a7ee-45c8-9f0a-ff0bc25659cb` | `/home/tsjang/rhwp/pdf/pr_8085/wide_tac_table_edited-2020.pdf` / `9650e6572d996c7d0949c0734a0378d8b964423481d7c25428232dbda9450fca` | 1 |
+
+수용 근거인 작은 PDF는 로컬 사본과 바이트가 같은
+[`원본 2020 Print`](../assets/pr_8085/original_hancom2020_print.pdf)와
+[`편집본 2020 Print`](../assets/pr_8085/edited_hancom2020_print.pdf)도 커밋했다.
 
 source PR head `284c8fe2591260d6ec23f0cde0057324d11c9344`와 기준 `devel`
 `efc52afb738bd408ac821c4e156101b8d26e5cbd`의 차이는 신규 테스트·fixture·README뿐이다.
@@ -127,6 +133,8 @@ WASM은 같은 명령에서 `--wasm-pkg /home/tsjang/rhwp-pr8085-review/pkg`와
 PDF와 입력·TSV·PNG·manifest의 로컬 보존 사본은
 `/home/tsjang/rhwp/pdf/pr_8085/evidence/{review_worktree,devel_base}`에 있으며
 `pdf/pr_8085/`는 `.git/info/exclude`에 등록해 검토 산출물이 PR에 섞이지 않게 했다.
+대표 PNG와 원문 TSV는 이 PR의
+[`mydocs/pr/assets/pr_8085/`](../assets/pr_8085/edited_native_review_001.png)에도 보존한다.
 
 | 전체 1쪽 입력 | Native raw / TSV SHA-256 | fresh WASM raw / TSV SHA-256 | devel 대비 |
 | --- | --- | --- | --- |
@@ -161,7 +169,8 @@ PDF와 입력·TSV·PNG·manifest의 로컬 보존 사본은
 원격 파일 11,011바이트, SHA-256
 `213e72124e66f5fe224a15f81e708d095e39e8fbc69bad0a5b529f460b60605a`를 읽었고,
 `scp`로 `/home/tsjang/rhwp/pdf/pr_8085/wide_tac_table-2024.pdf`에 복사한 뒤 같은 SHA를
-재확인했다. PDF `Creator`는 `Hwp 2024 13.0.0.3901`, `Producer`는
+재확인했다. 같은 파일을 [`원본 2024 Print PDF`](../assets/pr_8085/original_hancom2024_print.pdf)로
+커밋했다. PDF `Creator`는 `Hwp 2024 13.0.0.3901`, `Producer`는
 `Hancom PDF 1.3.0.550`이다. A4 전체 1쪽이며 텍스트는 `CELL`,
 `NEXT PARAGRAPH`로 원본 HWPX에 대응한다. 출력 방법은 사용자의 확인에 근거한다.
 첨부 HWPX의 저장 제품은 2020이므로 이 PDF는 위 2020 기준을 대체하지 않는
@@ -209,5 +218,37 @@ fresh WASM raw `99.34138%`(TSV SHA-256
    이 PR은 해당 이슈를 닫지 않는다.
 3. HWP 저장본의 한컴 Print 거부 원인은 별도 조사 대상이다. 이 테스트의 HWP 경로는 rhwp
    자체 재열기의 모델 보존만 확인하며, 한컴 호환성이나 실제 출력 완료를 주장하지 않는다.
-4. 검토자가 만든 Print PDF·전쪽 TSV·대표 PNG는 위 로컬 증적 경로에 보존했다. 이 PR의
-   필수 출력 경로는 아니므로 contributor가 동일한 시각 자료를 재제출할 필요는 없다.
+4. 검토자가 만든 Print PDF와 manifest는 위 로컬 증적 경로에, 전쪽 TSV·대표 PNG는
+   [`mydocs/pr/assets/pr_8085/`](../assets/pr_8085/edited_native_review_001.png)에도 보존했다. 기여자가 같은 검사를
+   반복할 필요는 없다.
+
+## Merge 후 contributor PR comment 계획
+
+첫 기여자 `hexisteme`에게 한국어 존댓말로 감사와 환영을 전한다. 기여한 범위는
+`284c8fe2591260d6ec23f0cde0057324d11c9344`의 모델 왕복 테스트 2건과 합성 fixture이고,
+메인터너의 trailing 변경은 검토·오늘할일·시각 증적 문서뿐이라고 구분한다.
+원 code head의 focused 2 PASS 및 [CI run 39262820899](https://github.com/edwardkim/rhwp/actions/runs/39262820899),
+최신 trailing head의 실제 CI를 merge 전 확인해 적는다.
+
+시각 비교는 원본·편집 HWPX 각각 전체 1쪽, Native/fresh WASM 각 1후보이며 raw 최저가
+원본 `99.31338%`/`99.34138%`, 편집본 `99.22414%`/`99.33946%`다. 한컴 2024 원본
+교차 검증은 `99.31338%`/`99.34138%`다. 해당 각 비교의 `pr_review_gate=passed`,
+`devel` 대비 `0.00000%p` 하락, 표 안 `CELL`·표 뒤 `NEXT PARAGRAPH` 및 편집본
+`MARKERX`를 직접 확인했음을 적는다. HWP 저장본의 한컴 Print 거부와 모델 검사 한계를
+숨기지 않는다. `#7642`는 별개 과제이므로 이 merge로 닫았다고 말하지 않는다.
+
+대표 asset은 편집본 Native/fresh WASM의 `edited_{native,wasm}_{review,overlay}_001.png`와
+원본 2024 교차 검증의 `hancom2024_{native,wasm}_{review,overlay}_001.png`다.
+전쪽 원문 TSV는 같은 디렉터리의 `original_*_silhouette.tsv`,
+`edited_*_silhouette.tsv`, `hancom2024_*_silhouette.tsv`이다.
+Comment에서는 [Visual Sweep 정본](https://github.com/edwardkim/rhwp/blob/devel/mydocs/manual/verification/visual_sweep_guide.md#github-merge-comment)을
+연결하고, 병합된 실제 asset을 예컨대 아래 형식의 **merge SHA 고정 raw URL**로 표시한다.
+
+```markdown
+![PR #8085 편집본 Native 검토](https://raw.githubusercontent.com/edwardkim/rhwp/<merge-commit-sha>/mydocs/pr/assets/pr_8085/edited_native_review_001.png)
+![PR #8085 편집본 Native 겹침](https://raw.githubusercontent.com/edwardkim/rhwp/<merge-commit-sha>/mydocs/pr/assets/pr_8085/edited_native_overlay_001.png)
+```
+
+Merge SHA와 asset의 실제 `devel` 존재 여부를 확인한 뒤 `--body-file`로 게시하고,
+API 재조회로 본문·줄바꿈·한글·선두 BOM·이미지 URL을 검증한다. 작업지시자 지시에 따라
+PR 본문은 수정하지 않고 **PR comment**에 증적과 검토 결과를 남긴다.
