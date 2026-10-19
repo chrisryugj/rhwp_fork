@@ -1687,20 +1687,20 @@ impl TypesetEngine {
         // 일반 재조판 행의 빈 물리 띠는 paint와 같은 하단을 소유한다.
         // 블록 ledger의 가용량을 줄이지 않고 일반 행 컷에만 이 경계를 전달한다.
         // 원점 덮어쓰기와 캡션·반복 머리 행 예약 이후의 좌표를 소비한다.
-        let body_filling = crate::renderer::float_placement::stored_body_filling_rowbreak_frame(
-            para,
-            table,
-            st.layout.body_area.height,
-            self.dpi,
-            st.profile.hwpx_stored_layout() || st.profile.hwp5_stored_pagination_layout(),
-            st.profile.session_edited(),
-        );
         let reflow_frame_raw = (!table.common.treat_as_char
             && matches!(
                 table.page_break,
                 crate::model::table::TablePageBreak::RowBreak
             ))
         .then(|| {
+            let body_filling = crate::renderer::float_placement::stored_body_filling_rowbreak_frame(
+                para,
+                table,
+                st.layout.body_area.height,
+                self.dpi,
+                st.profile.hwpx_stored_layout() || st.profile.hwp5_stored_pagination_layout(),
+                st.profile.session_edited(),
+            );
             let frame_boundary = if is_continuation
                 || prepared.host_frame
                     != (
@@ -1713,7 +1713,7 @@ impl TypesetEngine {
                 first_fragment_actual_footnote_boundary.unwrap_or(table_available)
             }
             .min(st.inline_flow_column().height);
-            let bottom = crate::renderer::float_placement::rowbreak_fragment_frame_bottom(
+            let bounds = crate::renderer::float_placement::rowbreak_fragment_bounds(
                 table,
                 frame_boundary,
                 self.dpi,
@@ -1721,7 +1721,10 @@ impl TypesetEngine {
             );
             // 내용 컷이 이미 소비한 원본 하단 inset을 빈 띠 예산에서 되돌리지 않는다.
             // 현재 각주 등으로 좁아진 본문과 인증한 이어받기 프레임의 교집합이다.
-            let bottom = accepted_frame_bottom.map_or(bottom, |saved| bottom.min(saved));
+            let bottom = accepted_frame_bottom
+                .map_or(bounds.content_bottom, |saved| bounds.content_bottom.min(saved));
+            let blank_bottom = accepted_frame_bottom
+                .map_or(bounds.blank_bottom, |saved| bounds.blank_bottom.min(saved));
             let top = fragment_placement.map_or(
                 fragment_flow_origin + host_before_overhead + vert_offset_overhead,
                 |placement| placement.table_top,
@@ -1733,37 +1736,28 @@ impl TypesetEngine {
                     table.outer_cell_spacing_hu(),
                 );
             }
-            bottom
-                - top
-                - caption_extra
-                - header_overhead
-                - hwpunit_to_px(table.outer_cell_spacing_hu(), self.dpi)
+            let overhead = top + caption_extra + header_overhead
+                + hwpunit_to_px(table.outer_cell_spacing_hu(), self.dpi);
+            (bottom - overhead, blank_bottom - overhead)
         });
         // [#8081] 첫 조각의 행 예산과 같이, 표 각주 예약이 만든 모자란 몫을 남긴다.
         let reflow_frame_first_fragment_shortfall = if is_continuation {
             0.0
         } else {
-            reflow_frame_raw.map_or(0.0, |raw| (-raw).max(0.0))
+            reflow_frame_raw.map_or(0.0, |(raw, _)| (-raw).max(0.0))
         };
-        let reflow_frame_avail_for_rows = reflow_frame_raw.map(|raw| {
+        let reflow_frame_avail_for_rows = reflow_frame_raw.map(|(raw, _)| {
             let frame = raw.max(0.0);
             // 닫힌 원본 첫 프레임은 쪽 본문보다 작은 실제 물리 상자일 수 있다.
             // 일반 내용 예산과 그리기·이어받기 띠에 같은 상한을 적용한다.
             let limited = frame.min(accepted_source_frame_limit.unwrap_or(f64::MAX));
-            // 하단은 비끝 조각 닫는 선(본문 아래 − 바깥 아래 여백 − 100HU)이다. 그 inset 을
-            // 실제로 뺀 프레임만 그 값을 함께 넘긴다 — 이어받기 원장은 inset 앞의 물리 띠를 쓴다.
-            let inset = if body_filling || limited < frame {
-                0.0
-            } else {
-                hwpunit_to_px(
-                    crate::renderer::float_placement::rowbreak_fragment_bottom_inset_hu(table),
-                    self.dpi,
-                )
-            };
-            (limited, inset)
+            limited
         });
-        let reflow_frame_bottom_inset = reflow_frame_avail_for_rows.map_or(0.0, |(_, inset)| inset);
-        let reflow_frame_avail_for_rows = reflow_frame_avail_for_rows.map(|(avail, _)| avail);
+
+        let reflow_blank_avail_for_rows = reflow_frame_raw.map(|(_, raw)| {
+            raw.max(0.0)
+                .min(accepted_source_frame_limit.unwrap_or(f64::MAX))
+        });
 
         // [Task #1046 Stage 2 진단] 첫/연속 fragment 의 가용공간 분해 — 렌더러
         // y_start 점프(vert_offset)·host_before 와의 정합 확인용. 동작 불변(게이트).
@@ -1846,8 +1840,8 @@ impl TypesetEngine {
             header_overhead,
             avail_for_rows,
             reflow_frame_avail_for_rows,
+            reflow_blank_avail_for_rows,
             reflow_frame_first_fragment_shortfall,
-            reflow_frame_bottom_inset,
             single_cell_fragment_shape,
             single_cell_box_height,
         }
