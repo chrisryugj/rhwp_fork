@@ -1982,7 +1982,7 @@ impl TypesetEngine {
                     .map_or(opening, |(_, height)| height);
                 let accepted = if carried.is_some() { opening } else { total_accepted };
                 let remaining = layout_engine.stored_ordinary_row_remainder(
-                    table, row, &next_cut, (accepted, total_accepted), carried, styles,
+                    table, row, &next_cut, accepted, carried, styles,
                 )?;
                 (!layout_engine.stored_complete_row_tail_is_line_advance(
                     table, row, &next_cut, remaining, styles,
