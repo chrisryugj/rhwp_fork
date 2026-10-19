@@ -99,6 +99,7 @@ impl TypesetEngine {
                         Vec::new()
                     },
                     split_end_limit: if opening { height } else { 0.0 },
+                    split_end_reserved: 0.0,
                     end_row_height_override: Some(height),
                 };
             }
@@ -117,6 +118,7 @@ impl TypesetEngine {
                         split_block_start: None,
                         split_end_cut: vec![0],
                         split_end_limit: frame.opening_height,
+                        split_end_reserved: 0.0,
                         end_row_height_override: Some(frame.opening_height),
                     };
                 }
@@ -143,6 +145,7 @@ impl TypesetEngine {
                         split_block_start: None,
                         split_end_cut: cut,
                         split_end_limit: opening,
+                        split_end_reserved: 0.0,
                         end_row_height_override: Some(opening),
                     };
                 }
@@ -161,6 +164,7 @@ impl TypesetEngine {
                         split_block_start: None,
                         split_end_cut: Vec::new(),
                         split_end_limit: 0.0,
+                        split_end_reserved: 0.0,
                         end_row_height_override: None,
                     };
                 }
@@ -249,6 +253,7 @@ impl TypesetEngine {
                     split_block_start: None,
                     split_end_cut: Vec::new(),
                     split_end_limit: 0.0,
+                    split_end_reserved: 0.0,
                     end_row_height_override: None,
                 },
             );
@@ -327,6 +332,7 @@ impl TypesetEngine {
             mut split_block_start,
             mut split_end_cut,
             mut split_end_limit,
+            mut split_end_reserved,
             mut end_row_height_override,
         } = run_scan(scan_vars);
         if let Some(started) = issue2424_scan_started {
@@ -505,6 +511,7 @@ impl TypesetEngine {
                         split_block_start = refit.split_block_start;
                         split_end_cut = refit.split_end_cut;
                         split_end_limit = refit.split_end_limit;
+                        split_end_reserved = refit.split_end_reserved;
                         end_row_height_override = refit.end_row_height_override;
                         accepted_end_row_box = refit.accepted_end_row_box;
                         if end_row <= cursor_row {
@@ -575,6 +582,7 @@ impl TypesetEngine {
                         split_block_start: None,
                         split_end_cut: Vec::new(),
                         split_end_limit: 0.0,
+                        split_end_reserved: 0.0,
                         end_row_height_override: None,
                     };
                 }
@@ -596,6 +604,7 @@ impl TypesetEngine {
                     split_block_start = refit.split_block_start;
                     split_end_cut = refit.split_end_cut;
                     split_end_limit = refit.split_end_limit;
+                    split_end_reserved = refit.split_end_reserved;
                     end_row_height_override = refit.end_row_height_override;
                     accepted_end_row_box = refit.accepted_end_row_box;
                 }
@@ -680,6 +689,7 @@ impl TypesetEngine {
             ) {
                 consumed += height - selected;
                 end_row_height_override = Some(height);
+                split_end_reserved = height;
             }
         }
 
@@ -740,6 +750,7 @@ impl TypesetEngine {
                 }
                 consumed += height - selected;
                 end_row_height_override = Some(height);
+                split_end_reserved = height;
             }
         }
 
@@ -799,6 +810,7 @@ impl TypesetEngine {
             {
                 consumed += physical - selected;
                 end_row_height_override = Some(physical);
+                split_end_reserved = physical;
             }
         }
 
@@ -810,6 +822,7 @@ impl TypesetEngine {
             split_block_start,
             split_end_cut,
             split_end_limit,
+            split_end_reserved,
             end_row_height_override,
         }
     }
