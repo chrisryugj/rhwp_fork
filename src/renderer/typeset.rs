@@ -5804,6 +5804,7 @@ impl TypesetEngine {
                 st.col_count,
                 trim_sb,
                 st.vpos_ladder_dirty
+                    || st.vpos_page_base.or(st.vpos_lazy_base).is_none()
                     || !spacing_trim_restorable(paragraphs_all, next_idx)
                     || next_boundary_reverts_spacing_trim(
                         st.profile.hwpx_stored_layout() && !st.profile.hwp3_layout(),

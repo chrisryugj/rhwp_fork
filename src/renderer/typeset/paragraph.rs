@@ -351,6 +351,7 @@ pub(super) fn place_fitted_paragraph(
                 st.col_count,
                 trim_spacing_before_for_flow,
                 st.vpos_ladder_dirty
+                    || st.vpos_page_base.or(st.vpos_lazy_base).is_none()
                     || !spacing_trim_restorable(paragraphs, para_idx)
                     || next_boundary_reverts_spacing_trim(
                         st.profile.hwpx_stored_layout() && !st.profile.hwp3_layout(),
@@ -384,6 +385,7 @@ pub(super) fn place_fitted_paragraph(
                     st.col_count,
                     trim_spacing_before_for_flow,
                     st.vpos_ladder_dirty
+                        || st.vpos_page_base.or(st.vpos_lazy_base).is_none()
                         || !spacing_trim_restorable(paragraphs, para_idx)
                         || next_boundary_reverts_spacing_trim(
                             st.profile.hwpx_stored_layout() && !st.profile.hwp3_layout(),
@@ -512,6 +514,7 @@ pub(super) fn try_place_overflow_paragraph(
                     st.col_count,
                     trim_spacing_before_for_flow,
                     st.vpos_ladder_dirty
+                        || st.vpos_page_base.or(st.vpos_lazy_base).is_none()
                         || !spacing_trim_restorable(paragraphs, para_idx)
                         || next_boundary_reverts_spacing_trim(
                             st.profile.hwpx_stored_layout() && !st.profile.hwp3_layout(),
@@ -621,6 +624,7 @@ pub(super) fn place_after_failed_fit(
             st.col_count,
             trim_spacing_before_for_flow,
             st.vpos_ladder_dirty
+                || st.vpos_page_base.or(st.vpos_lazy_base).is_none()
                 || !spacing_trim_restorable(paragraphs, para_idx)
                 || next_boundary_reverts_spacing_trim(
                     st.profile.hwpx_stored_layout() && !st.profile.hwp3_layout(),
@@ -637,6 +641,7 @@ pub(super) fn place_after_failed_fit(
                 st.col_count,
                 trim_spacing_before_for_flow,
                 st.vpos_ladder_dirty
+                    || st.vpos_page_base.or(st.vpos_lazy_base).is_none()
                     || !spacing_trim_restorable(paragraphs, para_idx)
                     || next_boundary_reverts_spacing_trim(
                         st.profile.hwpx_stored_layout() && !st.profile.hwp3_layout(),

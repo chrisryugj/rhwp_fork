@@ -7061,3 +7061,43 @@ manifest `--check --base-ref 5e2b9bfbf`는 기존과 같은 1646 sources·7140 s
 통과했다. 모든 사본의 원본 Git blob·SHA·함수와 상대 링크를 검증하고 이관 전 원문은
 공개된 `91ce04bdf` source로도 복원할 수 있게 기록한다. 이번 보완은 실행 실패나
 시각 미달을 통과 처리하는 변경이 아니다.
+
+### 편람 242쪽: 저장 원점 미확립 상태의 간격 트림 선행 진단
+
+같은 원본·KoPub Print의 원 #7751/#7494 → #7964 기록과 현재 base/후보를 다시
+대조했다. `handbook-p242-{base,current}-flow-trace.log`에서 sec7 pi410의
+배치는 앞·뒤 여백과 줄간격을 포함해 49.306667px 전진하지만 fit은 마지막 줄간격
+748HU(9.973333px)를 미리 빼고 39.333333px만 전진했다. 이때 page/lazy 저장 원점이
+모두 없고 다음 pi411의 lazy 역산도 음수라 거부된다. 다음 경계가 기록한 pi411의
+단 상대 끝 231.68을 paint가 적용하면서 정상 배치 끝 389.066667을 379.093333으로
+덮어쓴다. 뒤 pi414 TAC 제목과 후속 본문도 같은 미확립 축의 영향을 받는다.
+
+원인 소비 경로는 `FormattedParagraph::flow_advance_height`의 간격 생략 →
+`place_fitted_paragraph`의 fit 누적 → `vpos_snap_current_height`가 기록한 문단 끝 →
+`layout_column`의 확정 끝 소비다. 현재 없는 원점이 간격을 복원할 것이라 가정하지
+않도록 공통 전진·트림 조회에 원점 유효성을 함께 전달한다. 이미 page 또는 lazy
+원점을 확립한 정상 경로는 기존 계약을 유지하며 문서별 좌표·clamp를 추가하지 않는다.
+독립 Print의 pi412 첫 잉크 y399.2px와 제목·후속 본문을 같은 DPI로 직접 대조한다.
+이 선행 보정은 아직 실행 전이며, 최신 Native 영향 쪽·기존 편람/저장 원점/캡션
+대조군으로 방향을 확인한 뒤 fresh WASM과 최종 게이트까지 이어 검증한다.
+
+동일한 공통 전진/트림의 복원 불가 조건에 page/lazy 원점 미확립을 추가했다.
+새 opt1 Native는 고정 target/jobs 8에서 3분57초·exit 0으로 빌드했고 기존
+편람 9건·경계 28건·source-frame/KoPub 46건 및 별도 원점/캡션 8건은 각각
+전부 통과했다(중복 합산하지 않음). 전체 Native는 HWP/HWPX 모두 383쪽이며
+직전 후보 대비 하락한 점수는 없다. 242쪽은 각각 57.84789→98.85688%,
+57.84997→98.87707%이고 69쪽도 96.019대→99.402대로 개선됐다. HWP111쪽은
+81.80193→83.97997%지만 여전히 미달이며 HWPX111쪽은 83.98125% 그대로다.
+156쪽은 81.26626/81.26672%로 남아 있다. 평균이나 다른 쪽 개선으로 이 두 쪽을
+통과 처리하지 않는다. 양쪽 전383쪽 노드 순서·문단/개체·셀 소유·텍스트 계층은
+직전 후보와 같고, 새 242쪽 review/overlay에서 PRISM 제목 표·앞뒤 본문의
+같은 배율 Print 위치·간격을 직접 대조했다. source/producer SHA와 명령은
+`handbook-unresolved-origin-direction-results.json`, 전쪽 결과와 delta는
+`handbook-unresolved-origin-all-native-{results,delta}.json`, 내용 대조는
+`handbook-unresolved-origin-native-content-check.json`에 있다.
+
+`cargo fmt --all -- --check`와 manifest prepare/check(1646/7140/48), diff check가
+통과했다. 최신 fresh WASM·최적화 Native·최종 lint/전체 회귀는 아직 남아 있다.
+문서 전체 선행 gate를 충족하지 않아 새 정식 회귀나 px 핀을 추가하지 않았다.
+사용자가 다시 지적한111쪽의 등록번호 예시 상자·화살표와 다음 본문의 위치 차이를
+우선 분석하고,156쪽 row9 이어받기 높이132.1→128.1px 차이도 계속 보정한다.
