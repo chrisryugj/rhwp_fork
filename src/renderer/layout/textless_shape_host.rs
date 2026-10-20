@@ -2,11 +2,12 @@
 
 use crate::model::{control::Control, paragraph::Paragraph, shape::TextWrap};
 use crate::renderer::pagination::{PageContent, PageItem};
+use crate::renderer::style_resolver::ResolvedStyleSet;
 
 pub(super) struct TextlessShapeHost {
-    pub(super) ladder_candidate: bool,
-    /// TAC 플래그가 있어도 별도 Shape 항목이 이미 개체 출력을 소유한다.
-    /// 저장 사다리가 없으면 host의 현재 구성 줄만 한 번 전진시킨다.
+    pub(super) ladder_advance: Option<bool>,
+    /// 별도 출력된 TAC의 음수 줄간격은 유효한 저장 사다리가 증언해야 한다.
+    /// 그 밖의 TAC는 일반 문단이 개체를 담는 줄 상자의 전진도 소유한다.
     pub(super) separate_inline_object: bool,
 }
 
@@ -23,9 +24,13 @@ pub(super) fn control_has_visible_inline_content(control: &Control) -> bool {
 
 pub(super) fn classify(
     page: &PageContent,
-    para: &Paragraph,
+    paragraphs: &[Paragraph],
+    styles: &ResolvedStyleSet,
+    dpi: f64,
     para_index: usize,
+    allow_stored_inline_advance: bool,
 ) -> Option<TextlessShapeHost> {
+    let para = paragraphs.get(para_index)?;
     if super::para_has_visible_text(para) {
         return None;
     }
@@ -37,12 +42,10 @@ pub(super) fn classify(
             })
         })
     };
-    if para
-        .controls
-        .iter()
-        .enumerate()
-        .any(|(index, control)| control_has_visible_inline_content(control) && !separate(index))
-    {
+    if para.controls.iter().enumerate().any(|(index, control)| {
+        control_has_visible_inline_content(control)
+            && (!matches!(control, Control::Picture(_) | Control::Shape(_)) || !separate(index))
+    }) {
         return None;
     }
     let mut found = false;
@@ -72,8 +75,29 @@ pub(super) fn classify(
                     | TextWrap::TopAndBottom
             );
     }
+    let ladder_advance = ladder_candidate
+        .then(|| {
+            super::textless_host_ladder_line_advance(
+                paragraphs,
+                styles,
+                dpi,
+                para_index,
+                separate_inline_object,
+            )
+        })
+        .flatten();
+    // Shape 항목의 출력 소유만으로 TAC의 줄 상자까지 부동 개체로 바꾸지 않는다.
+    // 원본의 음수 줄간격과 다음 원점이 닫히는 경우만 그 짧은 전진을 공유한다.
+    // 음수가 아닌 간격·저장 증거가 없는 TAC는 일반 줄 배치를 따른다.
+    if separate_inline_object
+        && (!allow_stored_inline_advance
+            || para.line_segs.iter().any(|line| line.line_spacing >= 0)
+            || ladder_advance.is_none())
+    {
+        return None;
+    }
     found.then_some(TextlessShapeHost {
-        ladder_candidate,
+        ladder_advance,
         separate_inline_object,
     })
 }

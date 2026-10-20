@@ -2414,9 +2414,15 @@ fn textless_host_ladder_line_advance(
     styles: &ResolvedStyleSet,
     dpi: f64,
     para_index: usize,
+    require_exact_signed_advance: bool,
 ) -> Option<bool> {
     let cur = paragraphs.get(para_index)?;
     let next = paragraphs.get(para_index + 1)?;
+    if require_exact_signed_advance
+        && (cur.stored_text_partition_is_dirty() || next.stored_text_partition_is_dirty())
+    {
+        return None;
+    }
     // [#6524] 물러날 대상은 "**줄**이 여럿"이지 "**조각**이 여럿"이 아니다. 종전 술어
     // `[seg]` 는 좌·우로 쪼개진 한 줄에서도 통째로 물러나 진행량 0 을 주었고, 다음 문단이
     // 24.00pt 위로 올라와 본문 전체가 15.00pt 상승했다(30098 3쪽: `추진경과` 제목이 도표
@@ -2489,6 +2495,11 @@ fn textless_host_ladder_line_advance(
     let delta = next_seg.vertical_pos - seg.vertical_pos;
     if delta < 0 {
         return None; // 쪽/단 경계 리셋 — 사다리로 판별 불가
+    }
+    if require_exact_signed_advance {
+        // TAC의 줄 상자보다 짧은 전진은 추정 비율로 승인하지 않는다.
+        // 같은 줄 메트릭·문단 간격과 다음 저장 원점이 HU 반올림 안에서 닫혀야 한다.
+        return (delta > 0 && (i64::from(delta) - i64::from(expected)).abs() <= 1).then_some(true);
     }
     // [#5809] 예약 증언은 호스트 줄 규모(sb 여유 포함 1.5×)여야 한다 — 편집(Enter)
     // 으로 문단이 삽입된 stale 사다리는 델타가 여러 줄 규모로 남아(issue_2069
@@ -10988,9 +10999,14 @@ impl LayoutEngine {
                     return (y_offset, false);
                 }
                 if let Some(para) = paragraphs.get(*para_index) {
-                    if let Some(shape_host) =
-                        textless_shape_host::classify(page_content, para, *para_index)
-                    {
+                    if let Some(shape_host) = textless_shape_host::classify(
+                        page_content,
+                        paragraphs,
+                        styles,
+                        self.dpi,
+                        *para_index,
+                        !self.profile.get().session_edited(),
+                    ) {
                         // 빈 non-TAC 그림/도형 host 문단은 바로 뒤 Shape PageItem 이 실제
                         // 개체를 렌더한다. 여기서 layout_paragraph 를 태우면 보이지 않는
                         // 빈 줄이 저장 vpos 기준으로 페이지 밖에 기록되어 overflow 오탐이 난다.
@@ -11028,17 +11044,7 @@ impl LayoutEngine {
                         // 만든 reflow lineseg 는 저장 증거로 쓰지 않는다.
                         // 개체는 Shape 항목이 이미 소유한다. TAC 표시로 별도 출력
                         // 소유를 부정하지 않고 host 줄의 저장 전진을 확인한다.
-                        let ladder_verdict = shape_host
-                            .ladder_candidate
-                            .then(|| {
-                                textless_host_ladder_line_advance(
-                                    paragraphs,
-                                    styles,
-                                    self.dpi,
-                                    *para_index,
-                                )
-                            })
-                            .flatten();
+                        let ladder_verdict = shape_host.ladder_advance;
                         // [#5929] 사다리가 **아예 없는** 문서(합성 lineseg 뿐인 기계
                         // 생성본)에서는 위 증언 경로가 통째로 침묵한다. 그때는 조판을
                         // 따라야 한다 — typeset 은 이 빈 어울림 host 문단에 제 줄을
@@ -11064,8 +11070,7 @@ impl LayoutEngine {
                                     && matches!(cm.vert_rel_to, VertRelTo::Para)
                             });
                         let advance_line = ladder_verdict.unwrap_or_else(|| {
-                            shape_host.separate_inline_object
-                                || no_stored_ladder_square_host
+                            no_stored_ladder_square_host
                                 || textless_infront_para_host_requires_line_advance(para)
                         });
                         if advance_line {
