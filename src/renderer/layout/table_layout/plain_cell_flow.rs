@@ -257,6 +257,11 @@ impl super::CellUnit {
     pub(in crate::renderer::layout) fn has_visible_line(&self) -> bool {
         !self.empty_spacer && self.vis_start < self.vis_end
     }
+
+    /// 한 가시 줄만 소유하는 유닛인가. 원문 줄 범위는 이 소유자 안에서 판정한다.
+    pub(in crate::renderer::layout) fn is_single_visible_line(&self) -> bool {
+        self.has_visible_line() && self.vis_end - self.vis_start == 1
+    }
 }
 
 /// 내용이 모두 끝난 행에서 그린 뒤 남은 빈 꼬리를 쪽 경계에서 흡수하는 상한(HU).
