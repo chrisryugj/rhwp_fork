@@ -7311,3 +7311,38 @@ Native/fresh WASM 재산출·직접 판독과 필수 lint를 순차 진행한다
 `handbook-retention-direction1-native-results.json` 및
 `handbook-retention-direction1-panels-results.json`에 연결했다. 새 공통 코드의 최적화 빌드,
 fresh WASM, 실제 보정 문서 전쪽 TSV와 남은 전체 회귀 실패 처리는 계속 필요하다.
+
+
+### 2026-10-20 리베이스 후 #7872의 실제 표 바깥여백 보존
+
+`upstream/devel`의 새 head `2e3b4f880bd11d35398e6ea0100846611f13a72d`에 충돌 없이
+리베이스했다. 후보는 `2aa8f1275ff7c2c75b82b9c9a9b09413dc68903a`이며, 새 base의 변경은
+Native Qt/clipboard 경로다. 새 base의 Qt adapter 25건과 실제 Native FFI offscreen smoke가
+통과했다. 실제 OS IME를 확인했다는 뜻은 아니다. 상세 원장은 ignored output의
+`rebase-2e3b4f880-results.json`, `qt7930-base-adapter-smoke.log`,
+`qt7930-base-actual-smoke-results.json`이다.
+
+#7872 원 해결 PR #7973과 후속 PR #8034를 추적했다. 독립 Print의 ④·⑤ 기준선 255.2px에
+비해 후보는 251.2667px이었다. 첫 중첩 표의 아래 바깥여백 284HU(3.7867px)가
+`tac_host_end::close`에서 빠졌다. 셀 안쪽 여백을 되살리거나 기대값을 바꾸지 않고,
+실제 배치한 직계 자식 표의 `control_index`로 원본 TAC 표를 찾아 아래 바깥여백을
+실제 표 하단에 포함했다. 이 공통 호스트 종료값을 다음 문단의 원점이 소비한다.
+각 표의 소유 control을 따르며 같은 문단의 모든 표가 같은 줄이라는 가정은 추가하지 않았다.
+
+같은 2aa 소스에 patch SHA-256 `c49c910755dfa6626bd17b157a4537cfd9125b8e1e86264c7fdb8d887578ace5`를
+적용한 Native opt1 빌드로 기존 #7872 두 검사가 기대값 변경 없이 통과했다. 전체 실패 모듈과
+새 clipboard 검사 47건은 35건 통과·12건 실패다. 따라서 전체 회귀 통과가 아니다.
+다른 정상 대조군 9+28+46건은 모두 통과했다. 수동 rustc의 두 번째 모듈 첫 컴파일은
+`CARGO_BIN_EXE_rhwp` 누락으로 실패했으며, 고정 CLI 경로를 전달한 재실행에서 통과했다.
+이 환경 실패는 결함 재현에 포함하지 않는다.
+
+원본 1쪽의 Native raw는 93.45152→99.56579%, 축약본 1쪽은 100%다. 원본의 review/overlay에서
+표 끝과 두 번째 선택지 줄의 위치를 독립 Print와 직접 대조했다. 편람 두 형식의
+57·98·111·140·156·242·272·360·371쪽을 새로 출력했고 기존 개선 위치는 유지됐다.
+HWP 98쪽 raw 98.90763%는 devel 99.01849% 대비 0.11086%p 낮아 원인 검토가 남는다.
+최종 최적화 빌드·fresh WASM·전쪽 재검증·나머지 회귀 실패 보정은 완료 전이다.
+
+근거는 ignored `output/pr-review/planet6897-20261018/`의
+`rebase-2e-tac-margin-{build,semantic-contracts,visual}-results.json`,
+`rebase-2e-tac-margin-existing-results.json` 및 `rebase-2e-tac-margin-existing-attempt2-results.json`,
+`rebase-2e-tac-margin-panels/original-nested-tac-row-drop/review/review_001.png`에 있다.

@@ -9719,6 +9719,8 @@ impl LayoutEngine {
                     &cell_node.children[paragraph_children_start..],
                     para_y,
                     spacing,
+                    source_controls,
+                    self.dpi,
                 );
             }
 
