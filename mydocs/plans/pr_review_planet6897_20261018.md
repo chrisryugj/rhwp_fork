@@ -7,7 +7,9 @@
 기존 95개와 추가 4개를 합친 99개다. 기존 95개가 보존되고 source가 메인터너 보정 앞의
 연속 구간에 놓였음을 실제 Git 이력에서 확인했다. 추가분은 #8059의 기능·서식·근거 3개와
 #7975의 devel 병합 충돌 해결 1개다. 의미가 이미 같은 병합 head는 중복 적용하지 않는다.
-검증 범위는 새 독립 수식 문서까지 249입력·257조건·backend별 3,570쪽으로 확장했다.
+이관 전 검증 범위는 새 독립 수식 문서까지 249개 입력·257개 조건·backend별 3,570쪽이었다.
+작업지시자의 잔여 이관 지시에 따라 14개 조건·732쪽을 #7445의 하위 이슈로 이관했다.
+현재 제출 검증 범위는 235개 입력·243개 비교 조건·backend별 2,838쪽이다.
 최신 코드의 필수 검증은 진행 중이며, source 적용을 PR 준비 완료로 표시하지 않는다.
 아래 최초 요청·11개 적용 표와 이전 devel SHA는 초기 스냅샷이며, 이후 적용·리베이스
 기록과 최신 후보의 실제 검증 결과를 함께 따른다.
@@ -6270,3 +6272,132 @@ unit-tier 검사에서 신규 source-side cfg(test) 모듈·단위 검사·cfg-u
 이는 페이지 위치·피델리티를 고정하는 실물 렌더링 회귀 추가가 아니다.
 이관 파일 적용 중 공유 PDF를 두 번 이동하려던 중간 오류는 원본 SHA를 확인해 재개했으며
 어느 원본·PDF도 폐기하지 않았다. 원격 등록과 최종 lint·회귀·WASM은 아직 미완료다.
+
+
+### 제출 기준 추가 지시와 파일별 증적 (2026-10-20)
+
+작업지시자는 “그냥 무시하고 pr 준비해 90% 이상이면”이라고 지시했다. 이 통합 PR에서는
+후보 전쪽 Native/fresh WASM raw가 90% 이상이면 devel 대비 0.1%p 이상 하락을
+추가 제출 보류 사유로 삼지 않는다. 하락을 무회귀로 바꾸어 보고하거나 TSV 원값을 수정하지
+않는다. 90% 미만·쪽수 불일치·누락·필수 검증 실패와 직접 확인한 내용 결함은 별도로 처리한다.
+
+`mydocs/pr/assets/planet6897_20261018/tsv/README.md`를 파일별 원장으로 두고, 243개
+비교 조건 각각의 `files/<key>.md`에 PR 템플릿과 같은 입력/PDF·Native/fresh WASM 두 행·
+기준/후보 producer와 artifact 해시·원본 TSV 링크·TSV SHA-256/바이트 수를 기록한다.
+TSV는 canonical 산출 원본을 바이트 그대로 복사하며, 진행 중인 부분 TSV를 제출용으로
+보존하지 않는다. 26개 개별 PR review는 `mydocs/pr/archives/pr_<번호>_review.md`에 만들고
+각 PR의 실제 관련 입력과 파일별 TSV 표를 연결한다. 현재 검증 중인 상태와 최종 수용 판정을
+구분하며, 모든 필수 검증 완료 전에는 수용 가능·PR 제출 완료로 기록하지 않는다.
+
+Native Clippy의 `unnecessary_lazy_evaluations`와 `unnecessary_unwrap` 두 건은
+`d6212d70a`에서 조건·산술을 유지한 채 보정했다. 같은 커밋에 성공한 D67 fresh WASM의
+Studio 공개 JS 바인딩을 동기화했다. D67 전쪽 TSV의 실제 runtime producer는
+`65ef09ad8d67e94babd9ce619465ee2c98e81369`이며 후속 lint 보정 SHA와 혼동하지 않는다.
+
+Studio #7403 실제 CanvasKit E2E는 마지막 provider 해제 대기에서 실패했다. 같은 시점의
+진단은 host `active=false/count=0`, 이전 CanvasKit `localTypefaceCount=0/pending=0`이고,
+`Next Host`가 사라져 기존 `RendererSession` 계약에 따라 Canvas2D로 전환된 상태였다.
+기준 devel의 `resolveUncached`에도 동일한 resource preparation 실패 전환 경로가 있다.
+현재 CanvasKit 진단 객체가 계속 존재한다는 잘못된 검사 가정을 제거하고, 보유했던 실제
+renderer의 해제 상태·공급자 비활성/face 0·예상한 Next Host 준비 실패 전환·HWP 바이트
+보존과 유효 canvas를 검사했다. 제품의 fallback 계약이나 timeout은 바꾸지 않았다.
+수정 전 실제 timeout, 수정 후 CanvasKit/Canvas2D 두 E2E exit 0을 각각 로그로 남겼다.
+로그는 `post-direction67-font-host-{canvaskit,canvas2d}.log`이며 이미 통과한 face 동일성·
+TTC slant·교체·문서 전환·지연 read 폐기·undo/redo 계약을 함께 유지한다.
+
+
+### 파일별 TSV 표와 개별 review 작성, 필수 검사 보완
+
+235개 입력·243개 비교 조건의 파일별 템플릿 표와 원 PR 26개 개별 review를 작성했다.
+기준/후보 Native/fresh WASM 원문은 별도 TSV로 보존하고 SHA-256·바이트 수·행 수를
+실제 원본과 대조한다. 기준 쪽수 불일치 6조건은 실제 기준 출력 쪽수와 비교 가능한 행 수를
+나누어 표시한다. 진단 TSV를 기준 전체 통과나 실제 출력 쪽수로 바꾸어 보고하지 않는다.
+
+Native/WASM32 Clippy·workspace build가 통과했고, workspace all-target Clippy에서
+PUA 세션 필드 추가 후 테스트 fixture 초기화 6곳의 누락을 확인했다. `5163ff869`에서
+빈 세션 기본값만 명시했다. 동일 all-target Clippy 재실행은 exit 0이며 검사 기대값·제품
+코드는 바꾸지 않았다. 이어진 manifest 검사는 오래된 28개 파생 harness와 현재 원본 배정의
+불일치를 검출했다. canonical `--prepare`로 현재 원본에서 다시 생성한 뒤 무생성 `--check`가
+통과했다. 1,643 sources / 정적 test 속성 7,135개 / 28 suites + 20 exceptions다.
+파생 `tests/generated/`와 `tests/suites/manifest.json`은 제출 commit에 포함하지 않는다.
+unit tier는 4,101 tests / 296 modules이며 원본 테스트 수를 올려 회피하지 않았다.
+현재 재생성 harness에 대한 all-target lint와 전체 Rust·Native Skia를 순차 실행하고 있다.
+
+PR 본문은 모든 243개 파일별 표와 26개 개별 review 링크, 대표 입력의 기준/후보
+Native/fresh WASM 원문 직접 다운로드 링크를 함께 넣는다. 전체 원문·해시 972개를 한 본문에
+삽입하면 본문 크기 제한을 넘으므로 파일별 전체 표를 같은 PR의 정식 자산으로 제공한다.
+본문의 SHA 고정 링크·실제 다운로드 바이트 검사는 최종 자산 push 뒤 수행한다.
+
+### #7965 추가 9개 커밋의 순차 체리픽과 리베이스 (2026-10-20)
+
+작업지시자의 “순서대로 체리픽 해서 리베이스” 지시에 따라 원 PR의 최신 head
+`e4aa55ad0a2899576d3f08a7769f7a0acfb1dc32`까지 추가한다. 기존 접수 head
+`21ab9623d`와 리베이스 후 대응 커밋 `d2293537f`의 stable patch ID는 같다.
+그 뒤의 신규 커밋은 다음 9개이며, 현재 통합 브랜치에 같은 patch ID는 없다.
+
+1. `50dcb0078`: 쪽 끝 띠의 예약 높이와 프레임 inset 계산.
+2. `f8fa0f02a`: 병합 칸 표의 분할 예산과 예약 높이 일치.
+3. `065125a94`: 구버전 저장 줄의 낱말 꼬리 condense 재구성.
+4. `da062b3aa`: #7702 시각 증적.
+5. `8e1811336`: 리베이스 후 시각 증적.
+6. `478da8250`: 쪽 끝 행에서 끝나는 걸침 칸 줄의 보존.
+7. `e90586ecc`: 해당 변경의 시각 증적.
+8. `f296dbc21`: 휴먼명조 ASCII 전진폭과 문단 끝 자간.
+9. `e4aa55ad0`: 해당 변경의 시각 증적.
+
+reviewer `jangster77`을 GitHub API로 다시 확인했다. 신규 파일과 현재 dirty·untracked
+파일의 경로 충돌은 없다. 기존 source 99개 뒤에 위 9개를 원 순서대로 적용하고,
+기존 메인터너 보정은 그 뒤로 재배치한다. 원 contributor 브랜치는 수정하지 않는다.
+현재 전체 회귀·Skia 실행이 종료되기 전에는 Rust 소스를 변경하지 않는다.
+기존 후보 `5163ff869`의 실행 결과는 수정 전 근거로 보존하며, 추가 코드의 검증으로
+재표시하지 않는다. 새 후보에서는 추가 기능의 경계·정상 대조군과 영향 문서의
+전쪽 Native/fresh WASM TSV·확대 판독을 다시 확인한다.
+
+동기화한 `upstream/devel`은 현재 `5e2b9bfbf08573a31fa1e11a2445ff63fc0755c0`로
+기존 base와 같다. 체리픽 후 재확인하며 새 base가 없으면 불필요한 base 리베이스는
+하지 않는다. source 순서 재배치와 base 변경에 따른 리베이스를 구분해 기록한다.
+
+추가 source와 기존 보정의 충돌은 다음 공통 소비 경로로 점검했다. 별도 인덱스의 268개
+재배치 결과는 사전 점검이며 컴파일·동작 검증의 완료 근거로 사용하지 않는다.
+
+- 일반 행의 실제 예약 증분은 `row_step.rs`에서 한 번 계산해 시작·부분·끝 행 상자와
+  `BlockTableRowScan::split_end_reserved`에 공유한다. refit 뒤에도 전달하며 emit은
+  `예약 증분 + 남은 띠 - 현재 행 상자`로 여유를 구하고, 최종 상자로 교체할 때 원래
+  예약 증분을 뺀다. 블록 컷의 `split_block_physical_height`와는 적용 경로가 다르므로
+  둘을 모두 보존한다.
+- 저장 조각의 하단은 공통 `rowbreak_fragment_bounds`의 내용 수용 하단과 빈 띠 하단을
+  직접 소비한다. 이 분리는 새 source의 이전 inset 추정 필드를 대체한다. 이미 확정한
+  빈 띠 하단에 inset을 다시 차감하거나 내용 예산과 같은 값이라고 추정하지 않는다.
+- 걸침 셀의 종료 유닛 helper는 기존 보정이 옮긴 `stored_span_content.rs`에 유지한다.
+  그 경로는 실제 수용 셀 상자로 유닛을 고르므로 새 source의 물리 끝 상자 동작을 이
+  공통 경로에서 검증한다. 삭제된 옛 위치에 같은 함수를 다시 만들어 우회하지 않는다.
+- 새 condense 판정과 기존 목록 프레임 처리는 별도 조건으로 보존한다. 이후 철회된
+  목록 프레임 실험도 재생하지 않으며, container의 마지막 저장 세대와 기존 공통 줄
+  resolver의 실제 출력·측정 소비를 함께 검증한다.
+
+수정 전 후보 `5163ff869`의 전체 nextest는 11,133건 실행 중 11,100건 통과·33건 실패·
+45건 제외로 종료했다. 실패 이름·소스 위치·당시 원본 해시는 ignored
+`pre-source108-failed-regression-audit.json`에 보존했다. Native Skia 단위 검사는
+3,858건 통과·같은 행 컷 검사 1건 실패·12건 제외다. 이 결과를 새 source의 최종 통과로
+재사용하지 않으며, source 순차 적용 뒤 실패 원인과 필수 검증을 계속 처리한다.
+
+실제 순차 체리픽·리베이스를 완료했다. source 108개까지의 경계는
+`4dcc9f2b64a840514cc8c62ca6321b3c4bea9488`, 기존 메인터너 보정 268개를 재배치한
+후보는 `730542e60bac50dbd7968635af3f3ba97a15ca60`이다. 실제 최종 tree
+`e102fc79a61ade7f53e7478e6048477fe95511cd`는 완료한 재배치 사전 점검과 일치했다.
+기존 99개와 추가 9개의 `-x` 출처·순서를 실제 log에서 대조했고, 원 기여자 브랜치는
+변경하지 않았다. 최신 devel과의 좌우 차이는 `0 377`이다. devel은 여전히 `5e2b9bfbf`로
+같아 중복 base 리베이스는 하지 않았다. 계획 문서는 stash 적용 전후의 바이트까지
+대조해 복원했다. 개별 review 26개의 원 source→현재 local SHA 매핑도 실제 log로 갱신했다.
+
+리베이스 후보의 `cargo fmt --all -- --check`는 exit 0이다. 이전 Skia 개별 검사는
+placeholder 2건과 직접 PDF 검사 모두 통과했다. 이는 이전 후보 결과이며 새 source의
+최종 검증으로 전용하지 않는다. 새 source가 제공한 추가 입력 6개·22쪽의 기준/수정 전
+Native/fresh WASM 비교를 완료했다. ASCII 사다리 3개는 전쪽 98% 이상이지만 condense
+경계 입력 2개와 강사선정 실제 문서는 미달이다. 새 source 적용 후의 전체 TSV와 직접
+판독으로 해당 개선을 확인하며, 90% 미만을 통과로 표시하지 않는다.
+
+교육과정 151·154쪽의 낱말 결합과 199쪽 걸침 줄·202쪽 선언 높이는 D67의 실제
+render-tree에서도 이미 보존돼 있었다. 새 source 테스트가 현재 통합 후보의 이전 결함을
+처음 검출했다고 주장하지 않는다. 원 기여의 수정 전 증거와 메인터너 통합 전후의 관측을
+구분하고, 새 source의 일반화된 조건·추가 경계와 기존 정상 동작을 함께 검증한다.
