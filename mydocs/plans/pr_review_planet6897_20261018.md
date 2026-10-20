@@ -6880,3 +6880,69 @@ pi301 **685.186667px**를 보존한다. generic 완료 경계를 기각하는 �
 연결 API에 함께 나오는 미병합 #7474를 실제 해결 PR로 취급하지 않는다. 다음 편람 실패는
 #7751의 종료 근거인 #7964 / 원 #7494와 #7009 도입 통합 #7332를 따로 읽고 있다.
 383쪽 KoPub 기준과 과거 384쪽 무 KoPub 기준을 혼동하거나 HWP 증거로 HWPX를 판정하지 않는다.
+
+### #7751·#7009 원 해결 대조와 부록 마지막 저장 프레임 후보
+
+원 #7494의 기능 변경과 실제 보정·통합 #7964(merge `9415b920c`)의 본문, 커밋과
+기존 작업 기록을 대조했다. #7009의 원 검사 도입 #7331 → 통합 #7332도 확인했다.
+#7964의 독립 기준은 같은 원본 HWP와 KoPub 한컴 2024 Print 383쪽이며, 과거 384쪽
+PDF는 다른 글꼴 환경이다. 원 HWP·HWPX의 blob은 고정 base `efc52afb7`와 후보
+`14e807ca6`에서 같다. 기존 편람 8검사와 #5700 정상 대조 1검사는 수정 없이 base
+**9 PASS** / 후보 **5 PASS·4 FAIL**이다. 정확한 독립 기대값을 바꾸지 않는다.
+
+실제 compat2024 metadata는 base 두 형식 383쪽, 후보 HWP 386쪽·HWPX 384쪽이다.
+내용 소속이 처음 갈리는 곳은 둘 다 321쪽이며 부록 간지는 모두 309쪽이다. HWP의
+375쪽 서식 표(sec12 pi18)는 후보 378쪽에 같은 상자로 밀렸다. sec11 pi3의 103×2
+부록 표 row12 마지막 컷 `[17,96]`에서 왼칸은 완료됐고 오른칸은 같은 문단의
+저장 줄 7(vpos 0)에서 마지막 한 줄을 연다. 바로 앞 줄은 vpos 33484HU다.
+base의 남은 행 점유는 36.653333px, 후보는 과거 내용 전진 합의 잔여 161.386667px를
+예약해 뒤 row13 다음의 row14를 같은 쪽에 넣지 못한다. 현재 전체 최소의 잔여는
+이미 접힌 여러 저장 쪽 간격을 다시 점유하는 것이며 독립 마지막 프레임의 높이가 아니다.
+
+생산·소비 경로는 `stored_ordinary_row_remainder` → emit의 다음 시작 상자 → 다음
+스캔의 `whole_row_height` → 같은 부분 표 paint다. 현재 마지막 프레임 helper는
+두 미완료 칸과 문단 첫 줄만 인정해, 원본 재시작이 확인된 한 미완료 칸·문단 내부
+재시작을 놓친다. 기존 원본 유효성·단일 남은 프레임 조건은 유지하고, 공통 원본
+문단 내부 재시작 술어도 사용해 마지막 저장 줄의 원점·잉크 끝·패딩을 공유한다.
+독립 선언 최소가 내용 합보다 큰 경우의 잔여와 병합 칸 원장은 보존한다. 여러 프레임의
+기존 잔여를 일괄 없애는 과거 `8942273d7`의 guard는 `ef0443684`에서 실제 5회귀로
+철회됐으므로 되살리지 않는다. 기존 검사·baseline·CI 호출은 변경하지 않는다.
+
+전쪽 Native 비교는 별도 실행 중이다. base HWP는 383쪽 일치지만 111·242쪽이 각각
+81.9189%·64.3469%로 미달이다. 원 #7964의 전쪽 통과를 현재 base의 통과로 재인용하지
+않으며 이 기존 미달과 이번 추가 쪽 회귀를 구분한다. 후보 보정의 실행 결과와 최종
+Native/fresh WASM·직접 판독은 아직 미검증이다. 증거는
+`handbook-and-reset-{base,existing}-contracts.log`, `handbook-base-current-metadata-results.json`,
+`handbook-landmarks-{base,current}.jsonl`, `handbook-current-row-tail-probe/stderr.log`,
+`handbook-stored-row-source-probe.log`, `handbook-base-current-native-results.json`에 보존한다.
+
+### 편람 마지막 저장 프레임의 추가 실행과 물리 최소 근거
+
+첫 후보의 Native opt-level 1 빌드는 4분 12초·exit 0이었다. 기존 28검사는 모두
+통과했으나 편람 9검사는 여전히 5 PASS·4 FAIL이고 HWP는 386→385쪽만 개선됐다.
+이 결과를 완료로 보고하지 않는다. 실제 새 진단은 row12의 마지막 원본 프레임을
+36.653333px로 올바르게 찾고도 `declared=2093.813333 > content=1984.813333`이라는
+비교만으로 `carried=644.493333 - accepted=483.106667`의 161.386667px를 최소로
+덮어쓰고 있음을 보였다. row71도 원본 프레임 158.413333px를 398.053333px로 늘렸다.
+
+저장 높이가 내용 합보다 크다는 것만으로 별도 빈 최소 공간을 입증할 수 없다. 공통
+최소 보존은 기존 `first_source_frame_owner`가 원본 Common 상자·첫 내용 컷·여백을
+함께 인증한 경우에 적용한다. 그러한 독립 첫 상자가 없는 후속 원본 행의 마지막
+프레임은 저장 원점·줄 끝·실제 패딩으로 구한 같은 높이를 스캔과 paint가 소비한다.
+인증된 첫 상자의 큰 최소 잔여, 빈 줄·별도 빈 밴드와 병합 칸의 원장은 유지한다.
+문서 ID·쪽수·높이 상수나 좌표 clamp는 추가하지 않았다.
+
+두 번째 후보는 opt-level 1·공유 target·jobs 8 빌드 4분 10초·exit 0이다. 편람의
+기존 8검사와 #5700 대조는 **5 PASS·4 FAIL → 9 PASS·0 FAIL**이다. HWP 전체
+383쪽과 375쪽 서식 표, 두 형식의 부록 길이 74쪽이 복구됐다. 최근 28검사는 계속
+**28 PASS·0 FAIL**이다. 과거 잔여 일괄 제거에서 후퇴했던 경계도 포함한 기존
+source-frame/CGMP/blank-band/가로쪽/중첩 흐름과 정상 KoPub 계약 46검사는 직전
+`14e807ca6`와 후보 모두 **46 PASS·0 FAIL**이다. 이 standalone library/CLI 연결
+진단은 최종 Cargo suite·최적화 Native/fresh WASM 게이트와 구분한다.
+
+실제 후보는 `handbook-closing-frame-r2-r2-direction/`의 동결 binary/library와 source
+patch·SHA로 보존했다. 실행 기록은 `handbook-closing-frame-r2-r2-direction-results.json`,
+`handbook-closing-frame-r2-existing-9.log`, `handbook-closing-frame-r2-existing-28.log`,
+`kopub-source-frame-{before,candidate}-contracts.log`다. 같은 독립 PDF의 기존 raster를
+재사용하되 후보 Native는 전쪽 새 출력하는 `handbook-r2-native-reuse-pdf-results.json`을
+별도로 산출 중이다. 전쪽 일치율·남은 실제 배치 결함과 fresh WASM은 아직 완료하지 않았다.

@@ -279,12 +279,15 @@ impl LayoutEngine {
             .map(|cell| self.cell_units(cell, table, styles).len())
             .collect();
         if let Some(height) = self.stored_ordinary_closing_text_frame(table, row, cut, styles) {
-            // 내용 때문에 자란 행의 선언값에는 앞 쪽에서 접힌 전진 간격도
-            // 들어갈 수 있다. 그 합으로 독립 마지막 프레임을 다시 늘리지 않는다.
-            // 반대로 선언 최소가 전체 내용보다 큰 행은 내용 밖의 빈 공간도
-            // 소유한다. 같은 행의 수용 장부에서 그 최소의 잔여를 이어받는다.
+            // 내용 합보다 큰 저장 높이도 앞 쪽에서 접힌 간격을 담을 수 있다.
+            // 원본 Common 상자가 첫 내용 컷의 물리 공간을 함께 증언한
+            // 경우에만 선언 최소의 잔여를 유지한다. 그 근거가 없는 후속
+            // 원본 행의 마지막 프레임을 전체 전진 합의 잔여로 늘리지 않는다.
             let content = self.row_cut_content_height(table, row, &[], &end, styles);
-            let minimum = if declared > content {
+            let source_minimum = cells
+                .iter()
+                .any(|cell| self.first_source_frame_owner(table, cell, styles).is_some());
+            let minimum = if declared > content && source_minimum {
                 (carried.unwrap_or(declared) - accepted).max(0.0)
             } else {
                 0.0
@@ -312,7 +315,7 @@ impl LayoutEngine {
         (accepted > 0.0 && accepted < full).then_some(remaining)
     }
 
-    /// 미완료 칸들이 함께 여는 마지막 원본 텍스트 프레임의 물리 끝이다.
+    /// 미완료 칸들이 여는 마지막 원본 텍스트 프레임의 물리 끝이다.
     /// 전체 내용 전진 합에는 앞 쪽 경계에서 접힌 간격도 들어 있으므로,
     /// 같은 합의 잔여를 다시 예약하지 않고 저장 원점과 줄 끝을 소비한다.
     fn stored_ordinary_closing_text_frame(
@@ -335,9 +338,18 @@ impl LayoutEngine {
             }
             let first = units.get(start)?;
             let paragraph = cell.paragraphs.get(first.para_idx)?;
-            let previous = cell.paragraphs.get(first.para_idx.checked_sub(1)?)?;
-            if first.vis_start != 0
-                || !self.stored_plain_paragraph_restart(cell, table, previous, paragraph)
+            let paragraph_restart = first.vis_start == 0
+                && first
+                    .para_idx
+                    .checked_sub(1)
+                    .and_then(|index| cell.paragraphs.get(index))
+                    .is_some_and(|previous| {
+                        self.stored_plain_paragraph_restart(cell, table, previous, paragraph)
+                    });
+            // 다른 칸이 완료돼도 원본 문단 내부의 다음 쪽 줄은 같은
+            // 마지막 프레임을 연다. 전체 줄 전진 합으로 그 상자를 늘리지 않는다.
+            if !paragraph_restart
+                && !Self::stored_in_paragraph_unit_is_original_restart(cell, first)
             {
                 return None;
             }
@@ -361,7 +373,7 @@ impl LayoutEngine {
             height = height.max(hwpunit_to_px(physical, self.dpi));
             owners += 1;
         }
-        (owners >= 2).then_some(height)
+        (owners > 0).then_some(height)
     }
 
     /// 종료 줄의 다음 줄 간격만 남은 컷은 새 내용·빈 밴드 소유자를 만들지 않는다.
