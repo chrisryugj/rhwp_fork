@@ -6946,3 +6946,44 @@ patch·SHA로 보존했다. 실행 기록은 `handbook-closing-frame-r2-r2-direc
 `kopub-source-frame-{before,candidate}-contracts.log`다. 같은 독립 PDF의 기존 raster를
 재사용하되 후보 Native는 전쪽 새 출력하는 `handbook-r2-native-reuse-pdf-results.json`을
 별도로 산출 중이다. 전쪽 일치율·남은 실제 배치 결함과 fresh WASM은 아직 완료하지 않았다.
+
+## 2026-10-20 KoPub 미설치 환경 검사 제거와 배포 약관 확인
+
+작업지시자는 KoPub 미설치 환경 관련 회귀를 제거하도록 명시했다. 원 #6389의 환경
+기능 PR #7179 / merge `263b61a64`와 후속 줄 경계 보정 #7201 / merge `222c8c481`의
+본문·기존 검사와 실제 diff를 먼저 확인했다. 원 PR은 명시적 대체 환경과 원본 저장 줄을
+구분했으며 전체 no-ttf 시각 일치는 완료로 보고하지 않았다. 이번 제거는 사용자 지시이며
+편람의 실제 추가 쪽 회귀를 이관하거나 기대값을 완화하는 근거로 사용하지 않는다.
+
+- `issue_6389_font_environment.rs`의 KoPub 대체 환경 출력·세션/내장·CLI·재조판 검사
+  4건과 `issue_6389_manual_no_ttf_preserves_pdf_line_boundaries` 1건을 제거했다.
+- 일반 선언의 잘못된 face 목록·알 수 없는 필드·중복 fallback·활성 batch 거부 검사는
+  KoPub 부재를 가정하지 않는 일반 명시적 선언으로 유지했다. 정상 KoPub 셀의 내용·
+  저장 줄 경계 검사, #7702/#7390 실제 KoPub 전진폭 검사는 유지했다.
+- 전용 `kopub-unavailable.json`과 활성 매뉴얼의 해당 fixture 링크를 제거했다.
+  원장·재생성기의 오래된 현재 환경 미설치/384쪽 설명을 지웠다. 현재 원장에는 편람
+  데이터 행이 없어 다른 문서의 baseline 값은 바뀌지 않았다. #7009의 과거 환경 설명만
+  최종 KoPub 기준으로 정리했고 정상 부록 74쪽 assertion은 변경하지 않았다.
+- 원본 HWP/HWPX·과거 PDF·정상 문서 검사는 보존한다. 현재 회귀 4건은 공통 구현을
+  보정해 실제 9검사 통과로 복구한 것이며 제거한 미설치 검사 5건과 구분한다.
+
+보정 전후의 실제 frozen library/CLI에 같은 현재 원본 검사를 연결한 관련 46건은 모두
+통과했다. 일반 폰트 선언 검사·정상 KoPub 셀·전진폭도 이 실행에 포함된다. 원본에서
+제거한 함수는 `kopub-absence-removal-scope.json`에 정확히 5건으로 기록했다.
+manifest 준비 결과는 1646 sources·7140 static attrs·48 integration targets다.
+준비 이후 주석 수정으로 파생 suite 배정이 달라져 첫 `--check`는 harness drift를
+검출했다. 완성된 source에서 다시 생성한 뒤 고정 base `5e2b9bfbf`를 명시한
+`--check`가 exit 0으로 통과했다. `cargo fmt --all -- --check`, Python 재생성기
+구문 검사와 `git diff --check`도 통과했다. 실행 로그는
+`kopub-absence-removal-{fmt,manifest-final-prepare,manifest-final-check}.log`다.
+
+공식 [KoPub 2.0 안내](https://www.kopus.org/biz-electronic-font2-2/)에서 연결한
+[라이선스 약관](https://www.kopus.org/wp-content/uploads/2021/04/%EC%84%9C%EC%B2%B4_%EB%9D%BC%EC%9D%B4%EC%84%A0%EC%8A%A4.pdf)을
+직접 내려받아 확인했다. PDF는 93,670bytes, SHA-256
+`8983879562c14348936ce45ccad55de8b6d5cf54654999f4d46bd684e82fb982`다.
+제4조는 명시 조건에 따른 무료 복사·통합·삽입·재배포를 허용하고 같은 KoPub 약관으로
+배포하며 받는 사람에게 약관을 안내하도록 한다. 폰트 자체 유료 판매 제한과 수정본의
+KoPub/KoPubWorld 이름 제한도 구분한다. rhwp 코드는 MIT를 유지하고 동봉 폰트에는
+그 폰트의 별도 약관을 안내한다. 현재 논의한 원본 파일의 무료 패키지 재배포에 웹
+안내의 서버 서비스 탑재 승인 조항을 일괄 적용하지 않는다. 이번 확인만으로 폰트
+파일을 새로 커밋하거나 배포하지는 않았다.
