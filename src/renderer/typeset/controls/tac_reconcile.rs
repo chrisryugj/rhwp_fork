@@ -329,9 +329,44 @@ pub(super) fn measure(
                                 return None;
                             };
                             flow.is_effective_tac_table(para, table, fmt)
-                    .then(|| crate::renderer::float_placement::stored_tac_line_successor_advance(
-                        para, index, next, styles, dpi,
-                    )).flatten()
+                    .then(|| {
+                        crate::renderer::float_placement::stored_tac_line_successor_advance(
+                            para, index, next, styles, dpi,
+                        )
+                        .or_else(|| {
+                            let seg = para.line_segs.first()?;
+                            // 현재 구성한 개체 줄도 배치가 인증한 닫힌 끝을 공유한다.
+                            // 줄 높이가 이미 바깥여백을 소유하므로 legacy cap의
+                            // 위 여백이나 반간격으로 그 끝을 다시 계산하지 않는다.
+                            if !profile.hwpx_stored_layout()
+                                || seg.tag
+                                    & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
+                                    == 0
+                                || seg.line_spacing < 0
+                                || !crate::renderer::composer::tac_next_line_full_spacing(
+                                    para,
+                                    Some(next),
+                                    fmt.spacing_after,
+                                    styles
+                                        .para_styles
+                                        .get(next.para_shape_id as usize)
+                                        .map_or(0.0, |shape| shape.spacing_before),
+                                    seg,
+                                    profile,
+                                    dpi,
+                                )
+                            {
+                                return None;
+                            }
+                            let height = crate::renderer::composer::owned_rowbreak_tac_height(
+                                para, index,
+                            )?;
+                            Some(
+                                hwpunit_to_px(height.checked_add(seg.line_spacing)?, dpi)
+                                    + fmt.spacing_after,
+                            )
+                        })
+                    }).flatten()
                         })
                 })
                 .map(|advance| {

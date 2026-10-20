@@ -6668,3 +6668,50 @@ Native 최저 raw 94.54517%, WASM 94.83346%다. #5585 광고 약관 문서는 17
 `background-continuation-diagnostic-results.json`, `background-continuation-cap-diagnostic/`,
 `background-continuation-split-budget-results.json`이다. 새 `822047fff` CLI에서도 같은 cap과
 본문 초과를 다시 확인했다. 아직 이 배경 회귀의 구현 보정은 수행하지 않았다.
+
+## 2026-10-20 현재 개체 줄의 닫힌 프레임을 TAC cap에서 공유하는 후보
+
+#7661 수동 편집 HWPX의 첫 문단은 현재 구성된 단일 TAC 줄이다. 입력 표 높이
+5039HU와 바깥 위·아래 여백 각 141HU를 소유한 줄 높이는 5321HU이고,
+후행 간격 1920HU 뒤의 다음 문단은 저장 줄이 없어 재조판한다.
+즉 같은 줄의 전체 전진 7241HU = 96.546667px를 실제 배치가 이미 사용한다.
+다음 본문을 표시하지 않거나 배경을 임의 확대해 검사만 통과시키지 않는다.
+
+실제 생산·소비 경로는 현재 줄 `owned_rowbreak_tac_height` 및 기존 닫힘 판정
+`tac_next_line_full_spacing` → `layout.rs`의 표 뒤 원점 → 같은 문단의
+`controls::reconcile_tac_height` → `paragraph/scan.rs`의 다음 문단 수용 예산이다.
+기존 cap은 이 경우에도 별도 반간격과 위 여백으로 끝을 재계산했다.
+저장 원본용 `stored_tac_line_successor_advance`의 기존 계약은 유지하면서,
+현재 HWPX 개체 소유 줄도 배치의 같은 닫힘 판정과 원본 줄 높이·후행 간격을
+소비하게 한다. 문서·쪽·수치로 대상을 고르지 않는다. 편집 세션·여러 줄·여러 TAC,
+닫히지 않은 다음 프레임·음수 고정 간격은 기존 계약을 유지한다.
+
+후보의 방향 확인은 공용 target의 opt-level 1 Native Skia 빌드와 기존 CLI 기반
+배경 4건, 동일 입력의 전 3쪽 TSV·대표 PNG로 먼저 수행한다. 이는 최종 opt-level 3
+빌드·fresh WASM·전체 제출 게이트의 대체가 아니다. 아직 실행 전이다.
+
+
+### 현재 개체 줄 cap 보정의 실제 방향 검증
+
+최초 방향 확인 빌드는 작업 지침 갱신 시 중단되어 결과로 세지 않았다. 실행 중인
+Cargo/Rust 프로세스가 없음을 확인한 뒤 R2로 다시 실행했다. 부모 source는
+`edceedfa6203d9f034ba2c01fd6251a46efb6cdc`이며 변경한 Rust 파일 SHA-256은
+`d0c0cbad73590d4d7597120bcad8d4cee2f14e6dada73f0d4e669f62244c4f5f`다.
+공유 `target/pr-review`, jobs 8의 Native Skia opt-level 1 빌드는 3분 58초에
+exit 0으로 끝났다. 새 CLI를 지정한 기존 배경 검사 4건은 각각 실제 1건 실행·1건 통과다.
+검사·입력·독립 PDF의 기대값은 변경하지 않았다.
+
+동일 입력 전 3쪽 Native raw는 **99.96287%, 100%, 100%**이고 PDF와 3쪽이 일치한다.
+본문 85줄은 37/41/7줄로 돌아왔으며 세 쪽의 전체 render tree가 고정 base와 같다.
+수정 전 마지막 쪽의 080번 시작·후속 프레임 조기 배치는 수정 후 독립 PDF의
+079번 시작·후속 프레임에 맞는다. 첫 쪽과 마지막 쪽 review PNG에서 직접 대조했다.
+Native의 2px 실루엣 100%를 원본 픽셀의 완전 동일로 해석하지 않는다.
+
+증거는 ignored 검증 루트의 `background-closed-frame-r2-direction-results.json`,
+`background-closed-frame-r2-direction-build.log`,
+`background-closed-frame-r2-diagnostic-results.json`,
+`background-closed-frame-r2-native-visual/background-continued-paragraph/silhouette.tsv`,
+`background-continuation-panels/corrected/review/review_001.png`와 `review_003.png`다.
+이번 실행은 방향 확인이다. 최종 opt-level 3·fresh WASM 및 제출용 전쪽 검증은 남아 있다.
+마지막 33건 재실행의 6건 통과·27건 실패와 별도로 기록하며 나머지 실패까지 해결됐다고
+세지 않는다.
