@@ -3,16 +3,12 @@
 //! [#7687 · #7680] 빈(또는 공백뿐인) host 문단의 다중 자리차지 표와 글 있는 host 의 둘째 양수
 //! 오프셋 표.
 //!
-//! 한/글 2020 규칙(정본: `pdf/한글문서파일형식_5.0_revision1.3-hancom-official.pdf` 20쪽,
-//! `pdf/issue7687/empty-host-2020.pdf` H1~H6):
-//! - 오프셋 0 표는 흐름을 자기 띠 끝까지 전진시키고, 빈 host 의 줄 상자는 그 띠 **아래**에 놓인다.
-//! - 양수 오프셋 표는 흐름을 전진시키지 않는 배제 띠다. 뒤 문단은 평범한 줄로 표 사이 틈을 채운다.
-//! - 줄 상자가 띠에 걸리면 **그 줄만** 띠 아래로 가고 앞 간격은 띠 안에서 흡수된다.
-//! - 글 있는 host 의 글줄이 둘째 표 띠에 걸리면 그 띠 아래로 간다(#7680).
+//! 한/글 2020 독립 Print `pdf/issue7687/empty-host-2020.pdf` H1~H6와 대조한다.
+//! 빈 host의 표 사이 틈, 줄 상자의 배제 띠 회피와 후속 본문 순서를 보호한다.
 //!
-//! 수정 전에는 둘째 표 높이를 흐름에 이어 쌓아 host 줄·빈 문단이 띠 안으로 들어갔고(hwpspec
-//! 19쪽 pi=131 426.3 이 표 ci=3 305.7~453.6 안), 「참고문헌」이 둘째 표(665.0~805.1) 위
-//! 672.6 에 겹쳤다. 합성 H1 의 「표 뒤 글 1」은 정본보다 178px 아래였다.
+//! 전체 쪽수·시각 선행 조건을 충족하지 못한 실제 형식 명세 문서의 재활성화 검사는
+//! mydocs/pr/assets/issue_7687/reactivated_guard/에 원문·공용 helper와 함께 보관했다.
+//! 공유 원본·독립 PDF·다른 정상 검사는 유지한다.
 
 use rhwp::wasm_api::HwpDocument;
 use serde_json::Value;
@@ -99,45 +95,6 @@ fn assert_below(what: &str, (y, _): (f64, f64), bottom: f64) {
     assert!(
         y >= bottom - 0.5,
         "{what} 글줄 {y:.1} 은 표 아래 {bottom:.1} 밑이어야 한다"
-    );
-}
-
-#[test]
-fn hwpspec_empty_host_lines_fill_gap_and_title_clears_second_table() {
-    let doc = load("samples/한글문서파일형식_5.0_revision1.3.hwp");
-    let t = tree(&doc, 18);
-    let (t1_top, t1_bottom) = table(&t, 130, 2);
-    let (t2_top, t2_bottom) = table(&t, 130, 3);
-    assert!(
-        t1_top < t1_bottom && t1_bottom < t2_top,
-        "둘째 표는 첫 표 아래 띠다"
-    );
-    // 빈 host 줄과 다음 빈 문단은 두 표 사이 틈을 차례로 채운다.
-    let host = line(&t, 130);
-    assert_in_gap("pi=130 host", host, t1_bottom, t2_top);
-    let p131 = line(&t, 131);
-    assert_in_gap("pi=131", p131, t1_bottom, t2_top);
-    assert!(p131.0 >= host.1 - 0.5, "pi=131 은 host 줄 뒤다");
-    // 줄 상자가 둘째 표 띠에 걸리는 pi=132 만 띠 아래로 간다.
-    let p132 = line(&t, 132);
-    assert_below("pi=132", p132, t2_bottom);
-    // 「3.2.12. 참고문헌」 문단: 첫 표는 pi=132 뒤에서 시작하고, 제목 글줄은 둘째 표(양수
-    // 오프셋) 아래에 놓인다(#7680). 다음 문단은 제목 뒤다.
-    let (t1b_top, _) = table(&t, 133, 2);
-    assert!(
-        t1b_top >= p132.1 - 0.5,
-        "pi=133 첫 표 {t1b_top:.1} 는 pi=132 {:.1} 뒤다",
-        p132.1
-    );
-    let (_, t2b_bottom) = table(&t, 133, 3);
-    let title = line(&t, 133);
-    assert_below("pi=133 「참고문헌」", title, t2b_bottom);
-    let p134 = line(&t, 134);
-    assert!(
-        p134.0 >= title.1 - 0.5,
-        "pi=134 {:.1} 는 제목 {:.1} 뒤다",
-        p134.0,
-        title.1
     );
 }
 

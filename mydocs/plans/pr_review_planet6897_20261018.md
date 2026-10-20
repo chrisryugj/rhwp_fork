@@ -7593,3 +7593,22 @@ block·중첩 경로와 같은 `ParagraphFloatPlacement`를 소비하고 lane �
 통과했고 H1~H6 fresh WASM 전체 6쪽은 raw 100%다. 별도로 진행 중인 overlay 물리 컷
 패치는 아직 수용·커밋하지 않았으며 이 producer에 함께 포함된 사실을 기록했다.
 최종 통합 head 전체 검증·PR 제출 완료를 뜻하지 않는다.
+
+### #7687 원본 검사 재활성화의 보관과 집중 재검증
+
+실제 형식 명세 문서는 `format_spec13_test_removal_validation.json`에서 이미 보관·
+이관한 원본과 SHA가 같다. 원 PR #8005가 추가한 고정 19쪽 검사는 원 PR에서도
+쪽수 불일치와 raw 90% 미달이 기록돼 있었으며, 고정 base에는 테스트 파일이 없다.
+base에 등록된 검사를 새로 이관한 것으로 간주하지 않고, 승인 범위의 "이미 이관한 건
+제외"에 따라 부적합한 재활성화 한 건만 제외했다. 전체 코드·helper·Git blob·입력·
+PDF SHA·기존 이슈 #7687·복원 조건을
+`mydocs/pr/assets/issue_7687/reactivated_guard/`에 보존했다. 공통 이관 대상으로
+#7445를 새로 지정하거나 중복 이슈를 만들지 않았다. 공유 원본·공식 PDF·다른 정상
+검사는 그대로 두고, 정상 H1~H6의 Native/fresh WASM 전체 6쪽 raw 100% TSV도 보존했다.
+
+실행한 집중 검사는 이제 **46건 통과·0건 실패**다. 기존 47건에서 재활성화 한 건을
+보존·제외했으므로 47건 통과로 세지 않는다. #4138 두 검사는 그대로 유지했고 #2439는
+정식 검사의 수정 전 실패·수정 후 통과를 별도로 확인했다. 실행 명령·소스 해시·종료
+코드는 `qualified-four-failures-final-contracts-results.json`, 로그는
+`qualified-four-failures-final-semantic-contracts.log`다. 모듈 선언의 rustfmt 정렬도
+수정했다. 미해결 corpus 오류와 최종 통합 필수 검증은 계속 진행한다.
