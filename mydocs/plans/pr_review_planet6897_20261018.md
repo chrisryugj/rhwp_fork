@@ -6641,3 +6641,30 @@ API로 재확인했다. base가 같아 불필요한 base 리베이스는 하지 
 일반 소스와 다른 파일의 검사는 유지하며 원 patch의 SHA가 바뀌지 않았는지 대조한다.
 실제 실행·순서·해결 기록은 ignored `source114-actual-integration-results.json`과 driver log에 있다.
 새 후보의 lint·회귀·전쪽 Native/fresh WASM 검증은 이어 진행하며 아직 PR 준비 완료가 아니다.
+
+### 추가 source 통합 뒤 실제 검사 결과
+
+`822047fff4796d804ccff4cccc17a625c15a289d`에서 format 검사는 통과했다.
+같은 이전 실패 검사 33개를 실제 재실행해 **6건 통과·27건 실패**를 확인했다.
+완결 줄 경계 보정은 통과 상태를 유지한다. 추가 source 반영을 전체 통과로 판정하지 않는다.
+26개 개별 review 초안의 원본/로컬 SHA와 #7956·#8059 추가 접수 범위도 갱신했다.
+근거는 `source114-format-results.json`, `source114-remaining-regressions-results.json`,
+`source114-review-provenance-update-results.json`이다.
+
+원 실패 입력의 기준 devel 전쪽 대조도 추가했다. `aaaaaa.hwp`는 실제 50쪽 HWP이며
+#7333의 두 실패는 합성 입력이 아니다. 원본 한컴 2020 Print 50쪽과 대조한 기준
+Native 최저 raw 94.54517%, WASM 94.83346%다. #5585 광고 약관 문서는 17쪽이며
+기준 Native 99.00586%, WASM 99.00299%다. 미달·누락은 모두 0쪽이다.
+두 입력은 base부터 미달한 이관 조건이 아니므로 올바른 기존 검사를 유지해 보정한다.
+같은 입력·PDF 해시와 원문 TSV는 `remaining-regression-base-visual-results.json`에 연결했다.
+
+#7661의 기존 동일 harness에서 CLI만 바꿔 기준 devel PASS / `b0898c449` FAIL을 확인했다.
+기준의 첫 쪽 37줄에 비해 보정 전 후보는 38줄을 소비해 마지막 줄이 본문 하단을 8.1px 넘는다.
+배치상 첫 줄 원점은 같지만 fit 흐름은 96.546667→85.626667px로 되감겼다.
+표 문단 처리 직후에는 양쪽 96.5px이며, 후보의 TAC cap만 85.6px다.
+전쪽 Native raw는 보정 전에도 99.50773 / 99.99630 / 90.69682%지만 직접 결함은 남아 있다.
+점수 통과로 면제하거나 배경 포함 검사를 완화하지 않는다.
+원인 실행 기록은 `background-continuation-base-before-contract-results.json`,
+`background-continuation-diagnostic-results.json`, `background-continuation-cap-diagnostic/`,
+`background-continuation-split-budget-results.json`이다. 새 `822047fff` CLI에서도 같은 cap과
+본문 초과를 다시 확인했다. 아직 이 배경 회귀의 구현 보정은 수행하지 않았다.
