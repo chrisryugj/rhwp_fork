@@ -6603,3 +6603,41 @@ raw 100%는 2px 실루엣 값이며 픽셀 전체 동일성을 주장하지 않�
 파일 전체를 기계적으로 교체하지 않고 검토한다. `source114-index-preflight-results.json`에
 결과를 남겼으며, 이 조사는 실제 HEAD·주 index·작업 소스와 진행 중 빌드를 바꾸지 않았다.
 추가 6개를 실제 체리픽·리베이스한 완료 기록이 아니다.
+
+## 2026-10-20 추가 원 source 6개 실제 체리픽과 순서 리베이스
+
+최신 `upstream/devel`은 `5e2b9bfbf08573a31fa1e11a2445ff63fc0755c0` 그대로다.
+#7956 head `6bcefd1ac368ad81dca81239a1e8ee6e1f2ae092`, #8059 head
+`1367ff84693d4745f40efe5889b56835c2793688` 및 두 PR의 reviewer `jangster77`을
+API로 재확인했다. base가 같아 불필요한 base 리베이스는 하지 않았다.
+
+`backup/planet6897-before-source114-20261020`에 기존 `3119cfe90`을 보존하고,
+원 출처 108개 뒤에 아래 6개를 author·`-x`를 유지해 실제 체리픽했다.
+
+| PR | 원본 source | 실제 로컬 체리픽 |
+| --- | --- | --- |
+| #7956 | `6b85f52721dae2958e9391e7d665e54a32594849` | `28c265598` |
+| #7956 | `612926556f05def642d54e5942ac7930ec5c8135` | `e107b08b6` |
+| #7956 | `6bcefd1ac368ad81dca81239a1e8ee6e1f2ae092` | `ab5693325` |
+| #8059 | `3efc589dfbdf6183538cfe3bb9e67979904ec604` | `cbe3c00de` |
+| #8059 | `da1d2280d3f1f901a6aadd84ce14ba7c62cd9a71` | `aa5c30bd3` |
+| #8059 | `1367ff84693d4745f40efe5889b56835c2793688` | `44665ed99` |
+
+원 출처 114개가 `review/planet6897-source114-20261020`의 연속 구간에 있다.
+그 뒤로 기존 메인터너 커밋 277개를 순서대로 리베이스했으며 추가 충돌은 없었다.
+직후 head는 `593cbd39418e98f63f93c21e860ef21d50e3a831`, tree는 독립 index에서
+사전 재적용한 `4c840fff847e110a152a7422b1db2c5d77c9827b`와 같다.
+직전 완결 줄 보정은 `aa7584983`으로 유지됐다. 원 PR head와 원격 브랜치는 바꾸지 않았다.
+
+`da1d2280d`의 7개 충돌은 이미 있는 인증된 공통 프레임 원점·소비 호출부와 중복 helper의
+차이다. 기존 `stored_vpos_frames`·`stored_unit_start_px`와 실제 모든 소비 지점을 유지하고,
+같은 좌표를 별도 helper로 재계산하거나 다른 소비자에 `None`을 전달하는 중복은 넣지 않았다.
+원 source의 baseline 정리와 대표 이미지도 보존했다. 이 사실만으로 71352의 미달 해결이나
+#8095 종료를 주장하지 않는다. 새 TAC 흐름 코드와 현재 보정을 함께 실제 재검증한다.
+
+마지막 범위 공백 검사에서 이전에 이관한 원본 `source-pr8028.patch`의 문맥 공백이 검출됐다.
+원 patch를 편집하면 재현 바이트가 달라지므로, 저장소의 기존 patch·라이선스 원본 보존과
+같이 `.gitattributes`에 해당 파일 하나만 `-text -whitespace`로 지정한다.
+일반 소스와 다른 파일의 검사는 유지하며 원 patch의 SHA가 바뀌지 않았는지 대조한다.
+실제 실행·순서·해결 기록은 ignored `source114-actual-integration-results.json`과 driver log에 있다.
+새 후보의 lint·회귀·전쪽 Native/fresh WASM 검증은 이어 진행하며 아직 PR 준비 완료가 아니다.
