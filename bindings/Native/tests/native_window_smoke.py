@@ -10,7 +10,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples"))
-from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtCore import QEvent, QMimeData, QPointF, Qt
 from PySide6.QtGui import QImage, QInputMethodEvent, QKeyEvent
 from PySide6.QtWidgets import QApplication
 from qt_native_host import NativeWindow, scalar_from_utf16, utf16_length
@@ -188,6 +188,50 @@ class AdapterTests(unittest.TestCase):
         window.pump()
         self.assertEqual([(request["op"], request.get("text")) for request in worker.requests],
                          [("replace", text) for _, text, _ in events] + [("copySelection", None)])
+
+    def test_empty_clipboard_paste_is_an_accepted_no_op(self):
+        clipboard = self.app.clipboard()
+        self.addCleanup(clipboard.clear)
+        for contents in ("cleared", "empty", "unsupported"):
+            with self.subTest(contents=contents):
+                worker = IdleWorker()
+                window = self.idle_window(worker)
+                window.info = {"documentId": 7, "revision": 1}
+                if contents == "cleared":
+                    clipboard.clear()
+                    self.assertIsNone(clipboard.mimeData())
+                else:
+                    mime = QMimeData()
+                    if contents == "unsupported":
+                        mime.setData("application/x-rhwp-test", b"unsupported")
+                    clipboard.setMimeData(mime)
+                event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+                window.key(event)
+                self.assertTrue(event.isAccepted())
+                self.assertFalse(window.actions)
+                self.assertEqual(worker.requests, [])
+                self.assertEqual(window.errors, [])
+
+    def test_clipboard_paste_preserves_text_and_html_payloads(self):
+        clipboard = self.app.clipboard()
+        self.addCleanup(clipboard.clear)
+        for html in (None, "<p>가😀</p>"):
+            with self.subTest(html=html):
+                worker = IdleWorker()
+                window = self.idle_window(worker)
+                window.info = {"documentId": 7, "revision": 1}
+                mime = QMimeData()
+                mime.setText("가😀")
+                if html is not None:
+                    mime.setHtml(html)
+                clipboard.setMimeData(mime)
+                event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+                window.key(event)
+                window.pump()
+                expected = {"op": "pasteHtml", "html": html} if html is not None else {
+                    "op": "pasteText", "text": "가😀"}
+                self.assertEqual(worker.requests, [{**expected, "target": {"documentId": 7, "revision": 1}}])
+                self.assertTrue(event.isAccepted())
 
     def test_utf16_non_bmp_and_surrogate_rejection(self):
         self.assertEqual(utf16_length("가😀각"), 4)

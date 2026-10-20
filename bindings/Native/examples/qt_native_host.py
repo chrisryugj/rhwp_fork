@@ -573,7 +573,11 @@ class NativeWindow(QMainWindow):
                 self.enqueue([lambda _: {"op": "cutSelection"}], self.copied, refresh=True)
             elif key == Qt.Key.Key_V:
                 mime = QApplication.clipboard().mimeData()
-                self.command("pasteHtml" if mime.hasHtml() else "pasteText", **({"html": mime.html()} if mime.hasHtml() else {"text": mime.text()}))
+                if mime is not None:
+                    if mime.hasHtml():
+                        self.command("pasteHtml", html=mime.html())
+                    elif mime.hasText():
+                        self.command("pasteText", text=mime.text())
             elif key == Qt.Key.Key_Z:
                 self.command("redo" if shift else "undo")
             elif key == Qt.Key.Key_Y:
