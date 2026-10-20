@@ -14,6 +14,8 @@ fn pua_supply_clear_preserves_explicit_exact_font_owner() {
             .unwrap(),
     )
     .unwrap();
+    let document_before = format!("{:?}", core.document());
+    let saved_before = core.export_hwp_native().unwrap();
     core.clear_native_pua_fonts();
     let after: serde_json::Value = serde_json::from_str(
         &core
@@ -27,6 +29,16 @@ fn pua_supply_clear_preserves_explicit_exact_font_owner() {
     );
     assert_eq!(before["handle"], after["handle"]);
     assert_eq!(before["registry"], after["registry"]);
+    assert_eq!(
+        format!("{:?}", core.document()),
+        document_before,
+        "세션 해제는 문서 IR과 원본 raw 상태를 바꾸지 않는다"
+    );
+    assert_eq!(
+        core.export_hwp_native().unwrap(),
+        saved_before,
+        "원 PUA 공급 상태는 저장 HWP 바이트에 반영되지 않는다"
+    );
 }
 
 #[test]

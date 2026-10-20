@@ -9,6 +9,24 @@ const EXEMPT: &[(&str, &str, Exempt, &str)] = &[
         "#7998: history 소유 undo journal만 폐기하며 문서 IR·저장 raw stream을 변경하지 않는다. 복원 시 실제 편집은 별도 commit 경로에서 무효화한다.",
     ),
     (
+        "native_pua_fonts.rs",
+        "prepare_native_pua_fonts_with",
+        Exempt::SessionState,
+        "공급한 원 PUA 프로그램과 파생 측정·배치 캐시만 교체한다. 문서 IR을 편집하지 않으며 native_pua_host_font_protocol에서 세션 해제 전후 IR·저장 HWP 바이트 보존을 검사한다.",
+    ),
+    (
+        "native_pua_fonts.rs",
+        "register_native_pua_font",
+        Exempt::SessionState,
+        "family/style별 원 PUA 세션 프로그램과 파생 배치만 갱신한다. 저장 문서의 face·문자·raw를 바꾸지 않으며 공통 refresh_native_pua_font_layout 경로를 쓴다.",
+    ),
+    (
+        "native_pua_fonts.rs",
+        "clear_native_pua_fonts",
+        Exempt::SessionState,
+        "원 PUA 공급과 파생 캐시만 해제한다. native_pua_host_font_protocol에서 명시 exact 소유권·원본 IR·실제 저장 HWP 바이트 보존을 검사한다.",
+    ),
+    (
         "commands/document/metafile_fonts.rs",
         "register_metafile_font_native",
         Exempt::SessionState,

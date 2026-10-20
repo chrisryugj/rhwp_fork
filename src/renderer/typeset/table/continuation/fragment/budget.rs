@@ -1743,11 +1743,10 @@ impl TypesetEngine {
             reflow_frame_raw.map_or(0.0, |(raw, _)| (-raw).max(0.0))
         };
         let reflow_frame_avail_for_rows = reflow_frame_raw.map(|(raw, _)| {
-            let frame = raw.max(0.0);
             // 닫힌 원본 첫 프레임은 쪽 본문보다 작은 실제 물리 상자일 수 있다.
             // 일반 내용 예산과 그리기·이어받기 띠에 같은 상한을 적용한다.
-            let limited = frame.min(accepted_source_frame_limit.unwrap_or(f64::MAX));
-            limited
+            raw.max(0.0)
+                .min(accepted_source_frame_limit.unwrap_or(f64::MAX))
         });
 
         let reflow_blank_first_fragment_shortfall = if is_continuation {

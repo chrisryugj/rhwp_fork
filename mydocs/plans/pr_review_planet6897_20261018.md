@@ -6401,3 +6401,18 @@ Native/fresh WASM 비교를 완료했다. ASCII 사다리 3개는 전쪽 98% 이
 render-tree에서도 이미 보존돼 있었다. 새 source 테스트가 현재 통합 후보의 이전 결함을
 처음 검출했다고 주장하지 않는다. 원 기여의 수정 전 증거와 메인터너 통합 전후의 관측을
 구분하고, 새 source의 일반화된 조건·추가 경계와 기존 정상 동작을 함께 검증한다.
+
+### source 순차 적용 뒤 검증 원장 보완
+
+기존 실패 중 `classification_drift_is_blocked`는 새 PUA 공개 API 3개가 문서 뮤테이터인지
+미분류된 상태를 검출했다. 세 함수의 공통 `refresh_native_pua_font_layout`은 호스트
+프로그램·스타일·측정·쪽 캐시를 갱신하며 원본 문서와 직렬화 속성은 바꾸지 않는다.
+기존 `SessionState` 분류에 경로와 근거를 명시하고, 기존 public API 검사에 실제 해제
+전후 문서 IR·HWP 저장 바이트의 보존 assertion을 보완했다. 실제 실행 결과는 뒤에서
+확인하며 아직 통과로 기록하지 않는다.
+
+`raw_cache_inventory_matches_model_fields`는 분리된 `control/equation.rs`의
+`raw_ctrl_data`·`raw_ctrl_seal` 두 항목이 문서 표에 없음을 검출했다. 실제 선언 위치와
+기존 #4495 봉인 계약을 원장에 추가했다. 검사 조건과 문서 속성은 유지한다.
+리베이스 충돌 해소에서 남은 동치 `let limited; limited`도 기존 max/min 식으로 정리했다.
+위 보완 뒤 lint·suite/단위 정책과 원장·세션·신규 source 경계를 실제로 재실행한다.
