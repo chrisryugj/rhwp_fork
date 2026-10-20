@@ -26,6 +26,9 @@ mod math_alphabet;
 #[path = "font_metric_math_symbols.rs"]
 mod math_symbols;
 
+#[path = "font_metric_cjk_punctuation.rs"]
+mod cjk_punctuation;
+
 pub(crate) use legacy_hft::{
     is_metric_face as is_legacy_hft_metric_face, metric_face_name as legacy_hft_metric_face,
 };
@@ -113,6 +116,7 @@ pub(crate) fn verified_metric_has_glyph(metric: &FontMetric, ch: char) -> Option
     verified_program_has_glyph(metric, ch)
         .or_else(|| math_symbols::has_glyph(metric, ch))
         .or_else(|| math_alphabet::entry(metric, ch).map(|(present, _)| present))
+        .or_else(|| cjk_punctuation::primary_has_glyph(metric.name, metric.bold, metric.italic, ch))
 }
 
 /// DB 항목이 없어도 확인한 원 face의 cmap은 독립적으로 조회한다.
@@ -123,6 +127,7 @@ pub(crate) fn verified_named_program_has_glyph(
     ch: char,
 ) -> Option<bool> {
     math_alphabet::primary_has_glyph(family, bold, italic, ch)
+        .or_else(|| cjk_punctuation::primary_has_glyph(family, bold, italic, ch))
 }
 
 /// find_metric의 반환값: 메트릭 + 폴백 정보

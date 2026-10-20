@@ -1176,6 +1176,11 @@ fn kopub_char_advance_em(primary_name: &str, bold: bool, c: char) -> Option<f64>
             return Some(f64::from(units) / 1000.0);
         }
     }
+    if matches!(family, KoPubFamily::Dotum | KoPubFamily::Batang) {
+        if let Some(em) = super::kopub_symbol_metrics::advance_em(family == KoPubFamily::Dotum, c) {
+            return Some(em);
+        }
+    }
     if matches!(family, KoPubFamily::WorldDotum | KoPubFamily::WorldBatang) {
         // World의 ASCII·현대 한글만 실제 여섯 프로그램에서 확인했다.
         // 다른 기호·CJK 블록에 한글의 고정 전진폭을 확대 적용하지 않는다.

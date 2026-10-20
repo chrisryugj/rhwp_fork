@@ -67,6 +67,15 @@ pub(in crate::renderer::typeset) struct BlockRowScanVars {
 }
 
 impl BlockRowScanVars {
+    /// 내용 수용 뒤 빈 밴드가 실제로 점유할 수 있는 하단이다.
+    /// 줄 끝의 수용 여유를 빈 공간으로 다시 예약하지 않는다.
+    pub(in crate::renderer::typeset) fn blank_row_available_height(self) -> f64 {
+        self.reflow_blank_avail_for_rows
+            .map_or(self.avail_for_rows, |height| {
+                self.avail_for_rows.min(height)
+            })
+    }
+
     /// 선언 최소의 빈 공간을 이어받는 행은 빈 띠 종료선으로 실제 상자를 예약한다.
     /// 내용만 있는 일반 행은 내용 수용 하단을 사용한다. 이 구분은 컷 선택 전에
     /// 적용해 예약·그리기·다음 조각의 잔여가 같은 상자를 소비하게 한다.
@@ -75,9 +84,10 @@ impl BlockRowScanVars {
         owns_minimum_frame: bool,
         plain_body_band: bool,
     ) -> f64 {
-        let boundary = if owns_minimum_frame {
-            self.reflow_blank_avail_for_rows
-        } else if plain_body_band {
+        if owns_minimum_frame {
+            return self.blank_row_available_height();
+        }
+        let boundary = if plain_body_band {
             self.reflow_frame_avail_for_rows
         } else {
             None

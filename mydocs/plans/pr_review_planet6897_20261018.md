@@ -7242,3 +7242,72 @@ source/producer SHA·명령·집중 검사 exit는
 `handbook-p156-{before,after}-contract.log`에 있다. 변경 파일 rustfmt check와
 `git diff --check`가 통과했다. 전쪽 산출은
 `handbook-stored-row-blank-frame-all-native-driver.log`에서 확인한다.
+
+
+## 2026-10-20 실제 보정 문서의 devel 대조와 잔여 하락 보정
+
+작업지시자는 현재 브랜치에서 실제 보정·검증한 HWP/HWPX만 목록화하고 Native·fresh WASM을
+같은 devel과 대조하도록 지시했다. 실제 실행 원장의 입력·Print SHA를 대조한 61개 입력
+(HWP 10개·HWPX 51개), backend별 1,462쪽으로 범위를 고정했다. 기존 devel 보존용
+184조건과 이미 이관한 미완료 항목은 제외했다. 편람 두 형식은 이번 보정과 회귀 복원 지시의 대상이다.
+
+- 원격 devel은 `5e2b9bfbf08573a31fa1e11a2445ff63fc0755c0`다. 기준 runtime producer
+  `efc52afb738bd408ac821c4e156101b8d26e5cbd` 이후 엔진·Cargo·의존성은 같고 테스트·문서 변경만 있다.
+- 보정 전 producer `993d9b45673326528f1dbce19abc7bed18a3ef34`의 최적화 Native와
+  최적화 fresh WASM에서 61개 입력 전쪽 raw 90% 이상 및 Print 쪽수 일치를 확인했다.
+  기준 6개 입력은 쪽수 불일치로 canonical TSV가 없으며, 이를 임의 점수로 채우지 않는다.
+- 파일별 네 경로 원본과 페이지별 차이는 ignored
+  `output/pr-review/planet6897-20261018/used-correction-devel-comparison.md` 및 같은 이름의 JSON,
+  `used-correction-devel-comparison/<key>.tsv`에 있다. PR 템플릿의 입력별 Native/WASM 두 행에
+  원본 232개를 해시 일치 복사한 준비본은 `pr-template-source993/`에 있다. 원격 제출용이 아니며,
+  최종 보정 head의 결과와 실제 asset SHA 고정 URL로 다시 만들어야 한다.
+- 같은 `993d9b456`의 전체 nextest는 빌드 잡 8·테스트 스레드 12·공용 `target/pr-review`로
+  실행해 11,112건 통과·26건 실패·45건 skip, exit 100으로 끝났다. 실행 명령·시각·최종 summary는
+  `source993-full-regression-results.json`, 로그는 `source993-full-regression.log`다. 전체 통과가 아니다.
+
+남은 devel 대비 0.1%p 이상 하락은 편람의 57·140·272·371쪽에 집중됐다. Native 6개 행뿐 아니라
+WASM 7개 행도 함께 검토한다. 아래 수정은 아직 검증 전이며 완료 판정하지 않는다.
+
+| 원인·독립 근거 | 공통 생산·소비 경로 | 보정 방향·후속 확인 |
+| --- | --- | --- |
+| KoPub `×`의 Print CID /W는 900/1000인데 반각 heuristic으로 배치되어 뒤 시간 표기가 수 px 앞당겨짐. 두 형식의 KoPub 기호 /W를 교차 확인함 | KoPub 폭 조회 → 공통 문자 전진·런 측정 → Native/WASM paint의 같은 위치 계산 | 기호의 명시 메트릭 보완. KoPubWorld에는 프로그램 차이를 무시해 확장하지 않음. 고정 rlib를 이용한 PNG 진단은 최종 구현 검증을 대신하지 않음 |
+| 140쪽 PUA 표시 확장이 포함된 런의 앞 공백은 원문과 같은 ASCII 공백이나 display_text 존재만으로 선두 공백 계획에서 배제됨. Print의 본문 시작점보다 약 3px 오른쪽임 | LeadingSpacePlan·LeadingSpaces → 배분 분모·동일 런 분할 → emitted_run_layout_positions | 원문·표시 공백 소유를 공통 helper로 확인하고 분할된 두 런의 표시 범위를 함께 보존. 숫자 필드·각주·겹친 글자 반례 유지 |
+| 272쪽 `〇`는 설치한 KoPub cmap에 없고 Print는 Haansoft Batang으로 출력함. 기존 측정은 반각 fallback을 사용해 뒤 텍스트가 약 8px 앞당겨짐 | 실제 cmap 결측 조회 → 기존 선언된 대체 글꼴의 확인된 glyph 조회 → 동일 문자 전진 소비 | CJK 구두점 블록의 실제 KoPub·HCR cmap 증거를 추가해 미수집 구간과 결측을 구분. 대체 글꼴의 양성 cmap도 확인하며 glyph를 숨기지 않음 |
+| 371쪽 내용 완료 행이 빈 선언 꼬리를 버리는 분기에서 내용 수용 하단을 물리 예약 하단으로 재사용함. Print 하단 괘선은 643~644px, 기존 현재 표 하단은 약 646.6px | 물리 예산 → 일반 행 밴드 수용·정렬 상자 → consumed·end_row_height_override → 실제 표 배치 | 같은 blank_row_available_height를 분모와 실제 예약에 사용하고 내용·패딩이 들어가는 조건을 유지. 앞뒤 열의 행 소유·이어받기·후속 내용을 재검증 |
+
+Rust 빌드가 끝난 뒤 위 변경을 작업 트리에 작성했다. 완료된 전체 nextest는 수정 전 producer의 결과이며,
+새 보정의 통과 근거로 재사용하지 않는다. 새 Native 방향 검증 → 관련 정식 회귀 → 전쪽
+Native/fresh WASM 재산출·직접 판독과 필수 lint를 순차 진행한다. 렌더링 회귀 추가·px 고정은
+관련 전쪽 90%·선정 쪽 양쪽 raw 98%와 직접 판독을 확인한 뒤 진행한다.
+
+### 편람의 devel 대비 하락 보정 — Native 방향 검증
+
+`handbook-retention-direction1-build-results.json`의 source patch SHA-256
+`63a7aa3a75a91813e9d4c7f4b157eabaf9d8090d8d05774571fddde7b9bca326` 및 새 파일 해시로
+검증한 작업 트리를 고정했다. 빌드 잡 8·공용 `target/pr-review`의 opt-level 1 진단 빌드이며,
+최종 최적화 Native/fresh WASM 제출 증거와 구분한다.
+
+| 문서 | 쪽 | devel Native raw | 보정 전 Native raw | 보정 후 Native raw |
+| --- | ---: | ---: | ---: | ---: |
+| HWP | 57 | 99.37789 | 99.14941 | 100.00000 |
+| HWP | 140 | 96.05816 | 95.95786 | 96.02275 |
+| HWP | 272 | 93.26003 | 93.00884 | 99.02921 |
+| HWP | 371 | 99.67960 | 99.34230 | 99.98514 |
+| HWPX | 57 | 99.37791 | 99.14939 | 100.00000 |
+| HWPX | 272 | 93.25611 | 92.99761 | 99.02509 |
+
+두 형식의 57·111·140·156·242·272·360·371쪽을 실제로 다시 출력했다. 전체 논리 쪽수는
+각 383쪽으로 독립 PDF와 일치하며, 선택한 8쪽의 TSV만 산출한 방향 검증이다. HWP 140쪽의
+하락폭은 0.03541%p로 줄었고 위 6개 항목에 0.1%p 이상 하락이 남지 않았다. 기존 정상 경계
+111·156·242·360쪽도 선택 검사에서 유지됐다. 실제 출력의 57쪽 시간 표기·140쪽 PUA 뒤 본문·
+272쪽 원문 `〇` 뒤 신청 문구·371쪽 표 아래 괘선을 독립 Print와 같은 좌표의 확대 PNG로
+직접 대조했다. 기호 뒤 간격, 첫 본문 시작, 줄바꿈 및 괘선 위치의 회복을 확인했다.
+이 판독은 새 fresh WASM 또는 다른 모든 쪽을 검증했다는 뜻이 아니다.
+
+고정 rlib에 기존 정식 검사 모듈을 연결한 집중 검사는 **9 + 28 + 46 = 83건 모두 통과**했다.
+검사 기대값이나 허용치를 바꾸지 않았다. 실행 명령과 exit는
+`handbook-retention-direction1-contracts-results.json`, 각 검사 로그는
+`handbook-retention-direction1-existing-{9,28,46}.log`, 시각 결과는
+`handbook-retention-direction1-native-results.json` 및
+`handbook-retention-direction1-panels-results.json`에 연결했다. 새 공통 코드의 최적화 빌드,
+fresh WASM, 실제 보정 문서 전쪽 TSV와 남은 전체 회귀 실패 처리는 계속 필요하다.

@@ -1113,8 +1113,15 @@ impl TypesetEngine {
                 let discards_stored_blank_band = storage_records_page_cuts
                     && !rowbreak_row_has_internal_saved_vpos_reset(table, r)
                     && !layout_engine.native_stored_row_has_text_frame_boundary(table, r, styles);
+                // 내용이 끝난 저장 행의 빈 띠는 실제 물리 하단에서 닫는다.
+                // 내용 수용에만 허용한 줄 끝 여유를 상자 높이에 더하지 않는다.
+                let stored_band_available = if discards_stored_blank_band {
+                    v.blank_row_available_height().min(avail_for_rows)
+                } else {
+                    avail_for_rows
+                };
                 let accepted_band_height = if discards_stored_blank_band {
-                    row_total.min((avail_for_rows - consumed - cs_before).max(0.0))
+                    row_total.min((stored_band_available - consumed - cs_before).max(0.0))
                 } else {
                     row_total
                 };
@@ -1200,7 +1207,7 @@ impl TypesetEngine {
                             accepted_band_height,
                             styles,
                         ),
-                        avail_for_rows - consumed - cs_before,
+                        stored_band_available - consumed - cs_before,
                         self.dpi,
                     )
                 {
@@ -1224,7 +1231,7 @@ impl TypesetEngine {
                     // 행 30: 내용 334.5 · 선언 379.8, 한/글 정본 333쪽은 행 31 이 표 머리 바로
                     // 아래(괘선 154.9)에서 시작한다).
                     if discards_stored_blank_band {
-                        let rest = (avail_for_rows - consumed - cs_before).max(res.consumed_height);
+                        let rest = stored_band_available - consumed - cs_before;
                         consumed += cs_before + rest;
                         end_row_height_override = Some(rest);
                         return false;
