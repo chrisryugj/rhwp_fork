@@ -41,5 +41,9 @@
     "retained_normal_boundary_tests": "2 passed / 0 failed",
     "other_rendering_axes": "off_canvas/text_overlap unchanged",
     "remote_issue_followup": "existing issue8060 confirmed open with original PR8059 comments; exact p11 observation to link after PR evidence publication"
-  }
+  },
+  "upstream_base_input_registered": false,
+  "upstream_base_dedicated_test_registered": false,
+  "input_import_commit": "576a86a138a05a215c020352e0c2a7072e4e051f",
+  "classification": "already transferred incoming input remained in automatic body corpus; not a dedicated regression registered in fixed upstream base"
 }
