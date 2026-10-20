@@ -6799,3 +6799,84 @@ pi222를 810.280000px에 놓는다. 새 generic `6c468639d`의 완료 문단 끝
 현 PR의 보정 문서도 함께 보존해야 한다. 추적과 실제 실행은
 `original-resolution-trace/7333-resolution-chain.json`, `issue7333-host-frame-probe.log`,
 `issue7333-base-current-{tac,flow,snap}-probe-results.json`에 연결한다.
+
+
+## 2026-10-20 #7333 원본 장식 TAC 프레임의 측정·배치 공통 후보
+
+원 PR #7377과 후속 #7832의 정확한 두 검사는 유지한다. #5524 호환, #5585·#1133·
+#7678 양 형식, #7642 정확 예산, #7661 배경을 포함한 기존 28검사를 수정 전 동결
+`527b69c72` library/CLI에 연결했다. 실제 결과는 **26 PASS / 2 FAIL**이며, 두 실패는
+#7333의 Fixed 후행 간격과 full-band 후속 본문 원점이다. standalone 최초 두 compile은
+Cargo compile-time CLI 환경 변수 및 roxmltree dependency 누락으로 실패했고 결함
+재현으로 세지 않았다. 필요한 기존 artifact·환경을 명시한 세 번째 compile은 성공했다.
+
+14쪽 pi220 실제 paint는 format의 전체 466.213333px를 사용하나 cap은 표+반간격+위 여백
+442.106667px만 남긴다. 빈 pi221은 양쪽에서 25.6px를 소비한다. 같은 저장 사다리의
+후속 pi222를 snap할 때 측정의 lazy 원점은 1087HU, paint는 367HU가 되어 generic 완료
+끝의 단 상대 절대 좌표가 물리 끝을 바꾼다. 20쪽 Fixed 표 pi299도 실제 paint의 전진은
+format과 같은 464.226667px인데 cap은 443.333333px다. 다음 빈 pi300의 앞 간격을 포함한
+32px까지 같은 slot에 보존해야 독립 PDF pi301의 685.2px와 맞는다.
+
+원본 장식/표 소유 줄·full-band 후속 vpos 판정과 Fixed 간격 공제 판정을
+`layout/decorated_tac_frame.rs`로 옮겨 기존 paint와 높이 상한이 공유한다. 기존 판정의
+값·허용치·적용 조건은 변경하지 않는다. 확인된 원본 Native 프레임에서만 실제 배치가
+소비하는 같은 format의 전체 높이를 보존한다. 재조판 줄·편집·여러 TAC·가시 본문은
+기존 cap 계약이다. #5524의 2024 앵커 줄 회수와 #5700의 저장 되감김도 기존 형식화
+결과와 원본 프레임 인증을 거치며 별도 문서/쪽 분기를 추가하지 않는다.
+
+실제 생산·소비 경로는 원본 소유 줄·간격 → 공유 프레임 판정 → format 전체 전진 →
+TAC cap → 다음 빈 문단/본문의 snap·완료 원점 → 같은 format/저장 프레임의 paint다.
+끝 좌표를 clamp하거나 generic 완료 소유를 문서별로 끄지 않는다. 단일 현재 TAC 줄의
+이전 #7661 보정 및 #5585 일반 행 빈 밴드는 유지한다. 아직 이 후보의 실행 전이며
+빌드·28검사·Native 전 50쪽 및 기존 보정 문서/직접 지적 경계의 전후 출력을 대조한다.
+최종 최적화 Native/fresh WASM 게이트는 방향 확인과 구분한다.
+
+
+### #7333 공통 저장 프레임 후보의 실제 Native 대조
+
+공유 target/jobs 8의 opt-level 1 Native Skia 빌드는 4분 04초·exit 0이다. 같은 기존
+28검사는 수정 전 **26 PASS / 2 FAIL** → 수정 후 **28 PASS / 0 FAIL**이다. #7333의
+14검사 전체, #5524 기본/2024/기본 복귀, #5585·#1133·#7678 양 형식, #7642 두 독립
+정확 예산, #7661 배경의 기존 검사를 유지했다. 검사·입력·기준 PDF·baseline은 바꾸지 않았다.
+
+동결 직전 부모 `527b69c72`와 후보로 원본 전 50쪽 Native를 각각 실제 재출력했다.
+독립 Print와 모두 50쪽이며 최저 raw는 양쪽 **94.54517%**, 미달 0쪽이다. 달라진 쪽은
+아래 네 쪽뿐이고 나머지 46쪽의 점수는 같다.
+
+| 쪽 | 부모 Native raw | 후보 Native raw |
+| --- | ---: | ---: |
+| 14 | 98.35429% | 99.82379% |
+| 20 | 99.38421% | 99.95075% |
+| 22 | 97.64099% | 99.69127% |
+| 23 | 98.13305% | 99.92022% |
+
+50쪽 모두 표/그림의 소유·상자와 TextRun 전체 내용·순서는 부모와 같다. 14·20·22·23쪽
+review PNG를 직접 열어 screenshot 표 외곽·번호 장식, 뒤 본문·보기 항목·문단 간격과
+footer를 Print와 대조했다. 네 쪽의 잘못 당긴 본문 간격이 복구됐다. 기존 glyph raster·
+팔레트 차이는 남으며 100% 색상/엄격 픽셀 일치로 보고하지 않는다.
+
+실제 14쪽 측정 cap은 format 전체 466.213333px를 소비한다. 빈 pi221 뒤의 잘못된 완료
+끝 덮어쓰기는 없어지고 pi222의 시작은 **815.173333px**로 base/Print에 돌아왔다.
+20쪽도 같은 방식으로 pi299 끝 **653.186667px**, 빈 pi300의 앞 간격·내용 전진 뒤
+pi301 **685.186667px**를 보존한다. generic 완료 경계를 기각하는 문서 분기는 추가하지
+않았으며 앞 문단에서 같은 물리 전진을 소비해 서로 다른 lazy 원점이 생기던 원인을 제거했다.
+
+최근 #5585 전 17쪽 Native 최저 **99.00588%**, 배경 전 3쪽 **99.96287%**는 유지한다.
+사용자 지적 문서의 실제 부모/후보 대조도 night-guard 1쪽 **97.82786%**, 80168 17쪽
+**99.27040%**, 교육과정 202·203쪽 **99.97092%/99.97772%**로 각각 동일하다. 전체
+쪽수도 선택 측정 metadata에서 부모/후보/PDF가 같지만 이 네 쪽을 세 문서의 최종 전쪽
+검증으로 승격하지 않는다.
+
+증거: `decorated-tac-frame-direction-results.json`, `issue7333-before-contracts.log`,
+`decorated-tac-frame-direction-existing-contracts.log`,
+`decorated-tac-frame-parent-native-results.json`, `decorated-tac-frame-geometry-contracts.json`,
+`issue7333-corrected-flow-probe-results.json`, `decorated-tac-frame-panels-results.json`와
+`remaining-qualified-panels/corrected/issue7333-aaaaaa/review/review_014.png` 등이다.
+이번 후보의 최종 opt-level 3·fresh WASM·제출용 전체 검증은 남았다.
+
+나머지 실패도 각각 원 해결을 확인하도록 마지막 실제 27실패의 파일 도입·함수명 도입 및
+체리픽 원 SHA의 연결 PR을 탐색했다. `original-resolution-trace/remaining-failing-function-prs.json`은
+**탐색 목록**이며 원문·최종 정정·후속 보정·현재 실행까지 검토 완료한 목록이 아니다.
+연결 API에 함께 나오는 미병합 #7474를 실제 해결 PR로 취급하지 않는다. 다음 편람 실패는
+#7751의 종료 근거인 #7964 / 원 #7494와 #7009 도입 통합 #7332를 따로 읽고 있다.
+383쪽 KoPub 기준과 과거 384쪽 무 KoPub 기준을 혼동하거나 HWP 증거로 HWPX를 판정하지 않는다.

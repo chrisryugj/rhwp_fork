@@ -314,6 +314,39 @@ pub(super) fn measure(
     } else {
         cap
     };
+    // 원본 장식 앵커 줄과 표 소유 줄을 실제 배치가 함께 소비한 프레임이다.
+    // 표 본체와 반간격만 다시 합산하면 앞 빈 줄·문단 간격을 회수해 다음
+    // 문단이 다른 lazy 원점을 세운다. 배치가 쓰는 원본 프레임 판정과
+    // 같은 format 결과의 전체 전진을 보존한다.
+    let decorated_stored_frame = profile.hwp5_stored_pagination_layout()
+        && !profile.session_edited()
+        && tac_count == 1
+        && para.text.trim().is_empty()
+        && fmt.computed_host_lines.is_none()
+        && fmt.line_count() == para.line_segs.len()
+        && para.line_segs.iter().all(|line| {
+            line.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+        })
+        && para.controls.iter().enumerate().any(|(index, control)| {
+            let Control::Table(table) = control else {
+                return false;
+            };
+            flow.is_effective_tac_table(para, table, fmt)
+                && (next_para.is_some_and(|next| {
+                    crate::renderer::layout::stored_empty_full_band_tac_successor_vpos_hu(
+                        para, index, table, next,
+                    )
+                    .is_some()
+                }) || crate::renderer::layout::tac_in_front_decoration_fixed_line_spacing_deduction_hu(
+                    para, index,
+                )
+                .is_some())
+        });
+    let cap = if decorated_stored_frame {
+        fmt.total_height
+    } else {
+        cap
+    };
     // A complete source slot includes its outer margins and full closing
     // advance. Reuse the same producer as table paint instead of independently
     // halving spacing or adding a margin already owned by the stored line.
