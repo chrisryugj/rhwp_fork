@@ -61,13 +61,41 @@ impl FragmentInput<'_> {
         consumed: f64,
     ) -> bool {
         let rows = self.prepared.row_count;
+        let last = rows.saturating_sub(1);
+        // 새 종료 행의 내용이 모두 끝난 뒤 남는 작은 빈 꼬리는 기존
+        // skip_terminal_empty_sliver와 같은 정책이다. 다음 쪽을 먼저 열고
+        // 방출할 조각이 없음을 확인하면 항목 없는 쪽만 남으므로, 수용한
+        // 마지막 행 상자에서 종료를 확정한다. 재조판 최소 프레임은 보존한다.
+        let empty_physical_tail = height_override.is_some_and(|height| {
+            let Some(&whole_height) = self.prepared.whole_row_fit_heights.get(last) else {
+                return false;
+            };
+            let remaining = whole_height - height;
+            self.start.cursor_row < last
+                && !self
+                    .prepared
+                    .layout_engine
+                    .row_uses_reflow_physical_frame(self.source.row_geometry_table, last)
+                && remaining >= 0.0
+                && remaining < crate::renderer::typeset::MIN_TOP_KEEP_PX
+                && !self
+                    .prepared
+                    .layout_engine
+                    .row_cut_range_has_visible_content(
+                        self.source.row_geometry_table,
+                        last,
+                        end_cut,
+                        &[],
+                        self.source.styles,
+                    )
+        });
         end_row >= rows
             && end_limit > 0.0
             && !end_cut.is_empty()
             && block_start.is_none()
             && !self.start.start_cut_is_block
             && !self.row_cursor_is_nested
-            && height_override.is_none()
+            && (height_override.is_none() || empty_physical_tail)
             && self.source.measured_table.allows_row_break_split()
             && self.prepared.caption_overhead <= 0.0
             && !self.prepared.queue_table_footnotes

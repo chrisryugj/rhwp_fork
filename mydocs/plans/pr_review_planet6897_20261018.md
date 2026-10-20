@@ -7389,3 +7389,52 @@ HWPX 축약 입력을 먼저 로드한 뒤 Native HWP5 출처로 재결합한다
 후보 표 끝은 981.8px다. 빈 쪽만 삭제하거나 예전의 더 짧은 표 끝을 복구해 완료로
 판정하지 않는다. 같은 종료 행의 물리 예산·예약·배치를 확인한다. 상세 진단은
 `oss-empty-page-diagnosis.md`와 `oss-{base,candidate}-pages.log`에 있다.
+
+
+### 2026-10-20 #1418/#4658: 마지막 행의 물리 예약과 내용 컷을 분리해 6쪽 복구
+
+독립 Print `pdf/hwpx/2026_oss_rst.pdf`는 6쪽이다. 같은 원본 HWP의 base 6쪽과
+후보 7쪽을 비교했고, section0 마지막 표 뒤의 내용 없는 쪽이 원인이었다.
+원 해결 #1418, 쪽수 계약 #4658, 두 형식의 원본 계약을 보정한 #5057(PR #6710)의
+기대값을 유지한다.
+
+일반 행 스캔은 마지막 행의 실제 수용 상자를 `accepted_partial_row_box`로 이미 생산한다.
+그런데 `scan_table_fragment`의 원본 행·제목 프레임 후처리는 이를 내용 높이로 다시 추정해
+`consumed - selected`를 계산했다. 앞 두 원본 행의 셀 높이 27087+17563HU는
+595.3333px인데, 잘못된 prefix는 614.08px였다. 내용과 수용 상자의 차이 18.7467px를
+앞 행 점유에 중복 계상한 것이다. override 또는 같은 소유 행의 수용 상자를 먼저 소비하게
+공통 조회를 연결했다. 소유가 없는 경로만 기존 내용 높이를 사용한다.
+
+이 보정만 적용한 후보는 마지막 표 하단이 981.8→1000.6px로 바뀌었지만 여전히 7쪽이었다.
+모든 내용 뒤에 남은 작은 빈 꼬리를 기존 `skip_terminal_empty_sliver` 정책이 방출하지
+않으면서, 그 판단 전에 이미 연 다음 쪽만 남겼다. 같은 정책을 새 종료 행의 내용 완료 컷에서
+먼저 판정하도록 공통 종료 조회를 보완했다. 끝 컷·수용 상자는 유지하며, 재조판 최소 프레임·
+캡션·각주·걸침 요구 높이는 기존 조건으로 보호한다. 후속 구역의 본문은 삭제하지 않는다.
+완료 후 쪽을 사후 제거하거나 표 높이를 clamp하지 않는다.
+
+중간에 0.5px를 정수 HWPUNIT 경계로 바꾸는 후보를 검토했으나, 공통 변환 API가
+연속 좌표에 절삭을 적용한다는 사실을 확인해 빌드를 명시적으로 중단하고 소스를 되돌렸다.
+그 후보는 검증 결과로 사용하지 않는다. 최종 후보는 기존 0.5px 허용치와 기존 빈 꼬리 정책을
+유지한다. 폐기 근거는 `source-unit-row-roundoff-rejected.json`에 있다.
+
+source `8fbcc1fbd08e827d9807267d7a6f202a2e09b4b5`에 patch SHA-256
+`b5cd290e677ee2e8b6df4e7d74855426523a95ef88c9b6af4073a52ec19e1542`를 적용한
+고정 Native opt1 빌드로 다음 결과를 확인했다.
+
+- 기존 집중 47건: **38건 통과·9건 실패**. #1418/#4658 두 건이 기대값 변경 없이 통과했다.
+  이전 #7872 두 건과 #2439 분할 표 검사도 통과를 유지한다. 전체 회귀 통과가 아니다.
+- 정상 대조군 9+28+46건은 모두 통과했다. 검사 함수나 허용치는 바꾸지 않았다.
+- 같은 원본의 전쪽 Native TSV와 Print 쪽수는 6쪽으로 일치했다. 후보 최저는
+  **99.90992%**, base 대비 0.1%p 이상 하락은 0쪽이다.
+- 변경한 3쪽 raw는 base 95.77488→99.93606%다. 1쪽은 98.74899→99.90992%,
+  5쪽은 99.97939→99.98736%, 나머지 쪽은 같다.
+- 3쪽 compare/overlay/review에서 마지막 표 행의 외곽·중앙 정렬 라벨·본문 보존을 독립
+  Print와 직접 대조했다. 실제 표 하단 1000.6px와 Print 괘선 999.23px가 대응한다.
+  Native 선행 검증이며 fresh WASM과 최종 최적화 전쪽 증거는 아직 필요하다.
+
+근거는 ignored `output/pr-review/planet6897-20261018/`의
+`accepted-row-prefix-independent-accounting.json`,
+`terminal-accepted-frame-{build,contracts,existing,oss}-results.json`,
+`terminal-accepted-frame-evidence.json`, `terminal-accepted-frame-oss-comparison.json`,
+`terminal-accepted-frame-oss-visual/oss-hwp/silhouette.tsv`,
+`terminal-accepted-frame-oss-panels/review/review_003.png`에 있다.

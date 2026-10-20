@@ -8,6 +8,20 @@ use crate::renderer::typeset::{
 use super::super::TableContinuationCursor;
 use super::{FragmentBudget, FragmentInput, FragmentProfile};
 
+// 스캔이 실제 수용한 행 상자에는 내용 컷 밖의 여백·빈 띠도 포함된다.
+// 그 행을 내용 높이로 다시 빼면 그 차이가 앞 행 prefix에 중복 계상된다.
+fn accepted_row_box(
+    row: usize,
+    height_override: Option<f64>,
+    partial_row_box: Option<(usize, f64)>,
+) -> Option<f64> {
+    height_override.or_else(|| {
+        partial_row_box
+            .filter(|(owner, _)| *owner == row)
+            .map(|(_, height)| height)
+    })
+}
+
 impl TypesetEngine {
     pub(super) fn scan_table_fragment(
         &self,
@@ -703,13 +717,16 @@ impl TypesetEngine {
             } else {
                 &[]
             };
-            let selected = layout_engine.row_cut_content_height(
-                row_geometry_table,
-                row,
-                row_start,
-                &split_end_cut,
-                styles,
-            );
+            let selected = accepted_row_box(row, end_row_height_override, accepted_partial_row_box)
+                .unwrap_or_else(|| {
+                    layout_engine.row_cut_content_height(
+                        row_geometry_table,
+                        row,
+                        row_start,
+                        &split_end_cut,
+                        styles,
+                    )
+                });
             let before_last = consumed - selected;
             let source_frame_available =
                 crate::renderer::float_placement::single_cell_page_fragment_bottom(
@@ -747,15 +764,16 @@ impl TypesetEngine {
             } else {
                 &[]
             };
-            let selected = end_row_height_override.unwrap_or_else(|| {
-                layout_engine.row_cut_content_height(
-                    row_geometry_table,
-                    row,
-                    row_start,
-                    &split_end_cut,
-                    styles,
-                )
-            });
+            let selected = accepted_row_box(row, end_row_height_override, accepted_partial_row_box)
+                .unwrap_or_else(|| {
+                    layout_engine.row_cut_content_height(
+                        row_geometry_table,
+                        row,
+                        row_start,
+                        &split_end_cut,
+                        styles,
+                    )
+                });
             let before_last = consumed - selected;
             let physical = self.stored_header_fragment_row_budget(
                 st,
@@ -823,15 +841,16 @@ impl TypesetEngine {
             )
         {
             let row = end_row - 1;
-            let selected = end_row_height_override.unwrap_or_else(|| {
-                layout_engine.row_cut_content_height(
-                    row_geometry_table,
-                    row,
-                    &[],
-                    &split_end_cut,
-                    styles,
-                )
-            });
+            let selected = accepted_row_box(row, end_row_height_override, accepted_partial_row_box)
+                .unwrap_or_else(|| {
+                    layout_engine.row_cut_content_height(
+                        row_geometry_table,
+                        row,
+                        &[],
+                        &split_end_cut,
+                        styles,
+                    )
+                });
             let top = budget.fragment_placement.map_or(
                 st.current_height + budget.host_before_overhead + budget.vert_offset_overhead,
                 |placement| placement.table_top,
