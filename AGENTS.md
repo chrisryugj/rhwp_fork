@@ -63,6 +63,11 @@
   불필요한 개별 호출이나 중복 검증을 추가하지 않는다. 실제 실행 누락이 있을 때의 추가 기준은
   [CI 테스트 호출 추가 기준](mydocs/manual/github_operations.md#531-ci-테스트-호출-추가-기준)을 따른다.
 - GitHub comment, remote push, PR 생성은 사용자 승인을 받은 뒤 수행한다.
+- **리뷰어 지정 후 기여자와 그 대행 자동화는 해당 PR에 임의로 추가 커밋을 push하지 않는다.**
+  문서 전용 변경·devel merge·rebase·amend·force-push도 포함한다. 메인터너·콜라보레이터는
+  기존 권한·승인 절차에 따라 보정·검토 기록·trailing 커밋을 추가할 수 있다. 변경 전후 SHA를
+  기록하고 새 head의 필수 검증을 확인한다.
+  [reviewer 지정 후 커밋 규칙](mydocs/manual/pr_review/intake_and_review.md#211-리뷰어-지정-후-추가-커밋-제한)을 따른다.
 - Windows PowerShell에서 한글을 포함한 여러 단락의 PR·review·comment 본문은 here-string을
   `gh --body-file -`로 직접 pipe하지 않는다. UTF-8 **without BOM** 임시 Markdown 파일을
   `--body-file`로 전달하고, 게시 뒤 API로 한글·선두 BOM·`??` 치환 여부를 확인한다. 정확한

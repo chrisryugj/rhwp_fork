@@ -37,6 +37,14 @@ PR CI나 Draft로 우회하지 않는다. Draft는 특별한 조기 논의·WIP 
 Docker는 필수 설치 조건이 아니며 [환경별 fresh WASM 경로](mydocs/manual/pr_review/local_validation.md#환경에-따른-fresh-wasm-검증)의
 Docker 또는 호스트 빌드를 선택해 동일한 필수 검증을 완료한다.
 
+## 리뷰어 지정 후 추가 커밋 제한
+
+리뷰어 지정 후 기여자와 그 대행 자동화는 해당 PR에 임의로 추가 커밋을 push하지 않는다.
+문서 전용 변경·devel merge·rebase·amend·force-push도 포함한다. 메인터너·콜라보레이터는
+기존 권한·승인 절차에 따라 보정·검토 기록·trailing 커밋을 추가할 수 있다. 변경 전후 SHA를
+기록하고 새 head의 필수 검증을 확인한다.
+[reviewer 지정 후 커밋 규칙](mydocs/manual/pr_review/intake_and_review.md#211-리뷰어-지정-후-추가-커밋-제한)을 따른다.
+
 ## 리베이스 후 기능 보존
 
 리베이스로 들어온 PR의 기능이 유지되거나 개선되는지 현재 작업 대상과 함께 검증한다.

@@ -66,6 +66,22 @@ gh api "repos/edwardkim/rhwp/pulls/$pr_number/requested_reviewers" \
 CLI 편집이 실패하면 위 REST POST 경로를 사용한다. reviewer login과 확인 결과를 검토 기록에 남기며,
 인증 토큰은 출력하지 않는다.
 
+### 2.1.1 리뷰어 지정 후 추가 커밋 제한
+
+개인 또는 팀 reviewer가 지정되면 **그 시점의 PR head SHA를 검토 기준으로 고정**한다. reviewer와
+지정 시각, head repository·branch·SHA를 기존 review 기록에 함께 남긴다.
+
+- 기여자와 그 대행 자동화는 해당 PR head 브랜치에 임의로 추가 커밋을 push하지 않는다.
+  문서 전용 커밋, 최신 devel merge·rebase, amend·force-push도 예외가 아니다.
+- 메인터너·콜라보레이터는 기존 권한·작업지시자 승인 절차에 따라 같은 PR에 보정 코드·검토
+  기록·trailing 커밋을 추가할 수 있다. 별도 통합 PR을 강제하지 않으며 역할별 절차를 따른다.
+  변경 전후 SHA와 보정 범위를 기록하고 새 head의 필수 검증·최신 CI를 확인한다.
+- 리뷰 제출 뒤 `requested_reviewers`가 비거나 reviewer 지정을 해제해도 기여자의 임의 push를
+  허용한 것으로 보지 않는다. 규칙을 우회하려고 기존 reviewer를 제거하지 않는다.
+- fetch·로컬 체리픽·통합 브랜치 보정은 원 PR head를 변경하지 않으므로 계속할 수 있다.
+  예기치 않은 새 head가 발견되면 이전/새 SHA·추가 커밋·기존 증적의 유효 범위를 기록한다.
+  이전 SHA의 검증을 새 head의 통과로 표시하지 않는다.
+
 ## 2.2 기본 metadata
 
 아래 사실을 PR별 review 문서에 기록한다.
