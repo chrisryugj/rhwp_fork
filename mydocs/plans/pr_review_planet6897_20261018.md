@@ -6445,3 +6445,27 @@ raw/IR 반감 전제의 실패가 이 연결을 뒷받침한다.
 검증 근거에서 제외했고 `--prepare` 뒤 다시 실행했다. 보정 후 결과와 실제 새 export의
 독립 인쇄는 다음 실행에서 확인한다. #7994의 다른 비공개 6문서 개선은 이 표본으로
 입증하지 않으며 해당 이슈의 자동 종료를 요청하지 않는다.
+
+
+### #8028 보정 후 실제 저장·독립 인쇄 결과
+
+`9fa90f2e5`의 저장 계약 검사는 1건 실행·1건 PASS다. Native optimized CLI를
+`target/pr-review`에서 jobs=8로 다시 빌드하고 해당 producer를 별도로 동결했다.
+새 HWPX를 같은 한컴 2020 11.0.0.9136, PrintMethod=0, 1-up으로 실제 인쇄해
+24쪽을 확인했다. 수정 전 같은 소비자의 27쪽과 구분하며 원본 Print는 재산출하지 않았다.
+기준 export와는 간격을 포함한 모든 속성이 같고 `hyphen`→`hypen` 태그 한 곳만
+별도 통합 변경으로 달라 새 저장본의 독립 인쇄를 수행했다.
+
+입력·PDF·원 patch·실패 검사와 해시는
+`mydocs/pr/assets/issue7445/deferred-20261020/source-pr8028/README.md`에 보존한다.
+현재 HWP 원본과 새 export의 전24쪽 Native TSV는 각각 최저87.57178%, 87.57283%다.
+새 export와 같은 입력·Print를 기준 runtime `efc52afb7`로 실행한 결과도 전24쪽
+Native 최저87.57283%, WASM 최저87.56018%다. 양쪽은 2쪽만90% 미달이며 쪽수는24쪽으로 같다.
+이는 이미 있는 시각 미달과 직렬화가 새로 만든 24→27쪽 회귀를 구분하는 증거다.
+새 후보 fresh WASM은 아직 미실행이며 이 원본의 전쪽 시각 수용이나 #7994의 다른
+6문서 해결·이슈 종료를 주장하지 않는다. 최종 기록은 각 producer의 실제 해시와
+`source8028-corrected-native-visual-results.json`,
+`source8028-restored-base-visual-results.json`을 따른다.
+
+원격을 다시 조회한 결과 devel은 `5e2b9bfbf`, #7965는 반영한 `e4aa55ad0`로
+변경이 없어 중복 체리픽이나 base 리베이스를 하지 않았다.

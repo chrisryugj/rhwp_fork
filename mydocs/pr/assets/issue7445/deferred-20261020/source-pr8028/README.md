@@ -8,7 +8,8 @@
 | --- | ---: | --- |
 | 원본 HWP | 24 | `samples/HWP5-nopassword-123456.hwp` |
 | devel runtime의 HWPX 직렬화 | 24 | [기준 직렬화](base-spacing.hwpx) |
-| 후보 runtime의 HWPX 직렬화 | 27 | [후보 직렬화](current-spacing.hwpx) |
+| 보정 전 후보 `65ef09ad8`의 HWPX 직렬화 | 27 | [보정 전 직렬화](current-spacing.hwpx) |
+| 보정 후 `9fa90f2e5`의 HWPX 직렬화 | 24 | [보정 후 직렬화](restored-spacing.hwpx) |
 
 원본 저장 제품에 맞춘 한컴 2024 Print도 24쪽이다. 후보 HWPX는 writer가
 한컴 2020 저장 메타데이터를 쓰므로 한컴 2020 Print를 기준으로 확인했다.
@@ -49,4 +50,16 @@ HWP3 계보를 가진 HWP5에서도 원본 문단 간격을 IR에 보존하도�
 보정 전 `5d81dc62d`에서는 실제 외부 소비자 IR이 `(0, 2272)`인데 원본 raw는
 `(0, 1136)`인 오류로 검사가 실패했다. 0건 실행은 증거에서 제외했고, 파생 harness를
 재생성한 뒤 1건이 실제 실행돼 이 조건에서 실패한 로그를 보존했다.
-보정 후 실행과 독립 인쇄 재대조는 아직 완료로 표시하지 않는다.
+보정 후 `9fa90f2e5be7f3a794ef56998c99e07fa90cbe03`에서 같은 활성 저장 계약이
+실제 1건 실행·1건 통과했다(Nextest `59f079fe-63b4-4d86-a514-585f7ae15684`).
+보정 후 CLI로 내보낸 위 HWPX의 SHA-256은 `c2808f8811e24b512b3a818ae9a980732d8030fc0b97f7fabd376cb60fbc054b`다.
+
+독립 한컴 2020 `11.0.0.9136`, PrintMethod=0, 1-up에서 이 저장본은 24쪽으로 복원됐다.
+PDF는 `pdf/issue7994/HWP5-nopassword-123456-restored-spacing-2020.pdf`,
+SHA-256 `be5c026948386b9cdb3c2c2e0ba20814d689b2cef7b6db5e57888d06faba464e`다.
+기존 원본 PDF는 다시 만들지 않았다. 기존 base HWPX와 보정 후 파일의 간격·나머지
+ZIP entry는 같고, `section0.xml`의 `hyphen`→`hypen` 태그 한 곳만 별도 통합 변경으로
+달라 새 저장본의 인쇄만 수행했다. 이전 27쪽 파일과 실패 검사도 그대로 보존한다.
+
+이는 최신 기준의 저장 계약과 같은 제품에서의 쪽수 보존 검증이다. 전쪽 Native/fresh
+WASM 시각 통과나 #7994의 다른 원본 해결을 뜻하지 않는다.
