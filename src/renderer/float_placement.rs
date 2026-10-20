@@ -2843,7 +2843,12 @@ pub(crate) fn stored_paragraph_successor_flow(
         && !para.text.trim().is_empty()
         && next.text.trim().is_empty()
         && next.controls.iter().any(|control| {
-            matches!(control, Control::Table(table) if is_para_topbottom_float(&table.common))
+            // TAC의 저장 줄이 실제 표 바깥 상자 전체를 소유할 때만 같은
+            // 후속 원점이다. 캡션 등 다른 점유가 섞인 줄을 표 원점으로 대체하지 않는다.
+            matches!(control, Control::Table(table)
+                if is_para_topbottom_float(&table.common)
+                    || (table.common.treat_as_char
+                        && super::layout::LayoutEngine::tac_stored_band_is_outer_box(next, table)))
         });
     // A single TAC shape owns its saved line box. A plain successor can prove
     // that the trailing band is real even when paint collapses the empty text
