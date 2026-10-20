@@ -16,6 +16,7 @@ pub(crate) use stored_cell_flow_picture::{
     stored_cell_flow_picture_extent_hu, stored_cell_flow_picture_frame,
 };
 mod stored_closed_cell_frame;
+mod stored_padded_line;
 mod stored_empty_host_frame;
 mod stored_nested_before_host;
 mod stored_nested_closing_host;
@@ -94,6 +95,7 @@ pub(crate) fn stored_plain_closed_cell_ink_height(
     let padding = cell.effective_vertical_padding_hu(&table.padding);
     ((i64::from(ink_end) + i64::from(padding) - i64::from(cell.height)).abs() <= 1)
         .then_some(ink_end)
+        .or_else(|| stored_padded_line::closed_content_height_hu(cell, padding))
 }
 
 /// Complete original line boxes, including intentional empty lines, in one

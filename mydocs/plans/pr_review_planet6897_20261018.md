@@ -7564,3 +7564,32 @@ raw 52.73296/45.93574/57.91259%이며, 7쪽 직접 overlay에서 내용 소속�
 조건을 구분해 처리한다. 자세한 진단은 `four-failure-regression-audit.md`와
 `issue7687-page-owner-audit-results.json`에 보존했으며 정식 삭제·기대값 변경은
 아직 수행하지 않았다.
+
+### #2439 실제 저장 상자의 공통 측정·배치 보정
+
+앞의 입력 부적합 진단 뒤 실제 한컴 2020으로 다시 저장한 작은 대조군 두 개를 마련했다.
+저장 후 원점·태그·provenance를 조작하지 않았고, 그 바이트 자체를 다시 독립 Print했다.
+원본 문서 전체의 해결을 주장하거나 이전 합성 입력의 미달 결과를 대체하지 않는다.
+입력 생성·Print 출처·SHA·1쪽 전체 Native/fresh WASM TSV·직접 review/overlay는
+`mydocs/pr/assets/issue_2439/native_outer_box/README.md`에 연결한다.
+
+실제 단일 줄의 lineHeight=2600HU가 textHeight=2318HU와 안 여백 282HU를 포함하는데,
+측정이 여백을 다시 가산해 기존 닫힌 저장 상자를 거부했다. 실제 저장 줄을 검증한 공통
+`stored_plain_closed_cell_ink_height`에서 해당 닫힘을 인정한다. 빈 host lane도 기존
+block·중첩 경로와 같은 `ParagraphFloatPlacement`를 소비하고 lane 이동 시 표·점유 끝·
+뒤 저장 원점을 함께 옮긴다. 위여백은 좌우 여백의 대칭 여부와 별개로 원본 값을 소비한다.
+
+독립 Print의 표 윗변은 96dpi에서 165.2586/172.7707px이고, 보정 전 두 입력 모두
+161.6px여서 실제 결함을 검출했다. 보정 후 165.4/172.9px이며 두 입력 모두 Native와
+최적화한 fresh WASM 전체 1쪽 raw 100%다. 표 외곽·C11·후속 32개 문단의 직접 판독도
+완료했다. 선과 글자의 농도·안티앨리어싱 차이는 남으며 색까지 동일하다는 뜻은 아니다.
+정식 #2439 검사는 불완전한 provenance 조작 대신 이 실제 저장본과 독립 Print의 ±2px,
+내용 프레임 포함·순서·누락·중복·표 뒤 배치를 검사한다. 과거 검사 원문은 `.rs.txt`로
+보존했다. 기존 다른 세 검사와 내부 접힌 저장 사다리 계약은 유지한다.
+
+현재 실행은 `closed-padded-float-frame-{build,contracts,existing,wasm-build,wasm-visual}-results.json`
+및 `qualified-four-failures-source-content-contracts-results.json`에 기록한다. Native는
+진단 opt1, fresh WASM은 최적화·wasm-opt 완료다. 정상 대조군 9+28+46건은 모두
+통과했고 H1~H6 fresh WASM 전체 6쪽은 raw 100%다. 별도로 진행 중인 overlay 물리 컷
+패치는 아직 수용·커밋하지 않았으며 이 producer에 함께 포함된 사실을 기록했다.
+최종 통합 head 전체 검증·PR 제출 완료를 뜻하지 않는다.
