@@ -6569,3 +6569,37 @@ mergedAt=null이다. 근거는 `source-post-cherry-additional-commit-audit.json`
 근거는 `complete-row-before-visual-summary.json`, `complete-row-minimum-focused.log`,
 `complete-row-minimum-closing-controls.log`와 각각의 JSON 실행 기록이다.
 보정 뒤 최적화 Native PNG·fresh WASM 및 전체 제출 게이트는 이어 진행한다.
+
+### Native 전쪽 재검증 결과
+
+보정 소스 `b0898c44982db9577ad504bb0b41a22748c6e35a`를 `release-test`·Native Skia로
+실제 빌드했다(5분 44초, exit 0). 검증용 producer는 ignored
+`complete-row-corrected-native/`에 실행 파일과 rlib로 보존했다.
+같은 두 입력·독립 Print PDF·compat 2022·96dpi·시스템 글꼴 공급으로 재산출한 결과는 다음과 같다.
+
+| 입력 | PDF / Native 쪽수 | 보정 뒤 Native 최저 raw | 90% 미달 |
+| --- | ---: | ---: | ---: |
+| minimum-28500 | 8 / 8 | 100.00000% | 0쪽 |
+| headroom-1 | 8 / 8 | 100.00000% | 0쪽 |
+
+기준 devel과 보정 뒤 default CLI의 16쪽 render tree JSON 전체도 동일했다.
+원래 쪽 소속뿐 아니라 최소 경계의 행 1·2·3 원점, 행 4의 6쪽 원점,
+표 뒤 본문 8쪽 원점까지 복구됐다. 최소 경계의 5·6·8쪽 및 1HU 여유의 5쪽
+review PNG를 직접 열어 빈 띠·행 소속·본문 뒤 배치와 글자 간격을 대조했다.
+raw 100%는 2px 실루엣 값이며 픽셀 전체 동일성을 주장하지 않는다.
+
+실행 기록은 `complete-row-corrected-native-results.json`,
+`complete-row-corrected-runtime-results.json`,
+`complete-row-corrected-render-tree-comparison.json`이다. 전쪽 TSV 원문은
+`complete-row-corrected-native-visual/{minimum-28500,headroom-1}/silhouette.tsv`,
+대표 compare·overlay·review는 `complete-row-panels/corrected/`에 있다.
+기존 기준 fresh WASM의 두 입력 전 8쪽 raw 100%도 입력/PDF 해시와 producer를 확인해
+재사용할 수 있으나, **보정 뒤 fresh WASM 실행은 아직 남아 있다.** 이 Native 결과로
+최종 PR 게이트나 나머지 회귀의 전체 통과를 대신하지 않는다.
+
+별도로 추가 원 source 6개의 선행 적용을 독립 `GIT_INDEX_FILE`에서 사전 조사했다.
+첫 4개는 적용됐고 `da1d2280d`는 이미 존재하는 공통 저장 프레임 좌표 경로와 충돌했다.
+7개 충돌은 원점 생산과 소비 호출부가 함께 바뀌는 범위이므로 중복 helper를 넣거나
+파일 전체를 기계적으로 교체하지 않고 검토한다. `source114-index-preflight-results.json`에
+결과를 남겼으며, 이 조사는 실제 HEAD·주 index·작업 소스와 진행 중 빌드를 바꾸지 않았다.
+추가 6개를 실제 체리픽·리베이스한 완료 기록이 아니다.
