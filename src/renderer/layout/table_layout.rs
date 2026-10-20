@@ -28064,22 +28064,35 @@ mod row_cut_tests {
     #[test]
     fn test_advance_row_cut_rowbreak_rewinds_internal_hard_break_orphan() {
         let eng = LayoutEngine::new(96.0);
-        let styles = ResolvedStyleSet::default();
-        // [Task #1488] 가시 텍스트 문단으로 구성 — 가시 문단 사이 리셋은 하드 브레이크
-        // 보존(Task #993 의도)이라 rewind-orphan 로직이 그대로 검증된다.
+        let mut styles = ResolvedStyleSet::default();
+        styles.para_styles.push(Default::default());
+        styles.para_styles[0].widow_orphan = true;
+        // 첫 조각에는 1200HU 세 줄만 들어간다. 원점 리셋만 있고 공간이
+        // 충분한 로컬 프레임과 실제로 줄을 이월해야 하는 경계를 구분한다.
+        let available = crate::renderer::hwpunit_to_px(3 * 1200, 96.0);
+        eng.current_body_area.set((0.0, 0.0, 600.0, available));
+        // HWP5 저장 줄의 양수 원점이 다음 쪽의 0으로 되감기고 쪽 시작 표지가
+        // 있는 경계다. 0→0과 중복 text_start만으로 물리 쪽 경계를 가정하지 않는다.
+        // 앞 문단 두 줄 뒤에 이 문단의 첫 줄만 남으면 고아 줄을 함께 이월한다.
         let internal_reset = Paragraph {
-            text: "가나다".to_string(),
+            text: "가나".to_string(),
+            char_count: 2,
             line_segs: vec![
                 LineSeg {
-                    vertical_pos: 0,
+                    text_start: 0,
+                    vertical_pos: 2400,
                     line_height: 1200,
                     line_spacing: 0,
+                    segment_width: 10000,
                     ..Default::default()
                 },
                 LineSeg {
+                    text_start: 1,
                     vertical_pos: 0,
                     line_height: 1200,
                     line_spacing: 0,
+                    segment_width: 10000,
+                    tag: LineSeg::TAG_FIRST_LINE_OF_PAGE,
                     ..Default::default()
                 },
             ],
@@ -28090,15 +28103,11 @@ mod row_cut_tests {
             cell(
                 1,
                 1,
-                vec![
-                    visible_text_para(1, 0),
-                    visible_text_para(1, 1200),
-                    internal_reset,
-                ],
+                vec![text_para(1, 0), text_para(1, 1200), internal_reset],
             ),
         ]);
 
-        let r = eng.advance_row_cut(&t, 1, &[], 1000.0, &styles);
+        let r = eng.advance_row_cut(&t, 1, &[], available, &styles);
 
         assert_eq!(r.end_cut, vec![2]);
         assert!(r.hit_hard_break);
