@@ -7154,3 +7154,42 @@ end=(100,100), 아핀 축척=(0,16.200001), 공통 물리 크기1×1620HU와
 보존했다. 다음 단계는 원본 아핀 결과와 공통 물리 프레임, 최종 회전의 소비
 관계를 검증하고 일반/음수 축척/회전 대조군과 함께 공통 선 경로에서 보정한다.
 아직 이 원인의 구현·Native/fresh WASM 검증은 완료되지 않았다.
+
+### 111쪽 하단 화살표의 접힌 원본 축과 추가 회전
+
+HWPX 원본 section2의 line1586430628은 orgSz100×100, curSz0×1620,
+scaMatrix(0,0,0,0,16.200001,0), rotMatrix=identity와 rotationInfo90을
+함께 저장한다. HWP의 실제 아핀과1×1620HU 물리 상자도 같다. 원본 사양
+표83–85의 요소 속성과 Rendering 정보는 각각 보존하며 독립 Print의 같은
+영역은 위쪽 화살표다. 원문 XML·HWP/HWPX 파싱 결과는
+`handbook-p111-arrow-{hwpx-source.json,hwp-extents.log,hwpx-extents.log}`에 있다.
+
+새 공통 helper는 원본 행렬의 한 출력 축이 실제로0이고 두 끝점을 변환한
+범위가 공통 물리 상자와1HU 이내로 일치하되 추가 회전 뒤에는 그 상자와
+불일치하는 경우만 인증한다. 비유한/행렬 없음·일반 회전/대각선은 기존
+계약을 유지한다. 같은 인증을 점 변환과 최종 회전이 함께 소비한다. 좌표를
+숨기거나 고정하지 않고 원본의 접힌 축을 보존한다. Native 영향 쪽·일반/음수
+축척/회전 대조군과 실제 최종 출력을 먼저 실행해 이 후보의 타당성을 확인한다.
+현재는 구현 직후이며 검증 완료로 보고하지 않는다.
+
+
+화살표 후보의 Native 빌드와 기존 9·28·46건이 각각 통과했다. 일반·음수 축척·
+회전 대조군을 유지했으며, 실제 원본의 방향 진단은 보정 전 0 PASS / 2 FAIL에서
+보정 후 2 PASS / 0 FAIL로 바뀌었다. 최종 선의 y 증가량은 두 형식 모두 약
+21.6px이고 x 증가량과 추가 회전은 0이다. 이 진단은 ignored `output/` 안에서
+실행했으며 문서 전체 gate 전의 정식 회귀 추가로 취급하지 않는다.
+
+최신 선택 6쪽의 Native TSV에서 111쪽 raw는 HWP·HWPX 모두 **99.99394%**다.
+직전 99.91952/99.91953%와 구분하며 처음 사용자 지적의 83.97997%는 통과로
+판정하지 않는다. 새 `handbook-axis-arrow-panels/handbook-hwp/review/review_111.png`를
+독립 Print와 직접 대조해 상자·후속 본문 위치와 하단 화살표 방향을 확인했다.
+156쪽은 81.26626/81.26672%로 계속 미달이며 PR은 보류한다. 두 형식 전체
+쪽수는 각각 Print와 같은 383쪽이지만 이번 TSV 측정 범위는 선택 6쪽이다.
+최신 전쪽·fresh WASM·최적화 Native 검증을 완료한 것으로 확대하지 않는다.
+
+빌드 source/producer SHA와 명령은 `handbook-axis-arrow-direction-results.json`,
+Native 선택 측정은 `handbook-axis-arrow-native-results.json`과
+`handbook-axis-arrow-native/handbook-{hwp,hwpx}/silhouette.tsv`, 방향 진단은
+`handbook-arrow-{before,after}.log`에 보존했다. 빌드 뒤 rustfmt의 줄바꿈만
+보정했으며 그 차이는 `handbook-axis-arrow-format-provenance.json`에 기록한다.
+의미가 같은 형식 변경이어도 최종 exact-head 빌드·필수 검증은 별도로 수행한다.
