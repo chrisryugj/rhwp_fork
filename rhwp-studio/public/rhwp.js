@@ -908,6 +908,9 @@ export class HwpDocument {
     clearMetafileFonts() {
         wasm.hwpdocument_clearMetafileFonts(this.__wbg_ptr);
     }
+    clearNativePuaFonts() {
+        wasm.hwpdocument_clearNativePuaFonts(this.__wbg_ptr);
+    }
     /**
      * 셀 블록이 덮은 칸들의 글을 비운다 — `Run("TableDeleteCell")`. 규약은 merge 와 같다.
      * @param {number} list_id
@@ -4695,6 +4698,27 @@ export class HwpDocument {
         let deferred2_1;
         try {
             const ret = wasm.hwpdocument_getMetafileFontRequests(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    getNativePuaFontRequests() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.hwpdocument_getNativePuaFontRequests(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
             if (ret[3]) {
@@ -9033,6 +9057,25 @@ export class HwpDocument {
         const ptr1 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
         const len1 = WASM_VECTOR_LEN;
         const ret = wasm.hwpdocument_registerMetafileFont(this.__wbg_ptr, ptr0, len0, ptr1, len1, face_index);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
+    }
+    /**
+     * @param {string} family
+     * @param {boolean} bold
+     * @param {boolean} italic
+     * @param {Uint8Array} bytes
+     * @param {number} face_index
+     * @returns {boolean}
+     */
+    registerNativePuaFont(family, bold, italic, bytes, face_index) {
+        const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.hwpdocument_registerNativePuaFont(this.__wbg_ptr, ptr0, len0, bold, italic, ptr1, len1, face_index);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }

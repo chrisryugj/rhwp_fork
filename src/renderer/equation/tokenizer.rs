@@ -379,7 +379,7 @@ impl Tokenizer {
         // 공백·Unicode minus·인용은 두 경로 모두 보존한다.
         if let Some(symbol) = self
             .document_commands
-            .then(|| match (ch, next) {
+            .then_some(match (ch, next) {
                 ('+', '-') => Some("±"),
                 ('-', '+') => Some("∓"),
                 _ => None,

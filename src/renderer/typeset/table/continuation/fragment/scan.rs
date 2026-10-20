@@ -289,33 +289,31 @@ impl TypesetEngine {
                 table,
                 st.layout.body_area.height,
             );
-            if is_continuation
-                && scan.split_block_start.is_none()
-                && scan.split_end_limit > 0.0
-                && st.current_zone_y_offset == 0.0
-                && original_body_frame_bottom.is_some()
-                && scan.end_row.checked_sub(1).is_some_and(|row| {
-                    layout_engine.row_cut_closes_shared_original_frame(
-                        table,
-                        row,
-                        &scan.split_end_cut,
-                        styles,
-                    ) || layout_engine.row_cut_closes_original_restart_frame(
-                        table,
-                        row,
-                        &scan.split_end_cut,
-                        input.fragment_row_heights.unwrap_or(&mt.row_heights),
-                        styles,
-                    )
-                })
-            {
+            if let Some(frame_bottom) = original_body_frame_bottom.filter(|_| {
+                is_continuation
+                    && scan.split_block_start.is_none()
+                    && scan.split_end_limit > 0.0
+                    && st.current_zone_y_offset == 0.0
+                    && scan.end_row.checked_sub(1).is_some_and(|row| {
+                        layout_engine.row_cut_closes_shared_original_frame(
+                            table,
+                            row,
+                            &scan.split_end_cut,
+                            styles,
+                        ) || layout_engine.row_cut_closes_original_restart_frame(
+                            table,
+                            row,
+                            &scan.split_end_cut,
+                            input.fragment_row_heights.unwrap_or(&mt.row_heights),
+                            styles,
+                        )
+                    })
+            }) {
                 let top = budget.fragment_placement.map_or(
                     st.current_height + budget.host_before_overhead + budget.vert_offset_overhead,
                     |placement| placement.table_top,
                 ) + budget.caption_extra;
-                let frame_height = original_body_frame_bottom.expect("같은 원본에서 확인한 종료선")
-                    - top
-                    - vars.header_overhead;
+                let frame_height = frame_bottom - top - vars.header_overhead;
                 if frame_height >= scan.consumed && frame_height <= vars.avail_for_rows {
                     let last_height = scan.end_row_height_override.unwrap_or_else(|| {
                         let row = scan.end_row - 1;
