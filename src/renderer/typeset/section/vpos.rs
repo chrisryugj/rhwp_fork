@@ -258,7 +258,7 @@ impl TypesetEngine {
         // [#2243 진단] snap 입출력 — 동작 불변.
         if std::env::var("RHWP_DIAG_SNAPALL").is_ok() {
             eprintln!(
-                "DIAG_SNAPALL sec={} page={} pi={} y_in={:.1} y_out={:.1} base={:?} lazy={:?} anchor={:.1} dirty={}",
+                "DIAG_SNAPALL sec={} page={} pi={} y_in={:.1} y_out={:.1} base={:?} lazy={:?} anchor={:.1} dirty={} source={:?}",
                 st.section_index,
                 st.pages.len(),
                 para_idx,
@@ -268,6 +268,7 @@ impl TypesetEngine {
                 hc.vpos_lazy_base,
                 st.vpos_col_anchor,
                 st.vpos_ladder_dirty,
+                hc.stored_column_origin,
             );
         }
         if std::env::var("RHWP_DIAG_TAC").is_ok() && (y - st.current_height).abs() > 0.05 {
@@ -291,7 +292,14 @@ impl TypesetEngine {
         // 다른 저장 원점의 절대 끝으로 되감는다.
         let flow_moved = crate::renderer::px_to_hwpunit(y, self.dpi)
             != crate::renderer::px_to_hwpunit(st.current_height, self.dpi);
-        if flow_moved && y >= 0.0 && y <= st.available_height() {
+        // lazy 역산은 현재 순차 흐름에 저장 사다리를 맞춘 값일 뿐, 단의 실제
+        // 원점을 인증하지 않는다. 수용한 줄/개체가 고정한 축이 있는 경우만
+        // 절대 종료값으로 전달해야 paint의 다른 실제 프레임을 덮어쓰지 않는다.
+        let owns_column_axis = hc.vpos_page_base.is_some()
+            || hc
+                .stored_column_origin
+                .is_some_and(|(base, _)| hc.vpos_lazy_base == Some(base));
+        if flow_moved && owns_column_axis && y >= 0.0 && y <= st.available_height() {
             if let Some(crate::renderer::typeset::PageItem::FullParagraph {
                 para_index: previous,
             }) = st.current_items.last()

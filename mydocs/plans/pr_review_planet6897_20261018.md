@@ -7438,3 +7438,26 @@ source `8fbcc1fbd08e827d9807267d7a6f202a2e09b4b5`에 patch SHA-256
 `terminal-accepted-frame-evidence.json`, `terminal-accepted-frame-oss-comparison.json`,
 `terminal-accepted-frame-oss-visual/oss-hwp/silhouette.tsv`,
 `terminal-accepted-frame-oss-panels/review/review_003.png`에 있다.
+
+
+### 2026-10-20 #6900: 저장 단 원점의 소유가 확인된 종료 경계만 전달
+
+원 해결 PR #6914와 통합 #6943, 기존 원본 검사와 독립 한컴 PDF를 대조했다.
+`section/vpos.rs`가 현재 순차 흐름에서 역산한 lazy 원점을 실제 단의 원점으로
+취급하여, 표 뒤 빈 문단의 종료를 977.4px 부근에서 203.2px로 되감고 있었다.
+다음 출처 줄은 1003.0px 대신 212.8px로 올라갔다. 이는 작은 부동소수 오차가
+아니며, y_in 80.2 → y_out 89.8px의 실제 이동이다. 수용한 줄/개체가 확인한
+`vpos_page_base` 또는 같은 lazy 축의 `stored_column_origin`이 있을 때만
+완료 문단의 절대 종료값을 배치에 전달하도록 공통 생산 경로를 보정했다.
+인증되지 않은 lazy 역산으로 paint의 실제 표 프레임을 덮어쓰지 않는다.
+
+기존 기대값은 수정하지 않았다. 동일 47건은 수정 전 38건 통과·9건 실패에서
+39건 통과·8건 실패로 바뀌었고, 정상 대조군 9+28+46건은 모두 통과했다.
+`samples/issue6900/pdf/156521182-covid-press-clarification-2020.pdf`를 재사용한
+Native 전4쪽 TSV에서 4쪽 raw는 99.26551 → 99.96792%로 base와 같아졌다.
+나머지 3쪽도 모두 99% 이상이며 base 대비 0.1%p 이상 하락은 없다.
+원본 SHA와 PDF SHA, 세 바이너리별 명령·결과는 ignored
+`output/pr-review/planet6897-20261018/issue6900-owner-visual-results.json`에 있다.
+#7872 두 입력과 편람 선택 9쪽씩의 Native 결과도 앞 후보와 같다.
+원장은 `snap-frame-owner-{build,contracts,existing,visual}-results.json`이다.
+현재 결과는 Native opt1 진단이며 최종 전체 회귀·최적화 fresh WASM 검증 완료를 뜻하지 않는다.
