@@ -10975,6 +10975,21 @@ impl LayoutEngine {
                 }
                 let deferred_empty_float_text_anchor_y =
                     para_index.checked_sub(1).and_then(|host_index| {
+                        // 저장 모양이 같아도 분할 종료 뒤 본문은 현재 조각의 흐름을 잇는다.
+                        // 조판이 이 본문을 통째 표 바로 앞으로 실제 재배열한 경우에만
+                        // 그때의 빈 호스트 원점을 사용한다. 계산 줄이라는 이유만으로
+                        // 이전 쪽의 앵커로 되감으면 마지막 표 조각과 본문이 겹친다.
+                        let deferred_here = page_content.column_contents.iter().any(|column| {
+                            column.items.windows(2).any(|pair| {
+                                matches!(pair,
+                                    [PageItem::FullParagraph { para_index: text },
+                                     PageItem::Table { para_index: host, .. }]
+                                        if text == para_index && *host == host_index)
+                            })
+                        });
+                        if !deferred_here {
+                            return None;
+                        }
                         let host = paragraphs.get(host_index)?;
                         let following = paragraphs.get(*para_index)?;
                         let Control::Table(table) = host.controls.first()? else {

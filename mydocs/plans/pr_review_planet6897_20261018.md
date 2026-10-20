@@ -7346,3 +7346,46 @@ HWP 98쪽 raw 98.90763%는 devel 99.01849% 대비 0.11086%p 낮아 원인 검토
 `rebase-2e-tac-margin-{build,semantic-contracts,visual}-results.json`,
 `rebase-2e-tac-margin-existing-results.json` 및 `rebase-2e-tac-margin-existing-attempt2-results.json`,
 `rebase-2e-tac-margin-panels/original-nested-tac-row-drop/review/review_001.png`에 있다.
+
+
+### 2026-10-20 #2439: 조판의 실제 항목 순서와 렌더 재개 원점 일치
+
+원 이슈 #2439의 본문·댓글, 원 해결 PR #2512, 물리 사다리 반례를 보완한 #2810과
+빈 호스트 다중 표 PR #8005를 대조했다. 기존 양수 오프셋 검사는 `issue1549`의
+HWPX 축약 입력을 먼저 로드한 뒤 Native HWP5 출처로 재결합한다. 이 브랜치의
+미계산 XML 본문 재조판으로, 원래 `vertpos=0`인 본문 캐시가 계산 줄로 바뀌어
+다음 문단의 synthetic tag가 base와 달라졌다. 저장 정보의 수용 조건이나 검사
+기대값을 통과 목적으로 완화하지 않는다.
+
+실행 추적에서는 분할 표의 마지막 실제 하단 520.5px 뒤에 조판이 본문 시작을
+524.08px로 정했지만, `layout_column_item`의 `FullParagraph` 경로가 계산 줄이라는
+이유만으로 이전 호스트 원점을 다시 선택해 243.8px로 되감았다. 조판 결과의
+현재 쪽·단 항목에 `FullParagraph → 원래 호스트의 통째 Table` 재배열이 실제로
+있을 때만 그 지연 앵커를 사용한다. PartialTable 종료 뒤의 정상 순서는 재추론하지 않는다.
+이 확인은 source 속성의 유사성이 아니라 실제 수용한 PageItem 소유·순서에 따른다.
+
+단일 표에서는 600HU 양수 오프셋과 위 바깥여백의 틈에 호스트 줄 전진과 첫 계산
+글줄조차 들어가지 않는데 본문을 앞으로 보냈다. 같은 공통 판별자를 조판·렌더가
+소비하도록 유지하면서, 원본 단위의 첫 줄 포함 관계를 선행 조건으로 확인했다.
+이 수정 뒤 본문 시작은 270.0267px로 표 실제 하단 265.1px 아래에 놓인다.
+
+기존 47건은 수정 전 35건 통과·12건 실패 → 순서 보정 뒤 36건 통과·11건 실패다.
+두 번째 틈 판정 보정 뒤에도 36건 통과·11건 실패다. 분할 표 검사는 기대값 변경 없이
+통과했다. 단일 표 검사는 앞의 본문 겹침 검사를 통과한 뒤, 기존 아래의 **위 바깥여백
+변화량 검사**에서 여전히 실패한다: base_top=161.60px, larger_top=161.60px,
+원본 여백 차이567HU=7.56px. 이를 통과로 보고하지 않으며 저장 꼬리 증거가 없을 때의
+물리 위여백 생산·배치 경로를 계속 보정한다.
+
+같은 고정 Native opt1 산출물에서 정상 대조군 9+28+46건은 모두 통과했다.
+#7872 원본·축약본과 편람 선택 9쪽씩의 Native 재검증을 함께 실행했다. 원장은 ignored
+`output/pr-review/planet6897-20261018/deferred-gap-fit-{build,contracts,existing,visual}-results.json`,
+회귀 로그는 `deferred-gap-fit-semantic-contracts.log`, 흐름 추적은
+`issue2439-{flow-origin-before,gap-fit-flow-origin}.log`다. 최적화 Native/fresh WASM
+최종 전쪽 검증이나 전체 회귀 통과를 뜻하지 않는다.
+
+별도로 #1418/#4658의 `2026_oss_rst.hwp`는 base 6쪽과 후보 7쪽을 실제 출력했다.
+후보 4쪽은 내용 항목이 전혀 없는 빈 쪽이며, 마지막 행의 내용 컷 뒤 19.253px 물리
+잔여를 다음 쪽에서 처리하면서 생겼다. 독립 Print 3쪽 하단 괘선은 999.23px,
+후보 표 끝은 981.8px다. 빈 쪽만 삭제하거나 예전의 더 짧은 표 끝을 복구해 완료로
+판정하지 않는다. 같은 종료 행의 물리 예산·예약·배치를 확인한다. 상세 진단은
+`oss-empty-page-diagnosis.md`와 `oss-{base,candidate}-pages.log`에 있다.

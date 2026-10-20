@@ -5704,11 +5704,26 @@ pub(crate) fn empty_offset_float_deferred_text_ladder_hu(
         && following.line_segs.iter().all(|segment| {
             segment.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY != 0
         });
+    let first_line_height = following.line_segs.first()?.line_height;
+    let table_top =
+        i64::from(signed_hwpunit(table.common.vertical_offset)) + i64::from(table.outer_margin_top);
     qualifies.then(|| {
         host.line_segs
             .iter()
             .find(|segment| {
                 segment.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+            })
+            // 첫 계산 줄조차 표 위에 들어가지 않으면 표 뒤의 정상 흐름을 쓴다.
+            // 양수 오프셋이라는 이유만으로 본문을 앞으로 보내면 작은 틈에서 겹친다.
+            .filter(|segment| {
+                first_line_height > 0
+                    && i64::from(
+                        segment
+                            .line_height
+                            .saturating_add(segment.line_spacing)
+                            .max(0),
+                    ) + i64::from(first_line_height)
+                        <= table_top
             })
             .map(|segment| {
                 (
