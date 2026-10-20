@@ -2593,6 +2593,7 @@ impl LayoutEngine {
                     self.stored_nested_host_physical_flow(cell, table, styles, cp_idx, cut_units);
                 let mut table_host_has_stored_origin = false;
                 let mut single_column_snap_spacing_before = false;
+                let mut stored_linear_spacing_before = None;
                 if stored_host_flow.is_some() {
                     // 종료 줄의 저장 원점은 표의 시작점이 아니다. 앞 유닛에서
                     // 이어지는 현재 흐름 원점을 보존하고 같은 소유 구간을 소비한다.
@@ -2637,14 +2638,11 @@ impl LayoutEngine {
                                 .get(para.para_shape_id as usize)
                                 .map(|s| s.spacing_before)
                                 .unwrap_or(0.0);
-                            // 가운데·아래 정렬 셀의 첫 원본 띠는 선택 문단의
-                            // 정렬 내용에 속하므로 선차감하지 않는다. 잉크 끝으로
-                            // 인증한 선언 프레임은 저장 원점을 직접 소유한다.
-                            // 이어받기 문단은 배치에서 재가산할 앞 간격을 차감한다.
+                            // 저장 줄 상단이 품은 앞 간격은 compose에서 다시 더한다.
+                            // 가운데·아래 정렬도 같은 줄 원점을 소비하므로 선차감한다.
+                            // 첫 원점이 해당 간격을 품지 않은 경우는 그대로 둔다.
                             if cp_idx > 0
-                                || ((matches!(cell.vertical_align, VerticalAlign::Top)
-                                    || declared_opening_content_height.is_some())
-                                    && spacing > 0.0
+                                || (spacing > 0.0
                                     && hwpunit_to_px(seg.vertical_pos - vpos_origin, self.dpi)
                                         >= spacing)
                             {
@@ -2680,6 +2678,15 @@ impl LayoutEngine {
                             && nested_tables_px > 0.0
                             && target_top - current_top >= nested_tables_px - 24.0;
                         table_host_has_stored_origin = has_table_ctrl && !post_table_host_line;
+                        if cp_idx == 0
+                            && start_line == 0
+                            && !has_table_ctrl
+                            && target_top >= current_top
+                        {
+                            // 저장 원점이 이미 앞 띠를 품는다. compose는 이 위치가
+                            // column-top인지 다시 추측하지 않고 선차감한 몫만 돌려놓는다.
+                            stored_linear_spacing_before = Some(snap_spacing_before);
+                        }
                         if target_top > current_top && !post_table_host_line {
                             para_y += target_top - current_top;
                         }
@@ -2691,7 +2698,7 @@ impl LayoutEngine {
                 // 문단이 예외 경로(중첩 표 보유 등)로 새는지 직접 본다. 동작 불변.
                 if std::env::var("RHWP_DIAG_CELLPARA").is_ok() {
                     eprintln!(
-                        "DIAG_CELLPARA pi={} cell=({},{}) cp={} lines={}..{} cut={:?} nested={:?} mixed={} nonline={} para_y={:.1} cell_bot={:.1}",
+                        "DIAG_CELLPARA pi={} cell=({},{}) cp={} lines={}..{} cut={:?} nested={:?} mixed={} nonline={} para_y={:.1} cell_bot={:.1} owned_before={:?}",
                         para_index,
                         cell.row,
                         cell.col,
@@ -2704,6 +2711,7 @@ impl LayoutEngine {
                         visible_non_inline_controls,
                         para_y,
                         cell_content_bottom(cell_y, cell_h, pad_bottom),
+                        stored_linear_spacing_before,
                     );
                 }
                 let cell_context = if let Some(context) = enclosing_cell_ctx {
@@ -2952,10 +2960,26 @@ impl LayoutEngine {
                         Some(bin_data_content),
                         wrap_anchor.as_ref(),
                         false,
-                        picture_closing_line.map(|_| super::ParagraphVerticalSpacing {
-                            before: 0.0,
-                            after: 0.0,
-                        }),
+                        picture_closing_line
+                            .map(|_| super::ParagraphVerticalSpacing {
+                                before: 0.0,
+                                after: 0.0,
+                            })
+                            .or_else(|| {
+                                stored_linear_spacing_before.map(|before| {
+                                    super::ParagraphVerticalSpacing {
+                                        before,
+                                        after: if end_line == composed_for_layout.lines.len() {
+                                            styles
+                                                .para_styles
+                                                .get(para.para_shape_id as usize)
+                                                .map_or(0.0, |style| style.spacing_after.max(0.0))
+                                        } else {
+                                            0.0
+                                        },
+                                    }
+                                })
+                            }),
                         picture_closing_line.map(|(origin, _)| {
                             cell_y + pad_top + origin
                                 - hwpunit_to_px(para.line_segs[0].vertical_pos, self.dpi)

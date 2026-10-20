@@ -82,7 +82,15 @@ impl TypesetEngine {
             {
                 return None;
             }
-            let opening = if let Some(height) = input.start.start_row_height_override {
+            // 시작 행의 내용 꼬리와 이번 조각이 실제 수용한 물리 상자는 다르다.
+            // scanner가 예약한 앞 상자를 다시 내용 높이로 바꾸면 빠진 빈 띠가
+            // 끝 행에 중복 가산되어 paint가 본문 바닥을 넘는다.
+            let opening = if let Some((_, height)) = scan
+                .accepted_start_row_box
+                .filter(|(owner, _)| *owner == first)
+            {
+                height
+            } else if let Some(height) = input.start.start_row_height_override {
                 height
             } else if input.start.start_cut.is_empty() {
                 *measured.row_heights.get(first)?
@@ -103,6 +111,12 @@ impl TypesetEngine {
         } + budget.header_overhead;
         let last = height - before;
         let selected = scan.end_row_height_override.unwrap_or(scan.split_end_limit);
+        if std::env::var("RHWP_DIAG_SCAN").is_ok() {
+            eprintln!(
+                "DIAG_SCAN BODY_CLOSING_FRAME rows={}..{} accepted_start={:?} frame={height:.6} prefix={before:.6} last={last:.6} selected={selected:.6}",
+                first, scan.end_row, scan.accepted_start_row_box,
+            );
+        }
         (last >= selected).then_some((height, last))
     }
 

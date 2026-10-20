@@ -2838,6 +2838,7 @@ pub(crate) fn stored_paragraph_successor_flow(
     dpi: f64,
 ) -> Option<StoredParagraphSuccessorFlow> {
     use crate::model::paragraph::LineSeg;
+    use stored_column_spacing::source_line_position;
 
     let text_before_flow_table = para.controls.is_empty()
         && !para.text.trim().is_empty()
@@ -2894,12 +2895,10 @@ pub(crate) fn stored_paragraph_successor_flow(
         .get(next.para_shape_id as usize)?
         .spacing_before;
     let hu_per_px = 1.0 / hwpunit_to_px(1, dpi);
-    let flow_origin_hu = para
-        .line_segs
-        .first()?
-        .vertical_pos
-        .checked_sub((spacing_before * hu_per_px).round() as i32)?;
-    let content_bottom_hu = last.vertical_pos.checked_add(last.line_height)?;
+    let flow_origin_hu =
+        source_line_position(para, 0)?.checked_sub((spacing_before * hu_per_px).round() as i32)?;
+    let content_bottom_hu = source_line_position(para, para.line_segs.len().checked_sub(1)?)?
+        .checked_add(last.line_height)?;
     let flow_end_hu = content_bottom_hu
         .checked_add(last.line_spacing)?
         .checked_add((spacing_after * hu_per_px).round() as i32)?;
@@ -2910,7 +2909,7 @@ pub(crate) fn stored_paragraph_successor_flow(
         && next_before.is_finite()
         && next_before >= 0.0
         && flow_end_hu.checked_add((next_before * hu_per_px).round() as i32)
-            == Some(after.vertical_pos))
+            == Some(source_line_position(next, 0)?))
     .then_some(StoredParagraphSuccessorFlow {
         flow_origin_hu,
         content_bottom_hu,

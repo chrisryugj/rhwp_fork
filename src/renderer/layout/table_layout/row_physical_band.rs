@@ -117,6 +117,19 @@ impl LayoutEngine {
             });
         let paragraph_end = last.para_idx != units[end].para_idx;
         let following = self.stored_span_line_tail_spacing(last);
+        // 문단 끝 유닛에는 줄간격과 문단 뒤 간격이 함께 들어 있다.
+        // 다음 문단이 다른 조각에 속하면 두 간격 모두 그 소유자에게 넘긴다.
+        // 마지막 글줄의 뒤 간격을 확인한 일반 텍스트 유닛에만 적용한다.
+        let following = if paragraph_end && following > 0.0 {
+            following
+                + cell
+                    .paragraphs
+                    .get(last.para_idx)
+                    .and_then(|para| styles.para_styles.get(para.para_shape_id as usize))
+                    .map_or(0.0, |style| style.spacing_after.max(0.0))
+        } else {
+            following
+        };
         let capacity = if original_slot && paragraph_end {
             following
         } else {
