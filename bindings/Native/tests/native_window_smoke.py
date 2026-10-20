@@ -93,11 +93,79 @@ class AdapterTests(unittest.TestCase):
         window.loading_pages = False
         window.pages = [{"width": 100, "height": 200}]
         window.view = {"visible": [{"page": 0}]}
+        window.page_geometry_key = (7, 1, None)
         window.click(QPointF(10, 20), False)
         window.pump()
         self.assertEqual(len(worker.host.calls), 1)
         self.assertEqual(worker.requests, [{"op": "hitTest", "page": 0, "x": 10, "y": 20,
                                           "target": {"documentId": 7, "revision": 1}}])
+
+    def test_queued_click_does_not_apply_old_geometry_to_a_completed_edit(self):
+        class ViewHost:
+            def __init__(self):
+                self.calls = []
+            def host_request(self, **request):
+                self.calls.append(request)
+                return {"query": {"page": 1, "point": {"x": 10, "y": 20}}}
+        worker = IdleWorker()
+        worker.host = ViewHost()
+        window = self.idle_window(worker)
+        window.info = {"documentId": 7, "revision": 1, "fontGeneration": 0, "pageCount": 2}
+        window.pages = [{"width": 100, "height": 200}] * 2
+        window.view = {"visible": [{"page": 1}]}
+        window.page_geometry_key = (7, 1, 0)
+        window.command("undo")
+        window.pump()
+        window.click(QPointF(10, 20), False)
+        self.assertEqual([request["op"] for request in worker.requests], ["undo"])
+        window.pending = None
+        window.step_done({"ok": True, "outcome": {"revision": 2}})
+        # Even before the queued refresh runs, new clicks cannot use the old view.
+        window.click(QPointF(10, 20), True)
+        window.pump()
+        self.assertNotIn("hitTest", [request["op"] for request in worker.requests])
+        self.assertNotIn("setSelection", [request["op"] for request in worker.requests])
+        self.assertEqual(len(worker.host.calls), 1)
+        self.assertEqual(window.errors, [])
+
+    def test_queued_click_rechecks_document_font_and_view_generations(self):
+        class ViewHost:
+            def host_request(self, **request):
+                return {"query": {"page": 0, "point": {"x": 10, "y": 20}}}
+        for change in ("documentId", "fontGeneration", "view"):
+            with self.subTest(change=change):
+                worker = IdleWorker()
+                worker.host = ViewHost()
+                window = self.idle_window(worker)
+                window.info = {"documentId": 7, "revision": 1, "fontGeneration": 0}
+                window.pages = [{"width": 100, "height": 200}]
+                window.view = {"visible": [{"page": 0}]}
+                window.page_geometry_key = (7, 1, 0)
+                window.click(QPointF(10, 20), False)
+                if change == "view":
+                    window.epoch += 1
+                else:
+                    window.absorb({"ok": True, "info": {**window.info, change: 8}})
+                window.pump()
+                self.assertNotIn("hitTest", [request["op"] for request in worker.requests])
+                self.assertEqual(window.errors, [])
+
+    def test_revision_change_reloads_geometry_even_if_page_count_is_unchanged(self):
+        worker = IdleWorker()
+        window = self.idle_window(worker)
+        window.info = {"documentId": 7, "revision": 1, "fontGeneration": 0, "pageCount": 2}
+        window.pages = [{"width": 100, "height": 200}] * 2
+        window.view = {"visible": []}
+        window.page_geometry_key = (7, 1, 0)
+        window.absorb({"ok": True, "outcome": {"revision": 2}})
+        window.refresh()
+        window.pump()
+        window.pending = None
+        window.step_done({"ok": True, "info": dict(window.info)})
+        window.pump()
+        self.assertTrue(window.loading_pages)
+        self.assertEqual(window.pages, [])
+        self.assertEqual([request["op"] for request in worker.requests], ["info", "pageSize"])
 
     def test_altgr_text_is_inserted_while_control_shortcuts_still_work(self):
         worker = IdleWorker()

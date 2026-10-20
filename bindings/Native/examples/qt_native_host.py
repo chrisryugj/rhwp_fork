@@ -162,6 +162,7 @@ class NativeWindow(QMainWindow):
         self.pages, self.frames, self.rects, self.preedit_rects = [], {}, [], []
         self.loading_pages = False
         self.page_load_token = None
+        self.page_geometry_key = None
         self.caret = None
         self.actions = deque()
         self.pending = None
@@ -213,6 +214,9 @@ class NativeWindow(QMainWindow):
 
     def target(self):
         return {"documentId": self.info["documentId"], "revision": self.info["revision"]}
+
+    def geometry_key(self):
+        return tuple(self.info.get(key) for key in ("documentId", "revision", "fontGeneration"))
 
     def fail(self, message):
         self.errors.append(str(message))
@@ -312,6 +316,8 @@ class NativeWindow(QMainWindow):
             self.caret = None
             self.rects.clear()
             self.preedit_rects.clear()
+        if previous[:3] != self.geometry_key():
+            self.drag_anchor = None
 
     def step_done(self, result):
         if not result.get("ok") or result.get("kind") == "skipped":
@@ -331,6 +337,7 @@ class NativeWindow(QMainWindow):
         self.pages.clear()
         self.loading_pages = False
         self.page_load_token = None
+        self.page_geometry_key = None
         self.view = {}
         self.state["config"]["pages"] = []
         self.state["scroll"] = {"x": 0, "y": 0}
@@ -355,7 +362,7 @@ class NativeWindow(QMainWindow):
             if count > self.MAX_PAGES:
                 self.fail(f"이 예제는 최대 {self.MAX_PAGES}쪽까지 표시합니다.")
                 return
-            if len(self.pages) != count and not self.loading_pages:
+            if (len(self.pages) != count or self.page_geometry_key != self.geometry_key()) and not self.loading_pages:
                 self.loading_pages = True
                 self.pages = []
                 self.load_page_size(0, count)
@@ -370,12 +377,12 @@ class NativeWindow(QMainWindow):
 
     def load_page_size(self, page, count, load=None):
         if load is None:
-            load = (object(), self.target(), [])
+            load = (object(), self.geometry_key(), [])
             self.page_load_token = load[0]
         token, target, sizes = load
         if token is not self.page_load_token:
             return
-        if target != self.target():
+        if target != self.geometry_key():
             self.loading_pages = False
             self.page_load_token = None
             self.pages.clear()
@@ -383,6 +390,7 @@ class NativeWindow(QMainWindow):
             return
         if page >= count:
             self.pages = sizes
+            self.page_geometry_key = target
             self.loading_pages = False
             self.page_load_token = None
             self.rebuild_view()
@@ -390,13 +398,13 @@ class NativeWindow(QMainWindow):
         def loaded(result):
             if token is not self.page_load_token:
                 return
-            if target != self.target():
+            if target != self.geometry_key():
                 self.load_page_size(page, count, load)
                 return
             sizes.append(result["size"])
             self.load_page_size(page + 1, count, load)
         def request(_):
-            if token is self.page_load_token and target == self.target():
+            if token is self.page_load_token and target == self.geometry_key():
                 return {"op": "pageSize", "page": page}
         if not self.enqueue([request], loaded, page_load_token=token):
             self.loading_pages = False
@@ -520,19 +528,29 @@ class NativeWindow(QMainWindow):
                    "region": visible["pageRegion"], "scale": scale}, rendered)
 
     def click(self, point, extend):
-        if not self.info or self.preedit or self.loading_pages or not self.pages or not self.view:
+        if (not self.info or self.preedit or self.loading_pages or not self.pages or not self.view
+                or self.page_geometry_key != self.geometry_key()):
             return
+        geometry, epoch = self.page_geometry_key, self.epoch
         hit = self.worker.host.host_request(op="view", state=self.state,
             command={"action": "pageAt", "x": point.x(), "y": point.y()})["query"]
         if hit is None:
             return
+        def current_geometry():
+            return (geometry == self.page_geometry_key == self.geometry_key()
+                    and epoch == self.epoch and not self.loading_pages and not self.preedit)
+        def hit_test(_):
+            if current_geometry():
+                return {"op": "hitTest", "page": hit["page"], **hit["point"]}
         def select(reply):
+            if reply is None or not current_geometry():
+                return
             position = reply["hit"]["position"]
             if not extend or self.drag_anchor is None:
                 self.drag_anchor = position
             return {"op": "setSelection" if self.info.get("selection") else "beginEdit",
                     "selection": {"anchor": self.drag_anchor, "focus": position}}
-        self.enqueue([lambda _: {"op": "hitTest", "page": hit["page"], **hit["point"]}, select], refresh=True)
+        self.enqueue([hit_test, select], refresh=True)
 
     def command(self, op, **fields):
         def request(_):
