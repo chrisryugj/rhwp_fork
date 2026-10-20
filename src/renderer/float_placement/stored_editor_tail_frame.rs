@@ -61,6 +61,18 @@ pub(crate) fn stored_editor_tail_frame(
                     && !owner.dirty_flag
                     && owner.height > 0
                     && owner.height <= i32::MAX as u32
+                    // 동일 선언을 반복한 다른 칸도 원본 빈 줄 상자를 넘을 수 있다.
+                    // 그 칸의 모든 저장 줄과 여백이 실제로 들어가는 격자만
+                    // 말미 편집 줄과 독립적인 물리 프레임의 근거로 쓴다.
+                    && super::stored_plain_cell_ink_height(owner).is_some_and(|ink| {
+                        let padding = owner.effective_padding(&table.padding);
+                        padding.top >= 0
+                            && padding.bottom >= 0
+                            && i64::from(ink)
+                                + i64::from(padding.top)
+                                + i64::from(padding.bottom)
+                                <= i64::from(owner.height)
+                    })
             })
             .map(|owner| owner.height)
             .max()?;

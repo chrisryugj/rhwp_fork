@@ -6987,3 +6987,56 @@ KoPub/KoPubWorld 이름 제한도 구분한다. rhwp 코드는 MIT를 유지하�
 그 폰트의 별도 약관을 안내한다. 현재 논의한 원본 파일의 무료 패키지 재배포에 웹
 안내의 서버 서비스 탑재 승인 조항을 일괄 적용하지 않는다. 이번 확인만으로 폰트
 파일을 새로 커밋하거나 배포하지는 않았다.
+
+### 편람 전쪽 대조의 남은 차이와 빈 줄 프레임의 독립 근거
+
+`685f65fc8`과 같은 runtime의 새 Native 전쪽 출력은 HWP/HWPX 모두 독립 Print와
+같은 383쪽이다. 321쪽은 99.98474%, 375쪽은 99.60492%로 복구했지만 두 형식의
+111·156·242·333쪽은 여전히 raw 90% 미만이다. 이를 최종 시각 통과로 보고하지 않는다.
+특히 333쪽은 고정 base 두 형식 모두 99.72359%에서 후보 88.13868%로 내려갔다.
+새 TSV와 대표 review·overlay는 `handbook-r2-native-reuse-pdf-results.json`과
+`handbook-r2-gap-panels/`에 보존했다. 기존 같은 PDF raster를 재사용했고 새 한컴
+변환을 만들지 않았다.
+
+원 #7751/#7494 → #7964의 같은 독립 Print를 직접 대조했다. 333쪽의 sec11 pi3
+row31은 54.426667px가 필요하지만 49.973333px로 줄어 뒤 본문을 4.453333px 당긴다.
+원본 양쪽 칸은 선언 3748HU, 마지막 빈 줄 끝 2950HU, 활성 상하 여백 1132HU로
+실제 줄 상자 끝은 4082HU다. 두 칸 모두 선언을 넘는데 `59a7cf1ac`의 말미 편집 줄
+helper가 같은 선언 높이를 독립 격자 근거로 인정했다. 반면 그 보정의 원 교육과정
+85쪽은 다른 열의 일반 행 2/3 선언 1565/36281HU 안에 실제 줄·여백 1282HU가
+각각 들어온다. 같은 이름·선언의 반복과 독립적으로 수용된 줄 상자를 구분한다.
+
+공통 helper의 격자 소유자는 기존 `stored_plain_cell_ink_height`로 모든 원본 줄의
+유효성·진행을 확인하고 실제 줄 끝과 활성 여백이 자기 선언에 들어가야 한다.
+이 결과를 측정 최소와 실제 컷 유닛의 흐름 소비가 함께 사용한다. 문서 ID·좌표 상수,
+clamp나 빈 문단 삭제를 추가하지 않는다. 같은 원본을 이용한 ignored 진단은 보정 전
+기존 4건 통과·새 반례 1건 실패로 원인을 재현했다. 보정 후 진단·기존 정상 계약과
+새 Native/fresh WASM은 실제 실행 결과로 이어 기록한다.
+
+사용자 요청에 따라 검증 중인 리뷰 초안 26개와 아직 제출하지 않는 입력·TSV 초안 등
+942개를 ignored `output/pr-review/planet6897-20261018/submission-drafts-20261020/`으로
+이동했다. 원래 경로·목적·바이트 수·이동 전후 SHA는
+`temporary-artifact-relocation-20261020.json`에 있다. 최종 검증 뒤 필요한 제출 자료만
+정식 경로로 복사한다. 기존 같은 입력 기준 PDF가 없어 만든
+`pdf/pr-review-planet6897-20261018/myeonjeok_wrap_10page-2020.pdf`는 필수 제출 자료로
+정식 경로에 유지했다. 이후 임시 자료와 제출 전 초안은 처음부터 `output/`에 생성한다.
+
+이 보정의 helper 진단은 **4 PASS·1 FAIL → 5 PASS·0 FAIL**이다. 새 Native opt1은
+공유 target/jobs 8로 4분·exit 0에 빌드했다. 원래 편람 9건, 최근 경계 28건, 기존
+source-frame·정상 KoPub 등 46건이 각각 전부 통과했다. 이 세 실행은 중복 검사를
+포함하므로 고유 검사 수로 합산하지 않는다. 333쪽은 HWP/HWPX 모두
+**88.13868 → 99.77985%**, row31은 54.4px로 복구됐고 전체 내용·순서는 같다.
+321/375쪽은 99.98474/99.60492%를 유지하며 전체 쪽수는 두 형식 모두 383이다.
+교육과정 85쪽은 같은 frozen 부모와 후보의 raw **99.34377%**로 동일하고 새 PNG와
+render tree도 각각 바이트 단위로 같다. 333쪽 새 review·overlay를 직접 열어 양쪽
+제목 행, 제26/27/28조와 오른쪽 제23조의 시작·후속 줄과 외곽을 Print와 대조했다.
+
+증거는 `editor-tail-independent-peer-results.json`,
+`handbook-peer-frame-direction-results.json`, `handbook-peer-frame-native-results.json`,
+`handbook-peer-frame-geometry-control-results.json`,
+`handbook-peer-frame-panels/handbook-hwp/review/review_333.png`와
+`handbook-peer-frame-normal-control{,-parent}/curriculum-1342000/silhouette.tsv`다.
+`cargo fmt --all -- --check`와 `git diff --check`도 통과했다. 최신 전쪽 Native는
+`handbook-peer-frame-all-native-results.json`으로 별도 수집 중이다. 111·156·242쪽의
+실제 차이와 최종 최적화 Native/fresh WASM·전체 게이트는 남아 있으며, 이번 부분
+통과를 PR 제출 준비 완료나 새 px 회귀 추가 조건 충족으로 보고하지 않는다.
