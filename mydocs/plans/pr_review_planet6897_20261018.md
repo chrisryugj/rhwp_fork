@@ -7193,3 +7193,52 @@ Native 선택 측정은 `handbook-axis-arrow-native-results.json`과
 `handbook-arrow-{before,after}.log`에 보존했다. 빌드 뒤 rustfmt의 줄바꿈만
 보정했으며 그 차이는 `handbook-axis-arrow-format-provenance.json`에 기록한다.
 의미가 같은 형식 변경이어도 최종 exact-head 빌드·필수 검증은 별도로 수행한다.
+
+
+### 156쪽: 저장 행의 빈 띠 예약과 실제 수용 하단의 불일치
+
+기존 `RHWP_DIAG_NESTED_FRAME`의 실제 배치에서 시작 행 재정의는 기준
+132.146667px, 후보 128.146667px다. 앞쪽의 같은 표에서 4행 잔여는
+107.893333→106.56px, 7행은 68.386667→65.72px로 차이가 누적됐다.
+`RHWP_DIAG_SCAN`에서 저장 행의 빈 띠를 추가하는 `stored_row_frame`이
+수용 높이 585.386667px보다 큰 586.72px를 발행한다. 일반 내용 수용 예산에서
+빈 띠를 다시 추측한 결과다. 원 `cbcba66e1` 보정은 내용 수용과 빈 띠 하단을
+분리했지만 이 소비 지점은 일반 예산 `avail_for_rows`를 계속 사용했다.
+
+같은 `FragmentBudget`이 생산한 빈 띠 예산을 이 저장 행의 추가 공간 상한에도
+소비하게 한다. 실제 수용한 내용 높이는 하한으로 보존하며, 내용이 줄 수용
+경계까지 필요한 경우에는 자르지 않는다. 표·쪽 번호나 4px 상수로 잔여를
+복구하지 않는다. 기존 조각 누적·이어받기·paint가 받은 같은 상자가 독립
+Print의 괘선과 다음 본문을 보존하는지 영향 쪽과 정상 대조군에서 재검증한다.
+현재는 원인 추적과 후보 계획이며 아직 이 후보의 실행 결과는 없다.
+
+
+이 소비 지점 누락은 D34(`e734eaa0c`)에서 1342000의 다른 프레임 소비자를
+보정했던 같은 내용/빈 띠 경계 혼용과 대응한다. 그때의 인증 조건과 공통
+예산 생산은 유지하고, 이번에는 `stored_row_frame`이 추가하는 빈 몫의
+상한을 연결했다. 실제 수용 내용은 기존 `max(accepted_scan_height,
+current_content)` 하한으로 보존한다.
+
+새 후보의 Native opt1 빌드가 3분 55초·exit 0으로 끝났다. 기존 집중 9·28·46건이
+각각 모두 통과했다. HWP/HWPX 원본의 독립 Print 괘선 진단은 보정 전
+0 PASS / 2 FAIL → 보정 후 2 PASS / 0 FAIL이다. 실제 9행 하단은
+312.586667→316.586667px로 복구됐으며 Print의 316.5px와 대응한다.
+다음 10행 하단 414.133333px도 Print의 413.5px와 대조했다. 두 Print의
+동일 96dpi 래스터에서 검출한 괘선·임계값·SHA는
+`handbook-p156-print-strokes.json`에 보존했다. 이 진단은 ignored 경로의
+선행 확인이며 전쪽 Native/fresh WASM gate 전의 새 정식 회귀가 아니다.
+
+선택 10쪽의 Native 최소는 HWP 98.68889%, HWPX 98.68893%로 모두 156쪽이다.
+111쪽은 두 형식 모두 99.99394%, 155쪽은 99.70926/99.70927%다.
+새 156쪽 review/overlay에서 마지막 두 표 행의 괘선과 후속 제목·문단의
+위치를 Print와 직접 대조했다. 111쪽 화살표·상자도 이전 보정을 유지한다.
+전체 쪽수는 각 383쪽으로 Print와 같지만 이 결과의 시각 측정은 선택 10쪽이다.
+전쪽 Native TSV를 새로 산출 중이며 fresh WASM·최종 최적화 빌드·남은 전체
+제출 검증이 아직 끝나지 않아 PR 제출 준비 완료로 판정하지 않는다.
+
+source/producer SHA·명령·집중 검사 exit는
+`handbook-stored-row-blank-frame-direction-results.json`, 선택 시각 원장은
+`handbook-stored-row-blank-frame-native-results.json`, 독립 위치 진단은
+`handbook-p156-{before,after}-contract.log`에 있다. 변경 파일 rustfmt check와
+`git diff --check`가 통과했다. 전쪽 산출은
+`handbook-stored-row-blank-frame-all-native-driver.log`에서 확인한다.

@@ -187,7 +187,13 @@ impl TypesetEngine {
                 layout_engine.row_cut_content_height(table, row, row_start, &split_end_cut, styles);
             let accepted_scan_height = end_row_height_override.unwrap_or(current_content);
             let before_row = (consumed - accepted_scan_height).max(0.0);
-            let available = (avail_for_rows - before_row).max(0.0);
+            // 저장 행의 추가 빈 띠도 예산이 생산한 같은 물리 하단을 소비한다.
+            // 내용 수용 경계로 다시 늘리면 paint가 접은 몫까지 이미 사용한
+            // 행 상자로 기록해 다음 조각의 잔여를 줄인다.
+            let blank_available = budget
+                .reflow_blank_avail_for_rows
+                .map_or(avail_for_rows, |height| avail_for_rows.min(height));
+            let available = (blank_available - before_row).max(0.0);
             // 스캔의 높이 재정의는 수용한 내용 컷만 나타낼 수 있다.
             // 이 값은 하한이며, 저장 행의 빈 물리 밴드가 이미 예약됐다는
             // 증거는 아니다. 가용 조각에 해당 밴드를 배정하고,
