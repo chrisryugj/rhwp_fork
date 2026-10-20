@@ -6715,3 +6715,87 @@ Native의 2px 실루엣 100%를 원본 픽셀의 완전 동일로 해석하지 �
 이번 실행은 방향 확인이다. 최종 opt-level 3·fresh WASM 및 제출용 전쪽 검증은 남아 있다.
 마지막 33건 재실행의 6건 통과·27건 실패와 별도로 기록하며 나머지 실패까지 해결됐다고
 세지 않는다.
+
+
+## 2026-10-20 #5585 원 해결 PR·통합·후속 보정을 추적한 첫 조각 닫힘 보정
+
+지적받은 선행 분석 순서에 따라 코드·검사 변경 전에 #5585 본문·전체 논의·타임라인,
+원 PR #7547의 본문·코멘트·원 diff·검사 도입과 archive 검토를 확인했다.
+원 source `0bcbe5951` → 체리픽 `165c11cbe` → 메인터너 `ddc04f64e` →
+통합 #7575 / merge `1e488ac370ec715a5b97c765542e16fc9bf65714`의 연결이다.
+원 PR이 CLOSED인 것은 미반영이 아니라 통합 대체 병합이다. 당시 원 문서 17쪽과
+정상 반례 #1133 HWP/HWPX 각 3쪽, 기존 39검사로 위 정렬 빈 밴드와 가운데·아래
+정렬 slack을 구분했다. 후속 #7704의 EH/EJ 보정은 `stored_closing_row_occupancy`에
+같은 물리 소유 계약을 두었고 `429dee416` 및 통합 #7877 / merge `22317614b`로
+반영했다. 원본 입력 blob `c96f102fe7553b21dc880a77511c6378c9206a41`는
+원 도입과 현재 HEAD가 같다. 현재 고정 base는 Native 전 17쪽 최저 99.00586%,
+fresh WASM 99.00299%로 정상이다.
+
+현재 `a8cd0eba0`의 Native는 17쪽이지만 15쪽 raw 43.98246%다. 첫 조각의 행3을
+178.906667px 상자로 닫으면서 선언 행의 빈 17.4px를 버려 15쪽 후속 행이 모두
+위로 당겨진다. 기존 검사 7건을 동결 현재 library로 실제 실행하면 6 PASS / 1 FAIL이며
+그 한 실패가 같은 행3의 컷·빈 밴드 소유를 검출한다. 최초 standalone compile은 서로
+다른 serde_json artifact를 골라 실패했으며 결함 재현으로 세지 않았다. Cargo fingerprint로
+일치하는 dependency를 확인한 두 번째 compile은 성공했고 기존 test source는 바꾸지 않았다.
+
+직접 원인은 로컬 `6c6d1ae7a`의 `completed_row_closes_opening_source_frame` 경로가
+내용 완결만 확인하고 기존 물리 닫힘 계약을 소비하지 않은 것이다. 원본 개체 끝과 현재
+예산의 일치만으로는 선언 빈 밴드의 소진을 입증하지 못한다. 별도 수치·문서 조건을
+추가하는 대신 스캐너의 실제 자연 행 높이를 넘겨 같은 `stored_closing_row_occupancy`를
+소비하게 한다. 그 결과 위 정렬의 원본 후행 밴드와 가운데·아래 정렬 slack을 기존 규칙으로
+구분한다. `opening frame → closing occupancy → row scan cut/override → continuation ledger
+→ partial paint`의 실제 경로이며 검사·원본·PDF·baseline은 유지한다. 이전 보정의 정상 대조인
+#1133 양 형식과 #7678 양 형식도 같은 기존 검사로 다시 확인한다.
+
+원격 원문과 정정·후속 설명은 ignored 검증 루트 `original-resolution-trace/`에 보존했다.
+`5585-resolution-chain.json`, `remaining-qualified-current-native-results.json`,
+`issue5585-base-current-scan-probe-results.json`, `issue5585-before-contracts.log`와
+`remaining-qualified-panels/{base,current}/issue5585-search-ad/review/review_015.png`가
+현재 관측 증거다. 아래 후보의 재검증 결과가 나오기 전에는 해결·전체 통과로 판정하지 않는다.
+
+
+### #5585 보정 후 실제 Native 방향 검증
+
+같은 공용 target과 jobs 8의 opt-level 1 Native Skia 빌드는 3분 58초·exit 0이다.
+수정하지 않은 기존 #5585 3건·#1133 양 형식 2건·#7678 양 형식 2건을 동결 새 library에
+연결해 실제 실행한 결과 **7 PASS / 0 FAIL**이다. 수정 전에는 같은 source의 7검사 중
+행3 컷·빈 밴드 소유 1건만 실패했고, 보정 후 그 실패가 통과했다. 최종 Cargo suite gate와
+standalone 방향 확인은 구분한다. 새 CLI의 원본 전 17쪽 Native raw 최저는 **99.00588%**,
+90% 미만 0쪽이며 PDF와 17쪽이 일치한다. 핵심 15쪽은 **43.98246% → 100%**다.
+
+14~16쪽 review PNG를 직접 열어 14쪽 행3 끝 내용 「통지합니다.」, 15쪽 시작의 빈 밴드 뒤
+행4 및 마지막 행8, 16쪽 행9 「【구글】」와 표 뒤 「나. 불공정 사유」·본문·법률 상자의
+위치와 순서를 대조했다. 세 쪽의 표 상자·모든 셀 상자·행/열·내용은 고정 base와 정확히 같다.
+이는 글꼴 잉크나 모든 픽셀의 동일성을 뜻하지 않는다. 검사·입력·PDF·baseline은 변경하지 않았다.
+증거는 `search-ad-closing-occupancy-direction-results.json`,
+`search-ad-closing-occupancy-existing-contracts.log`,
+`search-ad-closing-occupancy-native-visual/issue5585-search-ad/silhouette.tsv`,
+`search-ad-closing-occupancy-base-geometry.json` 및
+`remaining-qualified-panels/corrected/issue5585-search-ad/review/review_014.png`~`review_016.png`다.
+
+앞서 실행한 `a8cd0eba0`의 최적화 포함 fresh WASM은 전체 빌드 19분 16초·exit 0으로 끝났다.
+그 package의 배경 전 3쪽 최저 raw **99.86729%**, #7333 전 50쪽 **94.84667%**,
+보정 전 #5585 전 17쪽 **43.03452%**이며 15쪽만 미달이다. 이 WASM은 이번 빈 밴드 보정
+이전 source이므로 보정 후 WASM 통과로 재사용하지 않는다. 이번 Native 보정 뒤 최적화 정식
+빌드·fresh WASM 및 남은 제출 검증은 계속 필요하다. 마지막 33건 결과의 실패 수를 이
+방향 검사만으로 전체 재집계하지 않는다.
+
+### 다음 #7333 실패의 원 해결과 현재 좌표계 관측
+
+원 이슈 #7333 → 원 PR #7377 / merge `c84a8f8e1` → 후속 메인터너 `027f42834` /
+통합 #7832 / merge `bfa28a77a`의 본문·코멘트·검사 도입 diff를 확인했다. 원 HWP와 독립
+2020 PDF의 SHA-256은 기존 #7377 기록과 같다. 고정 base의 Native/fresh WASM 최저는
+94.54517%/94.83346%로 정상이며 두 기존 실패를 이관할 근거가 아니다.
+
+현재 14쪽의 pi220 표 배치 끝은 base와 후보 모두 789.573333px다. base에서 빈 pi221의
+끝과 pi222 첫 본문은 815.173333px이나, 후보는 pi221의 끝을 800.680000px로 바꾼 뒤
+pi222를 810.280000px에 놓는다. 새 generic `6c468639d`의 완료 문단 끝 611.72px가
+단 상대 절대값으로 전달되지만, scan의 lazy base 1087HU와 paint의 367HU가 다르다.
+단순 반올림 문제는 아니며 `de63f278f`의 HU guard로도 해결되지 않는다.
+
+이전 PR의 full-band TAC 후행 간격·음수 Fixed 간격 생산자가 실제 표 paint에 사용되는
+경로와 높이 상한을 먼저 대조한다. 현재 기록은 원인 계층 관측이며 #7333 구현을 아직
+수정하지 않았다. 좌표 clamp나 기존 올바른 검사 완화로 해결하지 않는다. 긍정 대조인
+현 PR의 보정 문서도 함께 보존해야 한다. 추적과 실제 실행은
+`original-resolution-trace/7333-resolution-chain.json`, `issue7333-host-frame-probe.log`,
+`issue7333-base-current-{tac,flow,snap}-probe-results.json`에 연결한다.

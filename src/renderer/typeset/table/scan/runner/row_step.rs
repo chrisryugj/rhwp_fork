@@ -890,6 +890,7 @@ impl TypesetEngine {
                             table,
                             r,
                             &res.end_cut,
+                            row_total,
                             (avail_for_rows - consumed - cs_before).max(0.0),
                             styles,
                         )

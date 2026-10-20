@@ -289,6 +289,7 @@ impl LayoutEngine {
         table: &Table,
         row: usize,
         end_cut: &[usize],
+        natural_height: f64,
         available: f64,
         styles: &ResolvedStyleSet,
     ) -> Option<f64> {
@@ -313,9 +314,11 @@ impl LayoutEngine {
             frame = Some(height);
         }
         let height = frame?;
-        let content = self.row_cut_content_height(table, row, &[], end_cut, styles);
-        (self.row_aligned_content_bottom(table, row, content, height, styles) <= height)
-            .then_some(height)
+        // 내용 완료가 위 정렬 행의 물리 빈 밴드까지 소진한 것은 아니다.
+        // 기존 닫힘 계약이 정렬·패딩·후행 전진을 구분한 점유 끝을 함께 쓴다.
+        let required =
+            self.stored_closing_row_occupancy(table, row, natural_height, height, styles)?;
+        (required <= height).then_some(height)
     }
 
     pub(super) fn stored_span_partial_first_frame_owner(
