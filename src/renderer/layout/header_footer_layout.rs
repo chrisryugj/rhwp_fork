@@ -202,9 +202,8 @@ impl LayoutEngine {
                 // Picture 컨트롤이 있는 문단
                 let comp = self.compose_header_footer_paragraph(para, page_number, styles);
                 if comp.tac_controls.is_empty() {
-                    // 글자처럼 취급하지 않는 그림과 쪽번호 AutoNumber가 같은 꼬리말
-                    // 문단에 공존할 수 있다. 그림만 개별 배치하고 끝내면 AutoNumber가
-                    // 조합 텍스트에 남아 있어도 전혀 그려지지 않는다(#7333).
+                    // 부동 그림과 일반 글자·쪽번호가 같은 머리말/꼬리말 문단에
+                    // 공존할 수 있다. 그림 출력이 해당 줄의 글자 출력을 대신하지 않는다.
                     // 그림의 y 누적은 다음 그림 배치용이므로, 인라인 필드는 원래
                     // 문단 기준선(text_y)에서 따로 레이아웃한다.
                     let text_y = y_offset;
@@ -282,7 +281,7 @@ impl LayoutEngine {
                                 )
                         )
                     });
-                    if has_page_auto_number {
+                    if has_page_auto_number || para_has_visible_text(para) {
                         let text_end = self.layout_paragraph(
                             tree,
                             area_node,

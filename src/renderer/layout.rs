@@ -10995,6 +10995,26 @@ impl LayoutEngine {
                         // 개체를 렌더한다. 여기서 layout_paragraph 를 태우면 보이지 않는
                         // 빈 줄이 저장 vpos 기준으로 페이지 밖에 기록되어 overflow 오탐이 난다.
                         para_start_y.entry(*para_index).or_insert(y_offset);
+                        if shape_host.separate_inline_object {
+                            // 별도 Shape 항목도 TAC의 줄 기준선은 일반 줄 배치가 정한다.
+                            // 저장 사다리의 전진량과 개체의 기준선 정렬은 다른 계약이다.
+                            // 좌표 등록은 공통 문단 배치를 소비하고, 뒤 흐름은 아래의
+                            // 저장 전진량을 한 번만 소비한다.
+                            self.layout_paragraph(
+                                tree,
+                                col_node,
+                                para,
+                                composed.get(*para_index),
+                                styles,
+                                col_area,
+                                y_offset,
+                                page_content.section_index,
+                                *para_index,
+                                multi_col_width,
+                                Some(bin_data_content),
+                                ctx.wrap_anchors.get(para_index),
+                            );
+                        }
                         // 저장 사다리가 그 문서의 진실이다 — 한글이 이 앵커 줄을 예약했는지
                         // 다음 문단 vpos 델타로 먼저 묻고, 판별 불가일 때만 vert_rel_to
                         // 휴리스틱(글앞 도장류 예약·BehindText 비예약)으로 물러난다.
