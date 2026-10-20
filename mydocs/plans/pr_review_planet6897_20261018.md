@@ -7727,3 +7727,22 @@ Native 진단 opt1의 새 producer는 `shape-host-baseline-and-header-text`다. 
 경계·off-canvas·text-overlap 검사는 유지해야 한다. `issue8060-current-base-corpus-body-equality.json`에
 현재 관측과 과거 시각 근거의 producer를 구분했다. 이 기록 시점의 활성 목록은 아직
 바꾸지 않았다. 실제 body 입력 수집 경로에 대한 진단은 제외 전 의도한 실패를 확인했다.
+
+
+### #8060 이미 이관한 원본의 body 자동 수집 참조 분리
+
+현재 devel/candidate anomaly 전체 일치와 기존 사용자 승인 전쪽 이관 원장을 대조한 뒤,
+공유 71352 원본의 body corpus 참조 한 행만 명시적으로 분리했다. `body_overflow_baseline.rs`
+전체 코드·모든 helper와 기존 이관 목록을 바이트 그대로
+`mydocs/pr/assets/issue_8060/corpus_body_reference/`에 먼저 보관했다. 원본·PDF는 정상
+계약도 읽으므로 이동하지 않았고, 정상 #8060의 두 검사·다른 검사 축은 유지했다.
+새 baseline 수치를 추가하거나 실패 허용치를 완화하지 않았다. 실제 body 수집 경로의
+독립 진단은 제외 전 FAIL / 제외 후 PASS이고, 정상 경계 2건도 통과했다. 전후 manifest
+확인에서 1,646 sources·7,140 static test attrs·48 integration targets는 같다.
+
+본문과 모든 댓글을 다시 읽어 #8060의 기존 9·10/42·43쪽 해결 계약과 현재 11쪽 body
+관측을 구분했다. 현상은 base에서도 동일하고 원본 전쪽은 이미 이관 범위이므로 그
+body 참조만 분리했다. 11쪽 관측은 PR 증적 공개 뒤 기존 열린 #8060의 후속 기록에
+추가하며 새 공통 이관 대상을 지정하지 않는다. 전쪽 출력 개선이나 #8060 해결 완료를
+주장하지 않는다. 공유 원본의 전쪽 Native/fresh WASM 90%·쪽수·내용·직접 판독 후에만
+정확한 body 행을 제거해 복원한다.
