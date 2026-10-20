@@ -39,8 +39,6 @@ impl TypesetEngine {
             cs,
             can_intra_split,
             is_continuation,
-            avail_for_rows,
-            reflow_frame_avail_for_rows,
             header_overhead,
             landscape_rowbreak_bleed,
             landscape_whole_row_tolerance,
@@ -105,11 +103,7 @@ impl TypesetEngine {
             table.common.text_wrap,
             crate::model::shape::TextWrap::TopAndBottom
         ) && layout_engine.row_has_plain_line_units(table, r, styles);
-        let avail_for_rows = if owns_plain_row_frame || plain_body_band {
-            reflow_frame_avail_for_rows.map_or(avail_for_rows, |height| avail_for_rows.min(height))
-        } else {
-            avail_for_rows
-        };
+        let avail_for_rows = v.plain_row_available_height(owns_plain_row_frame, plain_body_band);
         if avail_for_rows < v.avail_for_rows && std::env::var("RHWP_DIAG_SCAN").is_ok() {
             eprintln!(
                 "DIAG_SCAN PLAIN_BODY_BUDGET r={} splittable={} legacy={:.6} physical={:.6}",

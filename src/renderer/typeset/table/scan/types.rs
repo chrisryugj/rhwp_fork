@@ -65,3 +65,25 @@ pub(in crate::renderer::typeset) struct BlockRowScanVars {
     /// (선언 여백 − 이 조각 예산이 이미 예약한 몫).
     pub(in crate::renderer::typeset) unreserved_outer_bottom: f64,
 }
+
+impl BlockRowScanVars {
+    /// 선언 최소의 빈 공간을 이어받는 행은 빈 띠 종료선으로 실제 상자를 예약한다.
+    /// 내용만 있는 일반 행은 내용 수용 하단을 사용한다. 이 구분은 컷 선택 전에
+    /// 적용해 예약·그리기·다음 조각의 잔여가 같은 상자를 소비하게 한다.
+    pub(in crate::renderer::typeset) fn plain_row_available_height(
+        self,
+        owns_minimum_frame: bool,
+        plain_body_band: bool,
+    ) -> f64 {
+        let boundary = if owns_minimum_frame {
+            self.reflow_blank_avail_for_rows
+        } else if plain_body_band {
+            self.reflow_frame_avail_for_rows
+        } else {
+            None
+        };
+        boundary.map_or(self.avail_for_rows, |height| {
+            self.avail_for_rows.min(height)
+        })
+    }
+}

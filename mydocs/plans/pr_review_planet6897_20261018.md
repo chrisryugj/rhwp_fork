@@ -6529,3 +6529,43 @@ mergedAt=null이다. 근거는 `source-post-cherry-additional-commit-audit.json`
 커밋을 추가할 수 있다. GitHub 잠금 설명과 별도 통합 PR 강제는 넣지 않았다.
 정책 commit `860311a07`은 지침4개만 변경했고 새 상대 링크3개와 diff check를 확인했다.
 원격 브랜치 보호 설정이나 기여자 원본 브랜치는 변경하지 않았다.
+
+## 2026-10-20 완결 줄의 선언 최소 예약 경계 회귀 보정
+
+기존 #7642 검사의 원 해결·독립 Print·정상 devel 경로를 다시 대조했다.
+`issue_7642_complete_plain_row_boundary`는 저장 LineSeg가 없는 두 합성 입력의
+실제 한컴 2020 Print를 보존하며, 정확한 용지 경계와 1 HWPUNIT 여유에서
+행 4의 소유가 각각 6쪽·5쪽인 독립 계약이다. 기존 기대값과 입력은 유지한다.
+
+기준 `efc52afb`와 후보 `9fa90f2e5`의 같은 입력 진단에서 첫 차이는 매 쪽 예약
+306.666667px 대 308px이었다. 후보는 행 4를 5쪽 끝 20px 띠에 소비하고 6쪽에는
+빈 칸만 이어받았다. default CLI(`3da8ad71b`)와 Native Skia에서 동일하며,
+명시적 시스템 글꼴 경로 유무로 결과가 달라지지 않았다.
+증거는 ignored `complete-row-runtime-paths-results.json`과
+`complete-row-scan-diagnostic-results.json`, 각 실행의 render tree·stderr다.
+
+원인은 `28aafaece`의 내용/빈 띠 경계 분리 뒤에도 재조판 선언 최소의 빈 공간을
+소유하는 일반 행이 내용 예산을 사용한 것이다. 생산은 공통
+`rowbreak_fragment_bounds` → `fragment/budget.rs`의 두 하단이며, 소비는
+`scan/runner/row_step.rs`의 행 수용 → accepted row box → emit의 원 최소에서
+실제 수용 상자 차감 → 다음 조각 override다. `BlockRowScanVars`의 공통 선택에서
+선언 최소·이어받는 빈 띠는 기존 빈 띠 경계를, 내용만 있는 일반 행은 내용 경계를
+사용한다. 그리기 단계의 clamp나 문서별 상수는 추가하지 않는다.
+
+이 후보는 아직 실행 전이다. 두 입력의 기존 관계·독립 ±2px 검사, 기존 행 컷과
+걸침 종료 띠 대조군을 먼저 실행하고, 전 8쪽 Native/fresh WASM TSV와 확대 판독으로
+확인한다. 실행 전후 로그와 결과를 아래에 이어 기록하며 아직 완료로 판정하지 않는다.
+
+### 첫 실행 결과
+
+같은 `target/pr-review`, `CARGO_BUILD_JOBS=8`, 기본 feature의 `release-test`에서
+기존 행 컷 39건과 완결 줄 경계 1건을 실행해 **40건 모두 통과**했다.
+행 4의 독립 쪽 소유·기준선과 후속 본문 8쪽 보존을 포함한 기존 검사를 수정하지 않았다.
+첫 선택식의 종료 띠 4개 이름은 모듈 접두어가 없어 선택되지 않았으므로 통과로 세지 않고,
+정확한 모듈 이름을 붙인 별도 실행에서 **4건 실제 실행·4건 통과**를 확인했다.
+예상한 독립 회귀는 수정 전 `3da8ad71b`에서 실패 / 이 보정 후보에서 통과했다.
+기준 Native는 두 문서 모두 전 8쪽 raw 100%, 수정 전 후보는 최소 경계 0%,
+1HU 여유 27.22408%까지 하락했다. 실제 5쪽 review에서 앞당겨진 행도 판독했다.
+근거는 `complete-row-before-visual-summary.json`, `complete-row-minimum-focused.log`,
+`complete-row-minimum-closing-controls.log`와 각각의 JSON 실행 기록이다.
+보정 뒤 최적화 Native PNG·fresh WASM 및 전체 제출 게이트는 이어 진행한다.
