@@ -4938,6 +4938,37 @@ impl TypesetEngine {
             } else {
                 para_start_height + outer_top_px + v_off_px
             };
+            // 저장 줄을 재사용하지 못한 visible host도 현재 측정 상자의 원점을
+            // 한 번 확정한다. 같은 occupied-band 제약을 통째 배치 경로와 공유하고,
+            // paint가 다시 형제 표를 피하면서 흐름 예약과 갈라지지 않게 전달한다.
+            let resolved = resolved.or_else(|| {
+                (signed_vertical_offset > 0
+                    && para_has_non_whitespace_text(para)
+                    && !table.common.allow_overlap)
+                    .then(|| {
+                        table::block::host_placement::HostPlacementConstraint {
+                            table,
+                            has_preceding_coanchored_float,
+                            dpi: self.dpi,
+                        }
+                        .constrain(
+                            crate::renderer::float_placement::ParagraphFloatPlacement {
+                                flow:
+                                    crate::renderer::float_placement::ParagraphFloatFlow::Exclusion,
+                                anchor_y: para_start_height,
+                                stored_host_origin: None,
+                                stored_successor_line_origin: None,
+                                table_left: None,
+                                table_top,
+                                occupied_bottom: table_top
+                                    + table_total_height.max(0.0)
+                                    + hwpunit_to_px(table.outer_margin_bottom as i32, self.dpi),
+                            },
+                            st,
+                        )
+                    })
+            });
+            let table_top = resolved.map_or(table_top, |placement| placement.table_top);
             let table_bottom = table_top + table_total_height.max(0.0);
             let table_bottom = if let Some(mut placement) = resolved {
                 placement.occupied_bottom += table_top - placement.table_top;

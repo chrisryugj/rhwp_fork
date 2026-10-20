@@ -4,6 +4,7 @@
 //! 렌더 트리(PageRenderTree)를 생성한다.
 
 mod decorated_tac_frame;
+mod textless_shape_host;
 use decorated_tac_frame::tac_has_only_in_front_decoration_shapes_before;
 pub(crate) use decorated_tac_frame::{
     stored_empty_full_band_tac_successor_vpos_hu,
@@ -1575,14 +1576,9 @@ fn has_following_non_positive_visible_float(para: &Paragraph, control_index: usi
 }
 
 fn para_has_visible_inline_control(para: &Paragraph) -> bool {
-    para.controls.iter().any(|ctrl| match ctrl {
-        Control::Picture(pic) => pic.common.treat_as_char,
-        Control::Shape(shape) => shape.common().treat_as_char,
-        Control::Table(table) => table.common.treat_as_char,
-        Control::Equation(eq) => eq.common.treat_as_char,
-        Control::Form(form) => form.common.treat_as_char,
-        _ => false,
-    })
+    para.controls
+        .iter()
+        .any(textless_shape_host::control_has_visible_inline_content)
 }
 
 /// [#6134] `control_index` 앞에 놓인 같은 문단의 비-TAC 자리차지(TopAndBottom) 개체가
@@ -2387,45 +2383,6 @@ fn compact_endnote_title_gap_after_single_equation_tail(
     };
     let target_y = prev_content_bottom_y + target_gap;
     (target_y + 4.0 < y_offset).then_some(target_y)
-}
-
-fn para_has_visible_textless_float_shape_item(
-    page_content: &PageContent,
-    para: &Paragraph,
-    para_index: usize,
-) -> bool {
-    if para_has_visible_text(para) || para_has_visible_inline_control(para) {
-        return false;
-    }
-
-    para.controls
-        .iter()
-        .enumerate()
-        .any(|(control_index, ctrl)| {
-            let is_float_shape = match ctrl {
-                Control::Picture(pic) => !pic.common.treat_as_char,
-                Control::Shape(shape) => !shape.common().treat_as_char,
-                // [#7047] 데코레이션(글앞/글뒤) 표 host 도 같은 축이다 — `#703` 단축이
-                // 그 표를 `PageItem::Shape` 로 내므로 이 술어의 item 대조가 성립하고,
-                // 전진량은 아래 `advance_line` 의 저장 사다리 증언이 정한다. 표를
-                // 빼 두면 host 줄 높이가 흐름에서 통째로 빠져 뒤따르는 개체가 그만큼
-                // 위에 놓인다(임대차계약서양식 3쪽: 6.0px · 15.3px).
-                Control::Table(table) => !table.common.treat_as_char,
-                _ => false,
-            };
-            is_float_shape
-                && page_content.column_contents.iter().any(|cc| {
-                    cc.items.iter().any(|it| {
-                        matches!(
-                            it,
-                            PageItem::Shape {
-                                para_index: pi,
-                                control_index: ci,
-                            } if *pi == para_index && *ci == control_index
-                        )
-                    })
-                })
-        })
 }
 
 /// 빈 float-host 문단의 줄 예약 여부를 **저장 사다리**로 판별한다 — 한글이 그 문서에서
@@ -11031,7 +10988,9 @@ impl LayoutEngine {
                     return (y_offset, false);
                 }
                 if let Some(para) = paragraphs.get(*para_index) {
-                    if para_has_visible_textless_float_shape_item(page_content, para, *para_index) {
+                    if let Some(shape_host) =
+                        textless_shape_host::classify(page_content, para, *para_index)
+                    {
                         // 빈 non-TAC 그림/도형 host 문단은 바로 뒤 Shape PageItem 이 실제
                         // 개체를 렌더한다. 여기서 layout_paragraph 를 태우면 보이지 않는
                         // 빈 줄이 저장 vpos 기준으로 페이지 밖에 기록되어 overflow 오탐이 난다.
@@ -11047,53 +11006,10 @@ impl LayoutEngine {
                         // 사다리가 계약을 뒤집음)은 사다리 질의 함수의 합성 태그
                         // 가드(TAG_IMPLEMENTATION_PROPERTY 배제)가 차단한다 — 편집이
                         // 만든 reflow lineseg 는 저장 증거로 쓰지 않는다.
-                        let has_overlay_float = para.controls.iter().any(|c| {
-                            let cm = match c {
-                                Control::Picture(pic) => &pic.common,
-                                Control::Shape(shape) => shape.common(),
-                                // [#7047] 데코레이션(글앞/글뒤) **표** host 도 사다리에
-                                // 묻는다 — `#703` 단축이 흐름을 0 소비해 이 문단의 줄이
-                                // 통째로 빠지는데, 전진 여부의 판정 근거는 그림·도형
-                                // host 와 똑같이 저장 델타다. 표를 빼 두면 질의가 아예
-                                // 돌지 않아 휴리스틱이 "전진 없음"으로 답한다.
-                                Control::Table(table) => &table.common,
-                                _ => return false,
-                            };
-                            !cm.treat_as_char
-                                && matches!(
-                                    cm.text_wrap,
-                                    TextWrap::InFrontOfText | TextWrap::BehindText
-                                )
-                        });
-                        // 보이는 글자와 저장 글줄의 점유는 다르다. 빈 후속 줄도
-                        // 원본 사다리의 전진을 증언할 수 있다. 합성 태그·되감김·
-                        // 오래된 여러 줄 델타는 공통 사다리 질의에서 거절한다.
-                        let has_square_float = para.controls.iter().any(|c| {
-                            let cm = match c {
-                                Control::Picture(pic) => &pic.common,
-                                Control::Shape(shape) => shape.common(),
-                                _ => return false,
-                            };
-                            !cm.treat_as_char
-                                && matches!(
-                                    cm.text_wrap,
-                                    TextWrap::Square | TextWrap::Tight | TextWrap::Through
-                                )
-                        });
-                        // 저장된 TopAndBottom 그림/도형 host도 다음 문단까지의 줄
-                        // 전진을 보존한다. 개체의 예약 높이와 앵커 문단의 줄은 별개다.
-                        // 빈 후속 문단도 유효한 저장 LineSeg가 있으면 증거가 된다.
-                        let has_top_bottom_float = para.controls.iter().any(|c| {
-                            let cm = match c {
-                                Control::Picture(pic) => &pic.common,
-                                Control::Shape(shape) => shape.common(),
-                                _ => return false,
-                            };
-                            !cm.treat_as_char && cm.text_wrap == TextWrap::TopAndBottom
-                        });
-                        let has_ladder_float =
-                            has_overlay_float || has_square_float || has_top_bottom_float;
-                        let ladder_verdict = has_ladder_float
+                        // 개체는 Shape 항목이 이미 소유한다. TAC 표시로 별도 출력
+                        // 소유를 부정하지 않고 host 줄의 저장 전진을 확인한다.
+                        let ladder_verdict = shape_host
+                            .ladder_candidate
                             .then(|| {
                                 textless_host_ladder_line_advance(
                                     paragraphs,
@@ -11128,7 +11044,8 @@ impl LayoutEngine {
                                     && matches!(cm.vert_rel_to, VertRelTo::Para)
                             });
                         let advance_line = ladder_verdict.unwrap_or_else(|| {
-                            no_stored_ladder_square_host
+                            shape_host.separate_inline_object
+                                || no_stored_ladder_square_host
                                 || textless_infront_para_host_requires_line_advance(para)
                         });
                         if advance_line {
