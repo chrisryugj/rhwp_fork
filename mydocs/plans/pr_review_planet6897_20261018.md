@@ -8693,3 +8693,31 @@ revised-guard-draft-results, native-before-after와 direct-review다.
 뒤 72시간 이상 지난 검토용 debug/incremental 하위 311개만 정리해 약 7.66GB를
 확보했다. target/pr-review 자체·deps·프로필·현재 바이너리·증적은 보존했다.
 정리 원장은 `terminal-frame-pre-gates-incremental-cleanup-20261021.json`이다.
+
+
+### 셀 소유 물리 상자와 저장 줄 키의 불일치 처리 진단
+
+올바른 속성 순서의 번호 대조군도 원본 HWP와 같은 세 무번호 줄에서 77.86014%다.
+독립 한컴 2024 Print는 저장 폭이 물리 셀 안쪽 폭과 같으면 두 줄을 보존하고,
+다르면 새 폭으로 한 줄을 만든다. 번호·문서 ID·수동 appVersion으로 조건을 좁히지
+않고, 셀 소유자가 전달한 ParagraphBox의 키를 공통 resolver가 비교하게 한다.
+현재 recompose_cell_lines_in_frame은 정확한 키 비교 후에도 clean miss를
+UnmodelledUnlessStale로 거절해, 입력이 다른 폭을 선언해도 기존 줄을 보존한다.
+셀의 실제 상자 경로에는 Reflow를 전달하는 진단을 수행한다. 공통 resolver의 HWP3
+원점·다른 물리 쪽·외부 어울림/분할 슬롯 차단은 그대로 적용된다. 유효한 캐시와
+원본 교육과정의 무번호 두 줄은 정상 대조군으로 보호한다.
+
+먼저 작은 경계 입력과 기존 정상 검사·80168 및 교육과정의 직접 페이지를 비교한다.
+이 기록은 아직 구현의 일반성·시각 통과 판정이 아니다. 넓은 변화가 생기면 실제
+상자를 계산하는 생산 경로와 독립 원본으로 원인을 재검토하며, 허용치·기대값을
+완화하지 않는다. 이후 최종 Native/fresh WASM 전쪽과 전체 필수 검증을 완료한다.
+
+
+셀 키 불일치 보정의 Native 빌드는 6분 27초·exit 0이다. 마지막 괘선·1150200·
+156465345 꼬리말·80168·표 조각·그림 밴드·교육과정의 유효한 무번호 저장 줄 등
+22건이 PASS였다. 올바른 속성 순서의 독립 Print 대조군은 77.86014 → 100.00000%로
+개선됐다. 80168의 17/90/121/133/139쪽과 교육과정 59/250쪽은 이전 실제 Native
+점수와 정확히 같았다. 유효한 저장 두 줄을 한 줄로 무조건 바꾸는 수정이 아니다.
+이 시점의 전쪽 Native 및 최적화 fresh WASM·전체 필수 회귀는 아직 남아 있다.
+`stored-cell-key-reflow-trial-20261021/`의 native-results·verification-results·
+selected-native-before-after와 `stored-cell-key-reflow-native-all-20261021/`을 연결한다.

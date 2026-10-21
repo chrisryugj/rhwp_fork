@@ -566,9 +566,9 @@ pub fn recompose_cell_lines_in_frame(
 
     let inner_width_px = cell_box.width_px(dpi);
     let rebuilt = if has_authoritative_line_segs {
-        // Authentic rows use the same exact cache key as body rows. A clean
-        // match returns Stored without rebuilding; changed cell geometry or a
-        // mutation-dirty text partition falls through to Frame reflow.
+        // 셀 소유자가 전달한 물리 상자와 저장 행의 키를 공통 resolver에서 비교한다.
+        // 유효한 캐시는 보존하고 폭·원점이 다르면 같은 상자로 다시 나눈다.
+        // 외부 어울림·다른 쪽 프레임 등 계산할 수 없는 출처는 resolver가 먼저 거절한다.
         recompose_stored_lines_in_frame(
             composed,
             para,
@@ -577,7 +577,7 @@ pub fn recompose_cell_lines_in_frame(
             styles,
             dpi,
             stored_geometry_policy,
-            line_breaking::StoredRowMissPolicy::UnmodelledUnlessStale,
+            line_breaking::StoredRowMissPolicy::Reflow,
             // 셀 줄의 어울림 배제는 #5818 셀 계약이 따로 소유한다.
             &[],
         )
