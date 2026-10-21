@@ -164,7 +164,7 @@ impl LayoutEngine {
         // 단순 비교로 저장 쪽 끝의 전진을 다시 세지 않고, 컷 선택과 같은
         // 생산자의 종료 간격·보조 spacer 범위를 정렬 높이에도 소비한다.
         let trim = self.physical_cut_trailing_trim(table, cell, &units, start, end, styles);
-        let range = Self::cell_cut_flow_range(cell, table, &units, start, end);
+        let range = self.cell_cut_flow_range(cell, table, &units, start, end, styles);
         Some(
             (units[range].iter().map(|unit| unit.height).sum::<f64>() - trailing.max(trim))
                 .max(0.0),
@@ -353,7 +353,7 @@ impl LayoutEngine {
             {
                 return None;
             }
-            let range = Self::cell_cut_flow_range(cell, table, &units, start, units.len());
+            let range = self.cell_cut_flow_range(cell, table, &units, start, units.len(), styles);
             let mut previous_top = 0;
             let mut bottom = 0;
             for unit in &units[range] {

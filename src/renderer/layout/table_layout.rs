@@ -17303,13 +17303,15 @@ impl LayoutEngine {
     /// `advance_row_cut_inner`·`advance_row_block_cut` 과
     /// [`Self::skip_leading_free_spacers_in_row_cut`] 가 같은 술어를 쓴다.
     fn is_free_leading_spacer(
+        &self,
         cell: &crate::model::table::Cell,
         table: &crate::model::table::Table,
         unit: &CellUnit,
+        styles: &ResolvedStyleSet,
     ) -> bool {
         unit.empty_spacer
             && !unit.hard_break_before
-            && !Self::empty_unit_owns_flow_line_box(cell, table, unit)
+            && !self.empty_unit_owns_flow_line_box(cell, table, unit, styles)
     }
 
     /// 연속 소스 컷으로부터, 칸마다 **앞 쪽 프레임의 꼬리**인 빈 spacer를 제외한 물리 시작점.
@@ -17346,7 +17348,7 @@ impl LayoutEngine {
                 let mut next = start.min(units.len());
                 while units
                     .get(next)
-                    .is_some_and(|unit| Self::is_free_leading_spacer(cell, table, unit))
+                    .is_some_and(|unit| self.is_free_leading_spacer(cell, table, unit, styles))
                 {
                     next += 1;
                 }
@@ -21696,7 +21698,8 @@ impl LayoutEngine {
             let mut j = start;
             let mut h = 0.0f64;
             let mut applied_trailing_trim = 0.0f64;
-            let flow_range = Self::cell_cut_flow_range(cell, table, &units, start, units.len());
+            let flow_range =
+                self.cell_cut_flow_range(cell, table, &units, start, units.len(), styles);
             while j < units.len() {
                 let u = &units[j];
                 // 시작 유닛(j==start)은 항상 소비 — 진행 보장.
@@ -22216,7 +22219,8 @@ impl LayoutEngine {
             let cell_avail = (cell_avail - nested_header).max(0.0);
             let mut j = start;
             let mut h = 0.0f64;
-            let flow_range = Self::cell_cut_flow_range(cell, table, &units, start, units.len());
+            let flow_range =
+                self.cell_cut_flow_range(cell, table, &units, start, units.len(), styles);
             while j < units.len() {
                 let u = &units[j];
                 // 시작 유닛(j==start)은 항상 소비 — 진행 보장.
@@ -25938,7 +25942,7 @@ impl LayoutEngine {
                 .clamp(su, units.len());
             let mixed_nested_extra =
                 self.mixed_nested_flow_extra_for_height(cell, table, styles, su, eu, purpose);
-            let flow_range = Self::cell_cut_flow_range(cell, table, &units, su, eu);
+            let flow_range = self.cell_cut_flow_range(cell, table, &units, su, eu, styles);
             let trailing_trim = if is_whole_row {
                 0.0
             } else {
@@ -25992,7 +25996,7 @@ impl LayoutEngine {
                 .any(|unit| Self::cell_unit_has_visible_content(cell, unit));
             let owns_line_box = units[su..eu]
                 .iter()
-                .any(|unit| Self::empty_unit_owns_flow_line_box(cell, table, unit));
+                .any(|unit| self.empty_unit_owns_flow_line_box(cell, table, unit, styles));
             let pad_cell = if is_whole_row || has_visible_cut || owns_line_box {
                 if continuation_without_row_padding {
                     0.0
@@ -26343,7 +26347,7 @@ impl LayoutEngine {
             let su = start_cut.get(i).copied().unwrap_or(0).min(units.len());
             if !units[su..].iter().any(|unit| {
                 Self::cell_unit_has_visible_content(cell, unit)
-                    || Self::empty_unit_owns_flow_line_box(cell, table, unit)
+                    || self.empty_unit_owns_flow_line_box(cell, table, unit, styles)
             }) {
                 padding.push(0.0);
                 continue;

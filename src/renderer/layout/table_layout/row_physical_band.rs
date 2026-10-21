@@ -33,20 +33,24 @@ impl LayoutEngine {
     /// 다른 컷 경로의 원본 빈 문단 소유까지 이 전진 범위로 대체하지 않는다.
     /// 저장 빈 줄과 재조판 빈 문단의 유효 줄 상자는 제외하지 않는다.
     pub(super) fn cell_cut_flow_range(
+        &self,
         cell: &Cell,
         table: &Table,
         units: &[CellUnit],
         start: usize,
         end: usize,
+        styles: &ResolvedStyleSet,
     ) -> std::ops::Range<usize> {
         let mut first = start.min(units.len());
         let mut last = end.clamp(first, units.len());
         if first > 0 {
-            while first < last && Self::is_free_leading_spacer(cell, table, &units[first]) {
+            while first < last && self.is_free_leading_spacer(cell, table, &units[first], styles) {
                 first += 1;
             }
             if last == units.len() {
-                while last > first && Self::is_free_leading_spacer(cell, table, &units[last - 1]) {
+                while last > first
+                    && self.is_free_leading_spacer(cell, table, &units[last - 1], styles)
+                {
                     last -= 1;
                 }
             }

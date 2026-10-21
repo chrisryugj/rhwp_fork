@@ -97,7 +97,7 @@ impl LayoutEngine {
             {
                 return None;
             }
-            let range = Self::cell_cut_flow_range(cell, table, &units, start, units.len());
+            let range = self.cell_cut_flow_range(cell, table, &units, start, units.len(), styles);
             let mut previous_top = 0;
             let mut bottom = 0;
             for unit in &units[range] {

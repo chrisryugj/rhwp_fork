@@ -1,11 +1,19 @@
 //! 보조 spacer와 저장 줄 상자가 소유한 실제 빈 줄 전진을 구분한다.
 
-use super::{CellUnit, LayoutEngine};
-use crate::model::{paragraph::LineSeg, table::Cell};
+use super::{CellUnit, LayoutEngine, ResolvedStyleSet};
+use crate::model::{
+    paragraph::{LineSeg, Paragraph},
+    table::Cell,
+};
 
 /// 연속된 저장 사다리의 원점으로 빈 줄 자체의 점유를 확인한다.
 /// 형제 셀의 유무는 이 줄 상자의 흐름 소유를 바꾸지 않는다.
-fn closed_stored_empty_line_owns_advance(cell: &Cell, unit: &CellUnit) -> bool {
+fn closed_stored_empty_line_owns_advance(
+    cell: &Cell,
+    unit: &CellUnit,
+    styles: &ResolvedStyleSet,
+    dpi: f64,
+) -> bool {
     if cell.dirty_flag || unit.vis_start != 0 || unit.vis_end != 1 {
         return false;
     }
@@ -43,20 +51,33 @@ fn closed_stored_empty_line_owns_advance(cell: &Cell, unit: &CellUnit) -> bool {
             && segment.line_spacing >= 0
             && segment.vertical_pos >= 0
     };
-    let closes = |left: &LineSeg, right: &LineSeg| {
-        (i64::from(left.vertical_pos) + i64::from(left.line_height) + i64::from(left.line_spacing)
-            - i64::from(right.vertical_pos))
-        .abs()
-            <= 2
-    };
-    if !authentic(before) || !authentic(line) || !closes(before, line) {
+    // 문단 경계를 넘는 저장 원점에는 앞 문단 뒤 간격과 다음 문단 앞 간격도
+    // 포함된다. 해석된 스타일을 소비해 저장 단위 환산 규칙을 재구현하지 않는다.
+    let closes =
+        |left: &LineSeg, left_para: &Paragraph, right: &LineSeg, right_para: &Paragraph| {
+            let Some(left_style) = styles.para_styles.get(left_para.para_shape_id as usize) else {
+                return false;
+            };
+            let Some(right_style) = styles.para_styles.get(right_para.para_shape_id as usize)
+            else {
+                return false;
+            };
+            let paragraph_gap = left_style.spacing_after + right_style.spacing_before;
+            let line_gap_hu = i64::from(left.vertical_pos)
+                + i64::from(left.line_height)
+                + i64::from(left.line_spacing)
+                - i64::from(right.vertical_pos);
+            let paragraph_gap_hu = paragraph_gap * crate::renderer::HWPUNIT_PER_INCH / dpi;
+            paragraph_gap_hu.is_finite() && (line_gap_hu as f64 + paragraph_gap_hu).abs() <= 2.0
+        };
+    if !authentic(before) || !authentic(line) || !closes(before, previous, line, paragraph) {
         return false;
     }
     match next {
         Some(next) => next
             .line_segs
             .first()
-            .is_some_and(|after| authentic(after) && closes(line, after)),
+            .is_some_and(|after| authentic(after) && closes(line, paragraph, after, next)),
         // 마지막 실제 저장 빈 줄도 앞 줄에서 닫히면 자기 줄 상자를 소유한다.
         // 원점만 있는 spacer나 반복된 개체 최대 높이는 이 근거로 승인하지 않는다.
         None => {
@@ -72,9 +93,11 @@ impl LayoutEngine {
     /// 무높이 소비 규칙을 원본 LINE_SEG 빈 줄에 적용하면 컷만 앞서 진행하고
     /// 배치는 그 줄을 다시 그려 표가 쪽을 넘는다.
     pub(super) fn empty_unit_owns_flow_line_box(
+        &self,
         cell: &crate::model::table::Cell,
         table: &crate::model::table::Table,
         unit: &CellUnit,
+        styles: &ResolvedStyleSet,
     ) -> bool {
         if !unit.empty_spacer || unit.height <= 0.0 || unit.vis_start >= unit.vis_end {
             return false;
@@ -88,7 +111,7 @@ impl LayoutEngine {
             return para.controls.is_empty();
         }
         // 실제 종료 줄은 뒤 문단이 없어도 앞 저장 메트릭의 닫힘으로 소유를 증명한다.
-        if closed_stored_empty_line_owns_advance(cell, unit) {
+        if closed_stored_empty_line_owns_advance(cell, unit, styles, self.dpi) {
             return true;
         }
         let Some(next) = cell.paragraphs.get(unit.para_idx + 1) else {
