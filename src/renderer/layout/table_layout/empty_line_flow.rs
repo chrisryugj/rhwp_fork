@@ -94,11 +94,20 @@ impl LayoutEngine {
     pub(super) fn stored_closing_empty_line_advance_hu(
         &self,
         cell: &Cell,
+        table: &crate::model::table::Table,
         index: usize,
         next_starts_frame: bool,
         styles: &ResolvedStyleSet,
     ) -> Option<i32> {
-        if !next_starts_frame || cell.dirty_flag {
+        // 재조판한 표의 원본 되감김은 현재 프레임의 끝을 증명하지 못한다.
+        // 다른 빈 줄의 독립적인 줄 상자 소유 판정은 그대로 사용한다.
+        if !next_starts_frame
+            || cell.dirty_flag
+            || self
+                .render_normalization
+                .borrow()
+                .table_text_reflowed(table)
+        {
             return None;
         }
         let previous = cell.paragraphs.get(index.checked_sub(1)?)?;

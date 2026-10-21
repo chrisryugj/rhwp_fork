@@ -14875,6 +14875,7 @@ impl LayoutEngine {
                 .then(|| {
                     self.stored_closing_empty_line_advance_hu(
                         cell,
+                        table,
                         pi,
                         cell.paragraphs[pi]
                             .line_segs
