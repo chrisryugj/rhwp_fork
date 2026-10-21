@@ -9079,3 +9079,60 @@ Qt 25건·실제 렌더·합성 한글 IME·클립보드·저장/재열기도 �
 `rebase8135-preservation-preflight-20261022.json`, `post8135-native-consumers-20261022/`,
 `post8135-separated-cell-regression-20261022/`, `post8135-png-preservation-comparison-20261022.json`,
 `obsolete-diagnostic-copies-cleanup-20261022.json`에 기록했다.
+
+
+### 2026-10-22 직접 판독으로 확인한 80168 17쪽 표제의 잘못된 쪽 소속
+
+최종 전쪽 측정에서 수용 대상 70개 입력·1,501쪽은 두 backend 모두 raw 90% 이상이고,
+동일 쪽 대조 가능 구간의 0.1%p 이상 하락도 없었다. 그러나 사용자 지적 세 문서를
+새 head의 review/overlay로 다시 판독해 80168 17쪽 마지막 표제의 `여부`가
+18쪽으로 잘못 넘어간 사실을 확인했다. Native 99.27040% 수준의 점수로 이 차이를
+면제하지 않는다. source와 독립 Print는 17쪽에 `10.영향평가`·`여부` 두 문단을 모두 둔다.
+실행 중이던 최종 Rust controller와 그 소유 Cargo/Rust 자식만 종료하고 수용 marker를
+무효화했다. 성공한 빌드·실측과 미완료 검증을 구분해 원장을 보존했다.
+
+원 해결 PR #7143의 본문·댓글, squash `a2cc0d236f`와 메인터너 보정,
+현재의 이전/소비 경로 `4c5b8d74f2`를 추적했다. 원 PR의 목표는 이어받는 걸침 셀의
+높이 예약·컷·물리 띠·후속 내용 보존이다. 그 안의 `native_two_row_rowspan_paragraph_owner_boundary`는
+문단 수와 rowspan이 각각 2이고 한 줄 유닛이라는 조합으로 문단 하나를 행 하나에 대응시킨다.
+이는 저장 줄의 독립적인 소유 근거가 아니며, 현재 원본의 두 문단에는 LineSeg가 없다.
+
+실제 80168 section0/문단139의 cell(8,1)은 row_span=2·문단2개이고,
+내용 유닛은 27.733333px·17.333333px다. 위아래 여백 6px를 더한 51.066667px가
+수용된 첫 상자 53.413333px 안에 들어간다. 기존 조기 반환은 이를 무시해 `(0,1)`을
+선택했고 다음 조각에서 `(1,MAX)`를 소비했다. 대조 셀(8,0)의 두 문단은 같은 물리 상자에서
+기존 높이 기반 경로로 모두 수용됐다. 원본과 두 쪽의 실제 tree·유닛·정렬 trace는
+`80168-span-owner-before-20261022/`에 보존했다.
+
+잘못된 형상 기반 owner 추정과 그 조기 반환을 제거한다. 기존 공통
+`rowbreak_straddle_cut_units`의 인증된 저장 owner → 실제 수용 상자의 CellCutFrame →
+이전 조각의 accepted next_unit을 예약과 paint가 함께 소비하게 한다. 추가 문서 조건이나
+좌표 clamp를 넣지 않는다. 원 #7143의 실제 입력·기존 경계 검사와 76076 정상 대조군도
+함께 검증한다. 현재 새 소유·누락·중복 검사는 ignored 진단 초안이며, 보정된 전쪽
+Native/fresh WASM과 직접 판독 뒤 기존 정식 17쪽 검사에 연결한다.
+
+
+### 형상 기반 컷 제거의 Native 선행 결과
+
+두 행·두 문단만으로 owner를 추정하는 함수 41줄과 조기 반환을 제거했다.
+새로운 예외 분기를 추가하지 않고 기존의 실제 상자 fitting·인증된 저장 owner·이전 수용 컷을
+예약과 paint가 공유하게 했다. 원본을 직접 파싱한 별도 진단에서도 두 문단의 LineSeg가
+없고 original vpos도 None임을 확인했다. HWP5 저장 페이지 모드라는 전역 상태만으로
+이 두 문단이 행 경계를 소유한다고 판단할 수 없었다.
+
+기존 Native source `b7443d4328`에서 새 관계형 진단은 17쪽 문구 누락으로 FAIL했다.
+같은 검사를 보정한 Native에서 실행해 PASS했고, 기존 56건·편람 셀 간격 2건·새 진단 1건·
+원 #7143 검사 7건을 합친 66건이 모두 통과했다. 80168 17쪽에서 두 문단이 셀 안에 들어가고,
+18쪽의 남은 물리 셀은 앞 문구를 반복하지 않았다. 새 직접 review에서 `여부` 복원을
+확인했으며 해당 쪽 raw는 약 99.52%다. 괘선·마지막 행 높이·다른 칸도 유지했다.
+
+원 helper의 정상 대조 76076은 독립 82쪽 Print가 18쪽에 `11.영향평가`, 19쪽에 `여부`를
+둔다. 이 두 쪽의 실제 Native RGB는 수정 전후 바이트가 같고, 두 쪽의 직접 Visual Sweep도
+통과했다. 두 문단을 받을 공간이 없는 첫 조각은 기존 물리 fitting이 한 문단만 수용했다.
+1342000 202쪽도 같은 독립 Print의 직접 비교를 통과했다. 전쪽·fresh WASM·최종 Rust
+검증은 새 runtime에서 갱신하며, 위 결과로 제출 준비 완료를 대신하지 않는다.
+
+실제 빌드와 명령·before FAIL/after PASS·유닛/정렬 trace·확대 PNG는 ignored output의
+`rowspan-paragraph-owner-trial-20261022/`, `80168-span-owner-before-20261022/`,
+`76076-span-owner-control-before-20261022/`에 보존했다. 정식 기존 17쪽 검사의 내용 보존
+보강은 새 전쪽 Native/fresh WASM과 직접 판독 후 적용한다.

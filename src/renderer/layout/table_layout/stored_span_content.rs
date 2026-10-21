@@ -98,19 +98,7 @@ impl LayoutEngine {
             && cell_row + usize::from(cell.row_span) == end_row
             && end_row_height_override.is_some()
             && self.cell_uses_plain_reflow_units(cell, table));
-        // HWP5 저장 pagination의 2행/2문단 계약에서는 문단 하나가 행 하나의 owner다.
-        if start_cut.is_empty()
-            && start_row_height_override.is_none()
-            && end_cut.is_empty()
-            && ((straddles_start && start_row == cell_row + 1)
-                || (straddles_end && end_row == cell_row + 1))
-            && self.native_two_row_rowspan_paragraph_owner_boundary(cell, table, styles)
-        {
-            return (
-                usize::from(straddles_start),
-                if straddles_end { 1 } else { usize::MAX },
-            );
-        }
+        // 원본에서 인증한 재시작 소유와 실제 수용 상자·이전 소비 컷을 공유한다.
         let stored_opening_owner = self
             .stored_span_opening_frame(table, cell_row)
             .is_some_and(|frame| frame.restart_columns.contains(&cell.col));
