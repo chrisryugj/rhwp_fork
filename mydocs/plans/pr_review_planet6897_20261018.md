@@ -8343,3 +8343,49 @@ Print/2022와 Print/2024가 모두 독립 기준의215쪽으로 복원됐다. 88
 본문 포함 관계는 별개의 정상 검사다. 이번21쪽 신규 회귀는 먼저 구현을 보정했다.
 이후 fresh WASM에서도 같은 복원을 확인하고, 이미 이관된 부적합 assertion의 원문・
 helper・blob・해시를 보관하는 절차와 정상 검사 보존 조건에 따라 처리한다.
+
+
+### #7806 부적합 원점 단언 보관과 정상 검사 유지
+
+`3a8785316` 최적화 fresh WASM은19분46초에 wasm-opt까지 exit0으로 끝났다. 같은
+#6111 입력의11・20・21쪽 raw는98.93522・98.79966・99.37946%이며 실제 WASM
+export metadata의 전체 쪽수도21이다. Native도 같은 runtime으로 전21쪽을 다시
+산출해 기존7・8・9・17쪽 미달과21쪽99.96897% 복원을 확인했다. 마지막 문장・표
+외곽・뒤 빈 줄을 Print/Native/WASM 같은 좌표로 직접 판독했다. policy88~90쪽
+fresh WASM raw는99.91458・99.91195・99.34023%다. 둘 다 전쪽 WASM 통과로
+확대 보고하지 않는다.
+
+#7806의 같은 원본・해시・미해결 전쪽 범위와 고정 base 미달을 확인한 뒤 원점 혼동
+단언2개만 보관・제외했다. p11 저장 flow advance를 가시 bbox 간격으로 고정한 단언,
+p20 source flow origin을 가시 제목 상자 원점으로0.05px 고정한 단언이다. 두 모듈
+전체와 helper・source blob・SHA・입력/PDF・base/current TSV 원문・직접 판독 PNG와
+복원 조건은 `mydocs/pr/assets/issue_7806/stored_anchor_guards/`에 보존한다. p11의
+독립 Print 뒤 표 괘선436.961344px 검사・p20 후속 표의 존재와 본문 내부 포함・별도
+offset 원본 대조군은 유지했다. 함수 삭제・기대 좌표나 허용치 완화・whole baseline
+갱신은 하지 않았다. 원래18개 집중 검사가18 PASS/0 FAIL이고 manifest 준비/검사・
+format・diff 검사도 PASS다. 새 whole nextest0FAIL이라고 보고하지 않는다.
+
+### 원 PR27개 현재 head 재조회와 추가 source의 진단
+
+PR 제출 준비 중 원 PR27개의 현재 head를 GraphQL로 재조회했다. 이전 원장과
+head가 다른8개가 있어 fetch 후 전체 commit과 기존 원source의 full/zero-context
+patch를 대조했다. devel merge・리베이스 문맥 변경과 실제 추가 기능을 구분한다.
+이전 source114개의 검증을 새 원 head 전체의 통과로 표시하지 않는다. source
+트리의 변경은 아직 적용하지 않았고 현재Runtime은3a8785316으로 고정돼 있다.
+
+#7965의 #8101/#8105 및 #8012 추가 경계 검사5모듈을 정확한 원문으로 ignored
+shadow 경로에 보존하고 동일 바이트 입력7개로 현재Native에 진단 실행했다.
+serde_json extern을 누락한 최초 진단 컴파일 오류는 환경 오류로 보존했고 올바르게
+재실행했다. 실제 결과는15개 중11 PASS/4 FAIL이다. #8101의3검사와 번호 어절
+꼬리2검사는 이미 PASS이며, deferred첫 조각의 하단1건・declared행 빈 띠2건・
+이미 이관된 hwpspec 원본의 offset그림 host1건은 FAIL이다. 마지막 원본의 기존
+미달을 정상 fixture나 새 정식 회귀로 승격하지 않는다.
+
+추가 declared_row_band의 독립 Print는12쪽이며 기존3a Native 전12쪽 raw에서
+2・6・8・12쪽66.70925・80.93665・50.42392・79.59081%를 확인했다. 현재 구현에
+추가 기능의 공백이 있다는 실행 증거다. 이 검사는 아직 정식 추가하지 않았다.
+추가 source를 순서대로 반영하고 메인터너 보정을 뒤에 적용하는 graph・기능 보존
+절차를 지킨다. 진행 중3a Native/fresh WASM 측정은 그 고정 runtime의 전후 대조
+근거로 유지하며, 추가 source를 반영한 최종 검증을 대신하지 않는다. 자세한 source
+SHA・추가분・원문・실제 실행은 `source27-*-20261021.json`과
+`additional-source-contracts-20261021/`에 보존한다. PR 제출은 아직 보류다.
