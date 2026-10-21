@@ -7883,3 +7883,38 @@ overflow 0·hasSignal=false를 확인했다. 실제 원장은
 확대 PNG와 pressure 3·7쪽 review/overlay를 만들었고, 98쪽 따옴표·원·후속 본문 간격과
 7쪽 중첩 표·캡션·본문·외곽 하단을 직접 대조했다. 글자·선의 농도와 래스터 차이는
 남지만 해당 배치의 누락·겹침은 보이지 않는다. 전체 pressure 2·6쪽 미달은 면제하지 않는다.
+
+### 압력 방호 문서 2·6쪽: 마지막 그림 앞 물리 띠와 끝 빈 줄의 소유
+
+앞 단계의 실제 원본 진단에서 남은 두 경계를 먼저 보정한다. 6쪽은 P49의 저장 끝
+42503+1200+720=44423HU가 마지막 빈 P50의 원점과 닫히는데도, 뒤 문단이 없다는 이유로
+그 1200HU 줄을 무높이 spacer로 소비했다. 앞 원본 줄과의 닫힘·실제 글줄 높이/내용 높이·
+기준선·합성/dirty/개체 부재를 함께 확인한 실제 종료 줄은 공간을 점유하게 한다.
+원점만 있는 보조 꼬리나 개체 host를 모두 예약하는 방식으로 바꾸지 않는다.
+
+2쪽은 다음 원점0의 마지막 그림 프레임이 이미 검증된 경우, 현재 원점0에서 그 앞
+저장 끝까지의 실제 내용 높이를 같은 `row_cut_content_height`와 대조한다. 그 끝이
+닫히고 셀 선언이 현재 물리 띠를 소유하면, 마지막 그림을 가져오지 않고 현재 쪽의
+빈 띠를 예약한다. scan의 같은 `source_frame_band → consumed/override → emit` 경로를
+사용해 실제 가운데 정렬 상자도 함께 바꾼다. 다음 그림 상자는 앞서 검증한 공통 helper의
+402.6267px를 계속 소비한다. 문서 ID·임의 px·모든 원점0의 강제 쪽 나눔은 추가하지 않는다.
+이 기록은 후보 구현·검증 전 계획이며, 12쪽 전체 TSV와 독립 Print 경계·정상 대조군으로
+채택 여부를 판단한다. 3쪽이나 뒤 페이지가 후퇴하면 수용하지 않는다.
+
+
+후보 `closing-picture-and-terminal-empty-line`의 실제 실행 결과, 원본 12쪽 Native raw
+최저값은 97.80468%다. 2쪽은 30.95456 → 97.98757%, 6쪽은 76.86236 →
+97.80468%로 개선됐고, 독립 Print와 쪽수 12쪽이 일치한다. 원본 물리 경계 진단은
+수정 전 3건 실패 → 현재 3건 통과다. 집중 46건, 기존 정상 9+28+46건, 도형 5건,
+편람 경계 11건과 원본 캡션·쪽수 4건도 통과했다. 편람 선택 8쪽과 #1535 전 2쪽,
+#6280 전 21쪽의 Native TSV는 앞 단계의 개선을 유지했다. 원장은
+`closing-picture-and-terminal-empty-line-{physical-boundaries,qualified-contracts,existing,
+original-caption,targeted-visual}-results.json`과
+`press-method-closing-picture-and-terminal-empty-line-whole-results.json`이다.
+
+2·6쪽의 새 review·overlay를 직접 확인했다. 표 외곽·그림·본문의 큰 조기 종료가
+해소됐으나, 6쪽 그림 7 캡션은 독립 Print보다 위에 있고 농도·래스터 차이도 남는다.
+이 부분을 픽셀까지 동일하거나 최종 시각 검증 완료로 판정하지 않는다. Native는 진단
+opt-level 1이며 최종 opt-level 3·fresh WASM 검증과 적격 정식 회귀 등록은 남아 있다.
+보정 대상 61개 입력의 전쪽 Native 실행은 별도 원장에서 계속 진행 중이다.
+이 단계 커밋에는 기존 미수용 overlay 두 파일과 무관한 untracked PDF를 포함하지 않는다.

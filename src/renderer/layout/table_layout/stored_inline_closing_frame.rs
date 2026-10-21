@@ -122,4 +122,88 @@ impl LayoutEngine {
         }
         (has_picture && height > 0.0).then_some(height)
     }
+
+    /// 검증된 마지막 그림 프레임 앞의 현재 저장 프레임이 소유하는 물리 띠다.
+    /// 실제 원점0에서 시작한 내용 끝과 같은 컷의 점유 높이가 닫혀야 한다.
+    pub(crate) fn stored_inline_picture_preceding_row_frame(
+        &self,
+        table: &Table,
+        row: usize,
+        start: &[usize],
+        end: &[usize],
+        available: f64,
+        styles: &ResolvedStyleSet,
+    ) -> Option<f64> {
+        if !self.profile.get().hwp5_stored_pagination_layout()
+            || !available.is_finite()
+            || available <= 0.0
+        {
+            return None;
+        }
+        // 같은 원본 소유 질의가 다음 그림의 닫힌 최종 프레임도 검증한다.
+        self.stored_inline_picture_closing_row_height(table, row, end, styles)?;
+        let owners = Self::row_cut_cell_order(table, row);
+        if !start.is_empty() && start.len() != owners.len() {
+            return None;
+        }
+        let mut declared = 0.0_f64;
+        let mut expected = 0.0_f64;
+        let mut owns_frame = false;
+        for (slot, (&owner, &stop)) in owners.iter().zip(end).enumerate() {
+            let cell = table.cells.get(owner)?;
+            if cell.height > i32::MAX as u32 {
+                return None;
+            }
+            declared = declared.max(hwpunit_to_px(cell.height as i32, self.dpi));
+            let units = self.cell_units(cell, table, styles);
+            let begin = start.get(slot).copied().unwrap_or(0);
+            if begin > stop || stop > units.len() {
+                return None;
+            }
+            // 먼저 끝난 짧은 형제 셀은 다음 프레임의 쪽 소유를 대신하지 않는다.
+            if stop == units.len() {
+                continue;
+            }
+            if begin == stop {
+                return None;
+            }
+            let first = &units[begin];
+            let last = &units[stop - 1];
+            let opening = cell.paragraphs.get(first.para_idx)?.line_segs.first()?;
+            let closing_para = cell.paragraphs.get(last.para_idx)?;
+            if first.vis_start != 0
+                || opening.vertical_pos != 0
+                || last.vis_end != closing_para.line_segs.len()
+                || last.para_idx >= units[stop].para_idx
+                || self.cell_cut_has_projected_lines(cell, table, styles, begin, stop)
+            {
+                return None;
+            }
+            let mut previous_top = 0;
+            let mut bottom = 0;
+            for unit in &units[begin..stop] {
+                let paragraph = cell.paragraphs.get(unit.para_idx)?;
+                for line in paragraph.line_segs.get(unit.vis_start..unit.vis_end)? {
+                    if line.vertical_pos < previous_top {
+                        return None;
+                    }
+                    previous_top = line.vertical_pos;
+                    bottom = bottom.max(line.vertical_pos.checked_add(line.line_height)?);
+                }
+            }
+            let padding = cell.effective_padding(&table.padding);
+            let occupied = bottom
+                .checked_add(i32::from(padding.top))?
+                .checked_add(i32::from(padding.bottom))?;
+            expected = expected.max(hwpunit_to_px(occupied, self.dpi));
+            owns_frame = true;
+        }
+        let content = self.row_cut_content_height(table, row, start, end, styles);
+        // 내용 끝·현재 빈 띠·다음 그림을 구분하고 이미 소비한 그림을 다시 예약하지 않는다.
+        (owns_frame
+            && (content - expected).abs() <= hwpunit_to_px(2, self.dpi)
+            && available > content + hwpunit_to_px(2, self.dpi)
+            && available < declared)
+            .then_some(available)
+    }
 }

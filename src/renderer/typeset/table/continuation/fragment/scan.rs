@@ -794,14 +794,25 @@ impl TypesetEngine {
             let inline_frame = self
                 .stored_header_physical_rows(st, input.source)
                 .then(|| {
-                    layout_engine.stored_inline_restart_row_end_frame(
-                        row_geometry_table,
-                        row,
-                        row_start,
-                        &split_end_cut,
-                        available,
-                        styles,
-                    )
+                    layout_engine
+                        .stored_inline_restart_row_end_frame(
+                            row_geometry_table,
+                            row,
+                            row_start,
+                            &split_end_cut,
+                            available,
+                            styles,
+                        )
+                        .or_else(|| {
+                            layout_engine.stored_inline_picture_preceding_row_frame(
+                                row_geometry_table,
+                                row,
+                                row_start,
+                                &split_end_cut,
+                                available,
+                                styles,
+                            )
+                        })
                 })
                 .flatten()
                 .filter(|height| *height >= selected);

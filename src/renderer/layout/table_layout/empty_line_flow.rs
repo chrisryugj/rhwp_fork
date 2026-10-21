@@ -3,7 +3,7 @@
 use super::{CellUnit, LayoutEngine};
 use crate::model::{paragraph::LineSeg, table::Cell};
 
-/// 연속된 저장 사다리의 앞뒤 원점으로 빈 줄 자체의 점유를 확인한다.
+/// 연속된 저장 사다리의 원점으로 빈 줄 자체의 점유를 확인한다.
 /// 형제 셀의 유무는 이 줄 상자의 흐름 소유를 바꾸지 않는다.
 fn closed_stored_empty_line_owns_advance(cell: &Cell, unit: &CellUnit) -> bool {
     if cell.dirty_flag || unit.vis_start != 0 || unit.vis_end != 1 {
@@ -19,23 +19,22 @@ fn closed_stored_empty_line_owns_advance(cell: &Cell, unit: &CellUnit) -> bool {
     let Some(paragraph) = cell.paragraphs.get(unit.para_idx) else {
         return false;
     };
-    let Some(next) = cell.paragraphs.get(unit.para_idx + 1) else {
-        return false;
-    };
-    if [previous, paragraph, next].iter().any(|para| {
-        !para.controls.is_empty()
-            || para.stored_text_partition_is_dirty()
-            || para.cell_format_vpos_dirty
-    }) || !paragraph.text.trim().is_empty()
+    let next = cell.paragraphs.get(unit.para_idx + 1);
+    if [Some(previous), Some(paragraph), next]
+        .into_iter()
+        .flatten()
+        .any(|para| {
+            !para.controls.is_empty()
+                || para.stored_text_partition_is_dirty()
+                || para.cell_format_vpos_dirty
+        })
+        || !paragraph.text.trim().is_empty()
         || paragraph.line_segs.len() != 1
     {
         return false;
     }
-    let (Some(before), Some(line), Some(after)) = (
-        previous.line_segs.last(),
-        paragraph.line_segs.first(),
-        next.line_segs.first(),
-    ) else {
+    let (Some(before), Some(line)) = (previous.line_segs.last(), paragraph.line_segs.first())
+    else {
         return false;
     };
     let authentic = |segment: &LineSeg| {
@@ -50,11 +49,22 @@ fn closed_stored_empty_line_owns_advance(cell: &Cell, unit: &CellUnit) -> bool {
         .abs()
             <= 2
     };
-    authentic(before)
-        && authentic(line)
-        && authentic(after)
-        && closes(before, line)
-        && closes(line, after)
+    if !authentic(before) || !authentic(line) || !closes(before, line) {
+        return false;
+    }
+    match next {
+        Some(next) => next
+            .line_segs
+            .first()
+            .is_some_and(|after| authentic(after) && closes(line, after)),
+        // 마지막 실제 저장 빈 줄도 앞 줄에서 닫히면 자기 줄 상자를 소유한다.
+        // 원점만 있는 spacer나 반복된 개체 최대 높이는 이 근거로 승인하지 않는다.
+        None => {
+            line.vertical_pos > 0
+                && line.text_height == line.line_height
+                && line.baseline_distance > 0
+        }
+    }
 }
 
 impl LayoutEngine {
@@ -76,6 +86,10 @@ impl LayoutEngine {
         // saved LineSegs is not evidence that its positive advance is a spacer.
         if crate::renderer::para_has_no_stored_line_segs(para) {
             return para.controls.is_empty();
+        }
+        // 실제 종료 줄은 뒤 문단이 없어도 앞 저장 메트릭의 닫힘으로 소유를 증명한다.
+        if closed_stored_empty_line_owns_advance(cell, unit) {
+            return true;
         }
         let Some(next) = cell.paragraphs.get(unit.para_idx + 1) else {
             // 종료 host의 빈 꼬리는 자체 줄 높이만으로 흐름 소유를 증명하지 못한다.
@@ -101,10 +115,6 @@ impl LayoutEngine {
         // 원본 쪽 재시작의 빈 줄은 뒤 저장 줄과 같은 전진 상자를 소유한다.
         // 형제 셀이 없어도 이 소유를 잃고 무높이 spacer로 소비하지 않는다.
         if Self::stored_empty_restart_owns_advance(cell, unit) {
-            return true;
-        }
-        // 앞뒤 저장 원점이 빈 줄의 전진을 닫으면 형제 셀 없이도 실제 줄 상자다.
-        if closed_stored_empty_line_owns_advance(cell, unit) {
             return true;
         }
         if crate::renderer::para_has_no_stored_line_segs(next) {
