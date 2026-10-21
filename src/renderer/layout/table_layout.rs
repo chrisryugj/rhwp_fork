@@ -15,6 +15,7 @@ mod stored_complete_block_cut;
 mod stored_deferred_picture_frame;
 mod stored_empty_frame_restart;
 mod stored_first_line_restart;
+mod stored_inline_closing_frame;
 mod stored_inline_row_frame;
 mod stored_intra_paragraph_frame;
 mod stored_nested_frame;
@@ -21800,7 +21801,12 @@ impl LayoutEngine {
                     .is_some_and(|height| {
                         height <= avail_height + ROW_CUT_CAPACITY_FP_EPSILON_PX
                             && h + height > avail_height + ROW_CUT_CAPACITY_FP_EPSILON_PX
-                    });
+                    })
+                    || self
+                        .stored_native_inline_following_frame_height(table, cell, &units, j, styles)
+                        .is_some_and(|height| {
+                            h + height > avail_height + ROW_CUT_CAPACITY_FP_EPSILON_PX
+                        });
                 // 표 전체가 여러 저장 프레임을 가진다는 사실만으로 각 문단의
                 // 원점 되감김을 현재 쪽의 강제 끝으로 보지 않는다. 해당 경계의
                 // 선언·본문·공유 셀 소유가 입증되지 않으면 실제 가용 높이로 나눈다.

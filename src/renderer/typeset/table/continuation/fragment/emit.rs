@@ -1940,6 +1940,14 @@ impl TypesetEngine {
             .or(complete_block_next_height)
             .or(source_first_frame_remaining)
             .or_else(|| {
+                layout_engine.stored_inline_picture_closing_row_height(
+                    table,
+                    end_row.checked_sub(1)?,
+                    &next_cut,
+                    styles,
+                )
+            })
+            .or_else(|| {
                 let (row, used, height) = accepted_stored_row_frame?;
                 let full = layout_engine.stored_full_width_row_declared_height(
                     table, row, styles, st.layout.body_area.height,
