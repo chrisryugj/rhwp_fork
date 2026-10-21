@@ -881,6 +881,7 @@ pub(crate) fn resolved_to_text_style(
             // [#7387] 공백은 run 의 언어 슬롯과 무관하게 영문 슬롯 글꼴이 정한다.
             font_space_em: cs.font_space_em,
             layout_half_space: false,
+            regenerated_font_metrics: false,
             hft_hangul_face: styles.hft_ascii_halfwidth && cs.hft_hangul_face_for_lang(lang_index),
             hft_font_face: cs.hft_hangul_face_for_lang(lang_index),
             hft_fullwidth_dot: cs.hft_fullwidth_dot_for_lang(lang_index),
@@ -1659,8 +1660,11 @@ fn char_width_decision_with_hft_tracking<'a>(
         let measured_family =
             crate::renderer::legacy_font_advances::measurement_face(metric_family);
         source_hft_metric = font_metrics_data::is_legacy_hft_metric_face(measured_family);
-        let measured_bold =
-            crate::renderer::legacy_font_advances::measurement_bold(metric_family, style.bold);
+        let measured_bold = crate::renderer::legacy_font_advances::measurement_bold(
+            metric_family,
+            style.bold,
+            style.regenerated_font_metrics,
+        );
         let mut embedded = measure_char_width_embedded_decision_for_font(
             measured_family,
             measured_bold,

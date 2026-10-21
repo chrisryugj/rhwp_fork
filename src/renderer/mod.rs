@@ -458,6 +458,9 @@ pub struct TextStyle {
     /// 줄 구성에서 선택한 반각 공백 규칙. 원문의 useFontSpace와 구별한다.
     #[serde(skip_serializing)]
     pub layout_half_space: bool,
+    /// 실제 새 줄 구성의 메트릭인지. 공백 규칙과 별도로 측정·배치가 공유한다.
+    #[serde(skip_serializing)]
+    pub regenerated_font_metrics: bool,
     /// [#7051] 이 run 의 글꼴이 **HFT 한글 전용 face** 라서 대체됐는지
     /// (`FontSubstitutionBoundary::Hft`). 그런 글꼴의 ASCII 는 한컴이 반각(`em/2`)으로
     /// 전진시키므로 대체 글꼴의 비례 폭을 그대로 쓰면 안 된다. 진짜 영문 HFT
@@ -683,6 +686,7 @@ impl Default for TextStyle {
             metric_font_family: None,
             font_space_em: None,
             layout_half_space: false,
+            regenerated_font_metrics: false,
             hft_hangul_face: false,
             hft_font_face: false,
             hft_fullwidth_dot: false,

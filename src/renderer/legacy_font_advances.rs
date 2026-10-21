@@ -38,7 +38,8 @@ pub(crate) fn select_native_programs(document: &Document, styles: &mut ResolvedS
             {
                 style.font_families_metric_face[lang] = Some(HUMAN_HFT_METRIC_FACE.to_string());
             }
-            // 한컴 HWP/HWPX의 진하게 속성은 맑은 고딕의 보통체 전진을 유지한다.
+            // 새 줄 구성에서 사용할 꾸밈 메트릭의 후보를 표시한다. 저장 줄의
+            // 실제 굵은 전진에는 적용하지 않으며, 소비자가 줄 메트릭 출처를 함께 전달한다.
             // 독립 2020/2024 Print에서 굵은 숫자의 원점 간격은0.55em이고,
             // 실제 굵은 glyph의 PDF /Widths는0.579em이다. 괄호도 같은 분리다.
             // 명시한 Bold face·임베디드 프로그램·PDF 입력에는 이 계약을 옮기지 않는다.
@@ -69,8 +70,12 @@ pub(crate) fn measurement_face(declared: &str) -> &str {
 }
 
 /// 표시 굵기는 유지하고 원본 꾸밈이 소유하는 전진폭의 굵기만 고른다.
-pub(crate) fn measurement_bold(declared: &str, requested_bold: bool) -> bool {
-    requested_bold && declared != MALGUN_BOLD_DECORATION_METRIC_FACE
+pub(crate) fn measurement_bold(
+    declared: &str,
+    requested_bold: bool,
+    regenerated_font_metrics: bool,
+) -> bool {
+    requested_bold && !(regenerated_font_metrics && declared == MALGUN_BOLD_DECORATION_METRIC_FACE)
 }
 
 pub(crate) fn bold_advance(style: &TextStyle, ch: char, ordinary_advance: f64) -> f64 {

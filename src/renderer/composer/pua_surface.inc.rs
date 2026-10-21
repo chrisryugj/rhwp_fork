@@ -417,6 +417,7 @@ fn convert_pua_enclosed_numbers(composed: &mut ComposedParagraph) {
                             supplemental_metrics_blocked: run.supplemental_metrics_blocked,
                             inserted_control_text: run.inserted_control_text,
                             space_metric: run.space_metric,
+                            regenerated_font_metrics: run.regenerated_font_metrics,
                         });
                         buf.clear();
                     }
@@ -435,6 +436,7 @@ fn convert_pua_enclosed_numbers(composed: &mut ComposedParagraph) {
                         supplemental_metrics_blocked: run.supplemental_metrics_blocked,
                         inserted_control_text: run.inserted_control_text,
                         space_metric: run.space_metric,
+                        regenerated_font_metrics: run.regenerated_font_metrics,
                     });
                 } else {
                     buf.push(ch);
@@ -454,6 +456,7 @@ fn convert_pua_enclosed_numbers(composed: &mut ComposedParagraph) {
                     supplemental_metrics_blocked: run.supplemental_metrics_blocked,
                     inserted_control_text: run.inserted_control_text,
                     space_metric: run.space_metric,
+                    regenerated_font_metrics: run.regenerated_font_metrics,
                 });
             }
         }
