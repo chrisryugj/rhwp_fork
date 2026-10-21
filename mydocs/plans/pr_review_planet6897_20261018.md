@@ -9012,3 +9012,70 @@ fresh WASM 최저 98.16233%다. 최종 전체 Rust·lint·Skia와 나머지 전�
 output 초안이며 전쪽 Native/fresh WASM 90%·완료 쪽 양쪽 98%와 직접 판독 뒤
 정식 `tests/cases/`에 추가한다. 원장·전후 로그는
 `table-spacing-owner-trial-20261022/` 아래에 보존했다.
+
+
+### 2026-10-22 #8135 리베이스와 셀 간격 정식 회귀
+
+최신 `upstream/devel`의 `a6e9d18fc1061318055b4eb348daec201427ea03`(#8135)로
+461개 커밋을 충돌 없이 리베이스했다. 리베이스 후 runtime source는
+`b7443d43281e10f15c32cdd24ec340f73462b060`이다. range-diff의 461개 패치는
+모두 같으며, 최종 tree `02a1398d8633d3c0ac0ef45bfde0c2395fa38ad9`도 이전 후보와
+새 base의 독립 merge-tree와 같다. contributor commit 선행·메인터너 보정 후행 순서를 유지했다.
+
+셀 간격 보정의 최적화 WASM은 `f341e9e2b3`에서 실제 빌드·최적화를 완료했다.
+실제 dep-info의 컴파일 입력 1,532개와 Cargo.toml·Cargo.lock·build.rs를 대조해
+리베이스 전후 바이트가 같음을 확인했다. #8135의 변경은 기본 WASM에서 제외되는
+Native 모듈·검사·도구·문서이며, Git SHA를 소비하는 빌드도 아니다. 새 base의 WASM도
+이전 base와 같은 컴파일 입력이다. 기존 build SHA를 보존하고 같은 최적화 패키지를
+실제로 다시 실행했으며, 리베이스 후 WASM 재빌드라고 기록하지 않는다.
+
+리베이스 중 Native 제어기 한 개가 잠시 사라진 기준 PDF 경로를 읽지 못하고 종료됐다.
+완료된 결과를 지우지 않았고 이후 실행을 잠시 멈춰 checkout이 안정된 뒤 재개했다.
+최종 Native 측정은 이 중단 결과를 재사용하지 않고 새 base와 후보를 고정 target에서
+각각 실제 재빌드한 producer로 다시 진행한다. 새 producer의 편람 두 형식 각 383쪽은
+Native/fresh WASM에서 모두 독립 Print 쪽수와 같으며 전쪽 raw가 90% 이상이다.
+
+| 입력 | Native 최저 raw % | fresh WASM 최저 raw % | Native 155쪽 | WASM 155쪽 |
+| --- | ---: | ---: | ---: | ---: |
+| 편람 HWP | 92.49647 | 92.51694 | 99.99724 | 99.99796 |
+| 편람 HWPX | 92.49658 | 92.51660 | 99.99724 | 99.99864 |
+
+152·155·156쪽의 표 외곽·글줄·표 뒤 본문을 직접 대조했다. 155쪽은 파일 기준 쪽이며
+인쇄된 쪽 번호는 147쪽이다. 핵심 첫 문단의 소유·내용·순서·누락·중복·셀 clip 내부
+전진 끝과 독립 Print의 x·기준선 ±2px를 검사하는 정식 회귀 2건을 추가했다.
+같은 파일을 실제 보정 전 `c017c4da82` 라이브러리에서 실행해 셀 clip 밖 전진으로
+2 FAIL, 새 후보에서는 2 PASS를 확인했다. 전쪽 TSV 4개를 원문 그대로 복사하고
+각 형식·backend의 155쪽 review·overlay·compare를
+[셀 간격 완료 페이지 증거](../pr/assets/issue_7751/separated_cell_text_frames/README.md)에 보존했다.
+기존 글꼴 모양·획 굵기 잔여를 RGB 완전 일치로 보고하지 않는다.
+
+새 base와 후보의 #8135 정식 계약 38건을 각각 실행해 38 PASS씩 확인했다.
+실제 문서 4개의 scale 0.75/1/1.25에서 full/prepared/host pixels가 같고,
+음수·이동·off-page window와 호스트 matrix/clip/save 복원도 통과했다.
+세션 cache의 cold/warm crop 보존과 replay off 21회/on 1회·warm hit 20회를 확인했다.
+양쪽 4개 문서×3개 API의 독립 Print raw 24개가 모두 같고 최저 99.47266%다.
+기존 시스템 글꼴 경로를 직접 참조했으며 글꼴 바이트를 복사하거나 배포하지 않았다.
+상류 검증 서버의 Arial 4개 face 묶음과 달리 이 서버의 세션에는 설치된 Arial regular를
+공급한 범위를 결과에 명시했다. API 픽셀 보존·캐시 검증과 서체 전체 공급 주장을 구분한다.
+보조 스크립트의 PNG-pair TSV 저장 경로 오류는 실제 산출물을 확인해 고쳤고,
+기존 계약·API 출력을 보존한 채 남은 비교를 재개해 완료했다.
+
+#8135의 실제 4개 문서×base/후보 WASM 전쪽 8개도 모두 90% 이상이며 점수가 같다.
+#8132의 37개 입력 역시 새 Native base/후보와 동등 source의 fresh WASM에서
+각 37개씩 모두 같고, Native 최저 99.47266%·WASM 최저 98.16233%를 유지했다.
+기능 보존을 컴파일 성공만으로 판정하지 않았다.
+
+새 패키지로 Studio TypeScript·단위 2,356건·배포 빌드가 모두 통과했다.
+실제 CanvasKit 글꼴 준비·CanvasKit provider·Canvas2D provider 3종도 통과했고,
+HTTP 200의 JS/WASM 응답이 실행 패키지와 일치했다. 새 source의 Native FFI와
+Qt 25건·실제 렌더·합성 한글 IME·클립보드·저장/재열기도 통과했다.
+72개 입력의 최종 새 base/후보 Native 및 fresh WASM 전쪽 비교와 전체 Rust·lint·Skia는
+별도 최종 게이트로 진행하며, 아직 PR 제출 준비 완료로 표시하지 않는다.
+
+추가 디스크 정리에서는 종료된 오래된 진단의 사설 바이너리·rlib 사본 38개만 제거해
+실제 여유 공간 약 3.09GiB를 더 확보했다. 실행 중인 프로세스의 참조를 관리자 권한으로
+재확인했고 source·patch·로그·PNG·TSV·현재 producer·공유 target·사용자 PDF는 보존했다.
+실행 원장은 ignored output의 `rebase8135-20261022.log`,
+`rebase8135-preservation-preflight-20261022.json`, `post8135-native-consumers-20261022/`,
+`post8135-separated-cell-regression-20261022/`, `post8135-png-preservation-comparison-20261022.json`,
+`obsolete-diagnostic-copies-cleanup-20261022.json`에 기록했다.
