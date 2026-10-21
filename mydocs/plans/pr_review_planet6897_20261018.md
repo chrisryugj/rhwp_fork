@@ -8432,3 +8432,28 @@ Symbol 결과로 돌린다. 문서/공개 API별 이웃 예외를 없애고 인�
 직접 Print 비교를 새로 실행했다고 주장하지 않으며, 최종 실제 라이브러리·Native/fresh WASM
 및 공개/문서 소비 경로 재검증은 계속 진행한다. 진단과 원문은 ignored
 `issue7865-public-operator-order-20261021/` 및 `source27-review-context-20261021.json`에 있다.
+
+### 실제 검증 입력 보존과 추가 source의 미수용 검사 분리
+
+작업지시자가 공개 가능하다고 확인한 `1150200` 원본을
+`samples/issue7840/1150200_youth_vision2030_application.hwp`에 보존했다. 기존 실행에
+사용한 다운로드 원본과 SHA-256·바이트가 동일하며 커밋 `5c7f1835b4`에 포함됐다.
+새 후보 Native의 같은 독립 Print 전 4쪽은 쪽수가 일치하고 raw 최저 99.39534%다.
+이 결과를 아직 실행 중인 fresh WASM이나 전체 최종 검증 통과로 확대하지 않는다.
+
+추가 PR #8012가 실제 hwpspec 원본에 다시 등록한
+`empty_host_line_inside_offset_para_picture_band_is_absorbed`는 신규 검사의 시각
+선행 조건을 충족하지 않는다. 같은 글꼴 공급으로 현재 base `80968497c`는 72쪽,
+후보 `ca26039dad`는 74쪽, 독립 공식 PDF는 71쪽임을 다시 확인했다. 같은 원본은
+이미 이관된 #7687에 연결돼 있으므로 중복 이슈를 만들지 않는다. 제거 전 모듈 전체와
+helper·Git blob·SHA·원 source 출처를
+`mydocs/pr/assets/issue_7687/offset_picture_guard/`에 보존하고 해당 함수만 활성
+경로에서 제외한다. base에 존재하던 정상 검사를 이관한 것이 아니며, 원본 출력의
+해결이나 현재 구현의 회귀 해소로 세지 않는다.
+
+별도의 정상 4쪽 HWP/HWPX를 검사하는 기존 #7696 함수 두 개와 공통 helper는 유지했다.
+후보의 고정 Native 라이브러리로 실제 남은 모듈을 다시 컴파일해 2 PASS를 확인했다.
+정확한 실행은 `post8120-offset-picture-guard-preservation-20261021/results.json`,
+쪽수 재확인은 `post8120-hwpspec-pagecount-recheck-20261021.json`이다. 보관 함수의
+진단 PASS를 정식 통과 건수에 포함하지 않으며, 복원은 원본 전쪽의 쪽수·내용 대응,
+양쪽 raw 90% 이상과 직접 확대 판독 뒤에만 수행한다.
