@@ -1499,7 +1499,7 @@ impl LayoutEngine {
                     && cell.row_span > 1
                     && cell.vertical_align != crate::model::table::VerticalAlign::Top
                     && straddle_cut_units.is_some_and(|(start, end)| {
-                        self.stored_span_cut_preserves_line_slots(table, cell)
+                        self.stored_span_cut_owns_alignment(cell, table, styles, start, end)
                             || self.stored_plain_spanning_frame_owns_alignment(
                                 cell, table, start, end, end_row, styles,
                             )

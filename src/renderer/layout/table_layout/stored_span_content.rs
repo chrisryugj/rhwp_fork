@@ -350,6 +350,38 @@ impl LayoutEngine {
             && self.stored_plain_text_span_frame(table, cell)
     }
 
+    /// 슬롯 수용과 정렬 프레임은 별도 계약이다. 원본 문단 안의 실제 쪽
+    /// 재시작이 있으면 그 앞 프레임을 다 소비한 컷만 해당 정렬을 소유한다.
+    /// 문단별 로컬 원점이나 실제 페이지 경계가 없는 일반 슬롯 컷은 기존 계약을 쓴다.
+    pub(in crate::renderer::layout) fn stored_span_cut_owns_alignment(
+        &self,
+        cell: &Cell,
+        table: &Table,
+        styles: &ResolvedStyleSet,
+        start: usize,
+        end: usize,
+    ) -> bool {
+        if !self.stored_span_cut_preserves_line_slots(table, cell) {
+            return false;
+        }
+        let units = self.cell_units(cell, table, styles);
+        let Some(last) = end.checked_sub(1).and_then(|index| units.get(index)) else {
+            return false;
+        };
+        if start >= end {
+            return false;
+        }
+        for (index, unit) in units.iter().enumerate().skip(end) {
+            if unit.para_idx != last.para_idx {
+                break;
+            }
+            if Self::stored_in_paragraph_unit_is_original_restart(cell, unit) {
+                return index == end;
+            }
+        }
+        true
+    }
+
     pub(super) fn stored_plain_text_cell_frame(&self, table: &Table, cell: &Cell) -> bool {
         self.stored_body_text_cell_frame(table, cell)
             && cell.paragraphs.iter().all(|para| para.controls.is_empty())
