@@ -1147,6 +1147,9 @@ impl LayoutEngine {
             let end_col = (cell_col + cell.col_span as usize).min(col_count);
             let cell_w =
                 row_col_x.cell_width(cell_row.min(row_count - 1), cell_col, end_col, cell_spacing);
+            let frame_cell_w = self
+                .paragraph_frame_width_override(cell, table)
+                .unwrap_or(cell_w);
 
             // 행 높이: 병합 셀의 경우 렌더링 범위 내의 행만 합산
             let mut cell_h = 0.0;
@@ -1658,7 +1661,10 @@ impl LayoutEngine {
                 pad_right = new_pr;
 
                 let inner_width_for_recompose = crate::renderer::composer::cell_inner_text_width(
-                    cell_w, pad_left, pad_right, self.dpi,
+                    frame_cell_w,
+                    pad_left,
+                    pad_right,
+                    self.dpi,
                 );
                 // [Task #671] line_segs 비어 있는 셀 paragraph 의 단일 ComposedLine 압축
                 // 결과를 셀 가용 너비 (inner_width) 에 맞춰 다중 ComposedLine 으로 재분할.
@@ -1677,7 +1683,10 @@ impl LayoutEngine {
 
             let inner_x = cell_x + pad_left;
             let inner_width = crate::renderer::composer::cell_inner_text_width(
-                cell_w, pad_left, pad_right, self.dpi,
+                frame_cell_w,
+                pad_left,
+                pad_right,
+                self.dpi,
             );
             // [#7063 레인②] 테두리 상자는 `cell_h`(쪽이 정한 높이)를 쓰지만, 내용이 쓸 높이는
             // 예산이 자른 값이다. 첫 행을 쪽 상자로 고정한 조각에서만 둘이 갈린다.

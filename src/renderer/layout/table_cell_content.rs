@@ -840,6 +840,7 @@ impl LayoutEngine {
 
         // 글상자 내부 표: 셀 너비 합이 컨테이너 폭을 초과하면 비례 축소
         let col_sum: f64 = col_widths.iter().sum();
+        let _rows = self.table_rows_scope(table);
         let max_w = {
             let common_w = hwpunit_to_px(table.common.width as i32, self.dpi);
             if common_w > 0.0 && common_w < container.width {
@@ -975,6 +976,9 @@ impl LayoutEngine {
             let end_col = (c + cell.col_span as usize).min(col_count);
             let end_row = (r + cell.row_span as usize).min(row_count);
             let cell_w = row_col_x.cell_width(r, c, end_col, cell_spacing);
+            let frame_cell_w = self
+                .paragraph_frame_width_override(cell, table)
+                .unwrap_or(cell_w);
             let cell_h = row_y[end_row] - row_y[r] - cell_spacing;
 
             let cell_id = tree.next_id();
@@ -1073,7 +1077,10 @@ impl LayoutEngine {
 
             let inner_x = cell_x + pad_left;
             let inner_width = crate::renderer::composer::cell_inner_text_width(
-                cell_w, pad_left, pad_right, self.dpi,
+                frame_cell_w,
+                pad_left,
+                pad_right,
+                self.dpi,
             );
             let inner_height = (cell_h - pad_top - pad_bottom).max(0.0);
             let has_nested = cell

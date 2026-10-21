@@ -10004,6 +10004,9 @@ impl LayoutEngine {
             let end_row = (r + cell.row_span as usize).min(row_count);
             let cell_spacing = hwpunit_to_px(i32::from(table.cell_spacing), self.dpi);
             let cell_w = row_col_x.cell_width(r, c, end_col, cell_spacing);
+            let frame_cell_w = self
+                .paragraph_frame_width_override(cell, table)
+                .unwrap_or(cell_w);
             let raw_cell_h = cell_col_y
                 .and_then(|cy| {
                     let start = cy.get(r).copied()?;
@@ -10162,7 +10165,10 @@ impl LayoutEngine {
 
             let inner_x = cell_x + pad_left;
             let inner_width = crate::renderer::composer::cell_inner_text_width(
-                cell_w, pad_left, pad_right, self.dpi,
+                frame_cell_w,
+                pad_left,
+                pad_right,
+                self.dpi,
             );
             let inner_height = (cell_h - pad_top - pad_bottom).max(0.0);
 
@@ -13539,11 +13545,16 @@ impl LayoutEngine {
             return false;
         };
         let (pad_left, pad_right, _, _) = self.resolve_cell_padding(cell, table);
-        let cell_width = if cell.width < 0x8000_0000 {
-            hwpunit_to_px(cell.width as i32, self.dpi) * self.render_table_width_scale(table)
-        } else {
-            0.0
-        };
+        let cell_width = self
+            .paragraph_frame_width_override(cell, table)
+            .unwrap_or_else(|| {
+                if cell.width < 0x8000_0000 {
+                    hwpunit_to_px(cell.width as i32, self.dpi)
+                        * self.render_table_width_scale(table)
+                } else {
+                    0.0
+                }
+            });
         let inner_width = crate::renderer::composer::cell_inner_text_width(
             cell_width, pad_left, pad_right, self.dpi,
         );
@@ -14132,11 +14143,16 @@ impl LayoutEngine {
             }];
         }
         let (pad_left, pad_right, pad_top, pad_bottom) = self.resolve_cell_padding(cell, table);
-        let cell_w = if cell.width < 0x8000_0000 {
-            hwpunit_to_px(cell.width as i32, self.dpi) * self.render_table_width_scale(table)
-        } else {
-            0.0
-        };
+        let cell_w = self
+            .paragraph_frame_width_override(cell, table)
+            .unwrap_or_else(|| {
+                if cell.width < 0x8000_0000 {
+                    hwpunit_to_px(cell.width as i32, self.dpi)
+                        * self.render_table_width_scale(table)
+                } else {
+                    0.0
+                }
+            });
         // [#2279 axis B 보류] 측정에 렌더의 오버플로 패딩 축소 폭을 적용하는 안은
         // 당시 잘못 생성된 86712 입력(저장 줄 누락)의 5줄/4줄 차이를 줄였지만, 사다리
         // 교정된 문서(80168 pi=1056 r7: 한글 PDF 8줄 실측)에서는 한글이 지키는 패딩을
