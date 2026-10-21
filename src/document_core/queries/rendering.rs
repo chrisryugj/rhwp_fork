@@ -384,7 +384,7 @@ pub(crate) fn collect_exact_font_slots_from_paragraphs_filtered(
                     || run
                         .text
                         .chars()
-                        .any(crate::renderer::native_pua_fonts::is_book_bracket))
+                        .any(crate::renderer::native_pua_fonts::is_supported_symbol))
             {
                 slots.insert(ExactFontSlot::new(run.char_style_id, run.lang_index));
                 if slots.len() >= MAX_KERNING_REGISTRY_SLOTS {

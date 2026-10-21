@@ -9,6 +9,14 @@ pub const BOOK_BRACKETS: [char; 2] = ['\u{F0854}', '\u{F0855}'];
 pub fn is_book_bracket(character: char) -> bool {
     BOOK_BRACKETS.contains(&super::composer::hancom_symbol_display_key(character))
 }
+/// 실제 공급한 같은 SFNT의 원 PUA 표시와 전진을 보존할 기호다.
+/// F02FC는 Unicode ►와 폭이 다르므로 원 glyph가 있는 프로그램만 사용한다.
+pub const SUPPORTED_SYMBOLS: [char; 3] = ['\u{F0854}', '\u{F0855}', '\u{F02FC}'];
+
+pub fn is_supported_symbol(character: char) -> bool {
+    SUPPORTED_SYMBOLS.contains(&super::composer::hancom_symbol_display_key(character))
+}
+
 const MAX_PROGRAMS: usize = 256;
 const MAX_FONT_BYTES: usize = 32 * 1024 * 1024;
 
@@ -16,13 +24,13 @@ const MAX_FONT_BYTES: usize = 32 * 1024 * 1024;
 pub struct NativePuaMetrics {
     digest: [u8; 32],
     face_index: u32,
-    advances: [Option<f64>; 2],
+    advances: [Option<f64>; 3],
 }
 
 impl NativePuaMetrics {
     pub fn advance_em(&self, character: char) -> Option<f64> {
         let key = super::composer::hancom_symbol_display_key(character);
-        self.advances[BOOK_BRACKETS.iter().position(|ch| *ch == key)?]
+        self.advances[SUPPORTED_SYMBOLS.iter().position(|ch| *ch == key)?]
     }
 }
 
@@ -50,7 +58,7 @@ impl NativePuaFonts {
         }
         let face = ttf_parser::Face::parse(bytes, face_index)
             .map_err(|_| "invalid native PUA SFNT face")?;
-        let advances = BOOK_BRACKETS.map(|character| {
+        let advances = SUPPORTED_SYMBOLS.map(|character| {
             let glyph = face.glyph_index(character).filter(|glyph| glyph.0 != 0)?;
             let width = face.glyph_hor_advance(glyph)?;
             (width > 0).then(|| f64::from(width) / f64::from(face.units_per_em()))

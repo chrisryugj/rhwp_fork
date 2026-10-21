@@ -23,11 +23,11 @@ impl SkiaLayerRenderer {
                 &request.family,
                 style,
             );
-            let selected = crate::renderer::native_pua_fonts::BOOK_BRACKETS
+            let selected = crate::renderer::native_pua_fonts::SUPPORTED_SYMBOLS
                 .iter()
                 .find_map(|ch| select_typeface_for_character(&candidates, *ch))
                 .filter(|candidate| candidate.source != "legacy")?;
-            if !crate::renderer::native_pua_fonts::BOOK_BRACKETS
+            if !crate::renderer::native_pua_fonts::SUPPORTED_SYMBOLS
                 .iter()
                 .any(|ch| selected.typeface.unichar_to_glyph(*ch as i32) != 0)
             {

@@ -353,6 +353,15 @@ fn convert_pua_display_text(
                         display.push('-');
                     }
                     changed = true;
+                } else if program
+                    .as_ref()
+                    .is_some_and(|program| program.advance_em(ch).is_some())
+                {
+                    // 실제 공급한 원 glyph는 Unicode 표시 대체보다 우선한다.
+                    // 측정과 paint가 같은 프로그램의 전진·표시 문자를 소비한다.
+                    let source = hancom_symbol_display_key(ch);
+                    display.push(source);
+                    changed |= source != ch;
                 } else if let Some(replacement) = pua_plain_text_display(ch) {
                     display.push_str(replacement);
                     changed = true;
@@ -364,14 +373,7 @@ fn convert_pua_display_text(
                     // (U+F0854/F0855 → 《》) 등을 측정 문자열에도 올린다. 원문 PUA 는
                     // CJK가 아니라 0.5em 휴리스틱이 되어 run bbox 가 전각 글리프보다
                     // 짧고, 다음 라틴 run 이 한글 위에 겹친다 (#6057).
-                    let mapped = if program
-                        .as_ref()
-                        .is_some_and(|program| program.advance_em(ch).is_some())
-                    {
-                        hancom_symbol_display_key(ch)
-                    } else {
-                        map_pua_bullet_char(ch)
-                    };
+                    let mapped = map_pua_bullet_char(ch);
                     display.push(mapped);
                     if mapped != ch {
                         changed = true;
@@ -379,9 +381,9 @@ fn convert_pua_display_text(
                 }
             }
             run_char_start = run_char_end;
-            if changed {
-                run.display_text = Some(display);
-            }
+            // 글꼴 공급 뒤 재구성할 때 앞선 일반 compose의 대체 문자열도 폐기한다.
+            // 원 PUA를 그대로 쓰는 결과는 changed=false여도 이전 display와 다르다.
+            run.display_text = changed.then_some(display);
         }
     }
 }
