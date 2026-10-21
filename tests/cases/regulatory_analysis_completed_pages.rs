@@ -189,6 +189,46 @@ fn merged_grid_shares_declared_column_boundaries_on_completed_page17() {
     near(frame.bbox.x, 77.3987);
     near(frame.bbox.x + frame.bbox.width, 723.6107);
     near(frame.bbox.y, 109.48);
+
+    // 독립 Print 17쪽의 두 문단은 같은 물리 셀에 모두 들어간다.
+    // row_span=2·문단 2개만으로 문단을 행마다 하나씩 나누면 `여부`가 18쪽으로 밀린다.
+    let original_label = original
+        .cells
+        .iter()
+        .find(|c| c.row == 8 && c.col == 1)
+        .unwrap();
+    assert_eq!(original_label.row_span, 2);
+    let source_parts: Vec<_> = original_label
+        .paragraphs
+        .iter()
+        .map(|paragraph| compact(&paragraph.text))
+        .collect();
+    assert_eq!(source_parts, ["10.영향평가", "여부"]);
+    let label = cell(frame, 8, 1);
+    assert_eq!(compact(&text(label)), source_parts.concat());
+    for (index, expected) in source_parts.iter().enumerate() {
+        let owned = lines(label, index);
+        assert_eq!(owned.len(), 1, "원본 표제 문단의 글줄 소속과 중복 없음");
+        assert_eq!(compact(&text(owned[0])), *expected);
+        contained(owned[0], label);
+    }
+    let final_label_line = lines(label, 1)[0];
+    // 독립 PDF의 글자 원점 (111.36, 777.72)pt → 96dpi.
+    near(first_run(final_label_line).bbox.x, 148.48);
+    baseline(final_label_line, 1036.96);
+
+    let next = core.build_page_render_tree(17).unwrap();
+    let continuation = table(&next.root, 139);
+    for remaining in &continuation.children {
+        if matches!(&remaining.node_type, RenderNodeType::TableCell(c)
+            if c.row == 8 && c.col == 1)
+        {
+            assert!(
+                compact(&text(remaining)).is_empty(),
+                "18쪽의 남은 물리 셀은 앞쪽에서 소비한 표제를 반복하지 않는다"
+            );
+        }
+    }
 }
 
 #[test]

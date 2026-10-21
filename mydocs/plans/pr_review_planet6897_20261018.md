@@ -9136,3 +9136,64 @@ Native/fresh WASM과 직접 판독 뒤 기존 정식 17쪽 검사에 연결한�
 `rowspan-paragraph-owner-trial-20261022/`, `80168-span-owner-before-20261022/`,
 `76076-span-owner-control-before-20261022/`에 보존했다. 정식 기존 17쪽 검사의 내용 보존
 보강은 새 전쪽 Native/fresh WASM과 직접 판독 후 적용한다.
+
+
+### 2026-10-22 걸침 표제의 fresh WASM 확인과 완료 페이지 검사
+
+runtime `10995c1ef8c718fb50453bc08d72551ec17c3b0d`의 fresh WASM을 고정
+`target/pr-review`에서 jobs 8·codegen-units 16·release 및 wasm-opt 최적화로 빌드했다.
+실제 Rust 컴파일을 포함해 21분 37초·exit 0이며 루트 pkg와 Studio public의 JS/WASM이
+같다. WASM SHA-256은 `fcdf7da0fc916e6c7ee25c1d76ea05dabdf55c42d568207049ec1cdf578e9d81`이다.
+Native CLI SHA-256은 `0c926bd87c3097c78bd6ec8a8012cd3c7799ddc3152f90394ecc2c68c9410ad5`이며,
+두 producer의 runtime 소스 바이트가 해당 커밋과 일치함을 확인했다.
+
+80168은 Native/fresh WASM 모두 독립 Print와 같은 157쪽이다. 전쪽 최저 raw는
+93.90078%/91.66667%, 17쪽은 99.52324%/99.47967%, 18쪽은
+99.52563%/99.50740%다. 두 출력의 직접 review에서 17쪽 마지막 셀의 `10.영향평가`와
+`여부`가 같은 쪽·셀에 있고 18쪽에 중복되지 않음을 확인했다. WASM 최저 153쪽은
+PDF와 출력 모두 본문 없이 쪽 번호만 있는 쪽이며, 해당 쪽에 좌표 핀을 추가하지 않는다.
+정상 대조 76076은 독립 Print와 같이 18쪽 `11.영향평가`/19쪽 `여부`로 나뉘며,
+두 문단을 항상 같은 쪽에 놓는 규칙을 만들지 않았다.
+
+기존 `regulatory_analysis_completed_pages`의 17쪽 함수 안에 원본 두 문단의 소유·순서·
+누락·중복·셀 내부 포함과 다음 쪽의 중복 없음을 보강했다. 원본 셀에 실제 LineSeg가 없는
+사례도 원본 문단으로 확인한다. 독립 Print의 마지막 단어 원점 (111.36, 777.72)pt를
+96dpi의 (148.48, 1036.96)px로 환산해 ±2px로 보호하며 기존 열 구획 관계는 유지했다.
+같은 보강 초안은 이전 Native `b7443d4328`에서 `10.영향평가`만 남는 원인으로 실제
+FAIL했다. 보정 후 정상 대조군과 함께 72 PASS였고, 정식 파일을 다시 컴파일한 뒤
+17쪽 함수와 아래 HWPX 함수도 각각 1 PASS를 확인했다.
+
+편람 HWPX는 같은 원본의 정상 KoPub Print와 Native/fresh WASM 모두 383쪽이며,
+전쪽 최저 raw는 92.49658%/92.51660%다. 과거 무 KoPub 환경의 384쪽 기준을 섞지
+않았다. 완료 375쪽은 HWP·HWPX 모두 Native/fresh WASM raw 100%이고, 두 독립
+Print 375쪽 RGB도 같다. 같은 핵심 동작을 보호하는 100% 페이지를 우선 선택했다.
+기존 `issue_7751_handbook_completed_boundaries`의 서식 검사와 원본 셀 보존 helper를
+공유하도록 바꾸고 HWPX 정식 함수 1건을 추가했다. 새 함수는 두 서식의 단 소유·전체 셀
+내용·누락·중복·겹침, 표 앞 공백의 가운데 정렬과 원본 바깥여백을 한 번 소비하는 관계,
+독립 Print의 외곽 원점 ±2px를 검사한다. 여백을 0으로 바꾼 정상 대조의 실제 원점 이동과
+크기 보존도 확인한다. 기존 HWP 함수의 독립 기대값과 정상 관계는 바꾸지 않았다.
+
+전쪽 TSV 원본과 직접 PNG를 안정 경로에 보존했다.
+
+- [80168 원본·PDF·전쪽 TSV·17/18쪽 review 및 overlay](../pr/assets/planet6897_20261018/documents/merged-80168.md)
+- [편람 HWPX 원본·PDF·전쪽 TSV·375쪽 review 및 overlay](../pr/assets/planet6897_20261018/documents/handbook-hwpx.md)
+
+현재 runtime의 Native 전체 행렬도 70개 입력·1,501쪽에서 쪽수 일치·전쪽 측정 완료,
+90% 미만 0쪽·최저 raw 92.49647%를 확인했다. 이미 이관된 hwpx-sample2와 별도 보존한
+수동 XML 진단은 수용 대상에 넣지 않았다. fresh WASM의 나머지 입력은 별도 행렬에서
+계속 산출하며 이 문단으로 전체 검증 완료를 대신하지 않는다.
+
+Studio TypeScript·2,356개 단위 검사·프로덕션 빌드는 모두 통과했다. 실제 브라우저의
+font preparation·CanvasKit·Canvas2D provider 3종도 새 패키지의 네트워크 JS/WASM
+바이트 일치와 함께 통과했다. #8135의 계약 38건·실제 Native region/cache/host-surface
+12개 출력과 WASM 4개 문서 대조도 통과했고, 같은 새 base의 수치와 모두 같았다.
+Native FFI 첫 실행은 SIGTERM(143)으로 끝나 완료 증거로 쓰지 않았다. 해당 부모·Cargo·
+rustc의 종료를 확인하고 같은 코드·공유 target으로 재실행해 6분 15초·exit 0 및 Qt
+25 PASS를 얻었다. Qt는 offscreen 실제 렌더·합성 한국어 IME·clipboard·다중 쪽·caret·
+저장 후 재개방을 확인한 범위이며 OS IME 검증으로 기록하지 않는다.
+
+집중 검사 원장은 ignored output의 `rowspan-owner-qualified-draft-contracts-20261022/`에
+명령·수정 전 FAIL/수정 후 PASS·정식 파일 해시와 함께 보존했다. 새 전체 Rust·lint·
+Native Skia 게이트는 이 보강을 커밋한 head에서 실행하며, 앞서 80168 결함으로 중단한
+전체 검증을 통과로 재사용하지 않는다. 원 PR 27개와 devel을 다시 조회했을 때 head는
+변하지 않았고, 검증 입력·PDF 140개 조건은 커밋 바이트와 모두 일치했다.
