@@ -8825,3 +8825,25 @@ textOverlapCount=0·overflowCount=0·offCanvasCount=0·storedLineEscapeCount=0�
 진단 생산자·코드 해시·원본 재실행은 `paragraph-frame-owner-width-trial-20261021/`에,
 기존 실패 모듈 재검사는 `paragraph-frame-owner-width-contracts-20261021/`에 있다.
 전쪽 fresh WASM 및 최종 필수 게이트를 끝내기 전 통합 승인으로 판정하지 않는다.
+
+### #8132 우선 리베이스와 기능 보존 검증
+
+사용자 지시에 따라 #8132와 충돌하는 부분은 새 devel 구현을 우선했다.
+이전 base는 `80968497c2c178eeecb3b2e1d04d086ad27a0dc7`, 새 base는
+`f45878c7caafb43ca1fd017ddd93484a0acc6ad2`이며, 후보는
+`e31a7a940065be8070f4fce5f783e12ac769a9d6`에서
+`a96b98fba5bb8e101e8e3acb16a30bc6d230793d`로 재배치했다.
+이전 head는 `backup/planet6897-before8132-20261021`에 보존했다.
+
+HWP 대체 face/type 파서·직렬화와 글꼴 추적 증적, Studio의 첫 해결 family 및
+준비된 host face 선택, provider 해제 검사는 #8132의 충돌 구간을 유지했다.
+원 PUA의 공통 메트릭·세션 보정 등 충돌 밖 변경은 유지했다. range-diff는
+454개 동일·2개 충돌 보정·1개 upstream 동등 검사로 소거를 확인했다.
+충돌 기록과 전후 비교는 `output/pr-review/planet6897-20261018/`의
+`rebase8132-conflicts-20261021.json`, `rebase8132-range-diff-20261021.log`에 있다.
+
+이는 Git 리베이스 완료 기록이며 기능 보존 완료 판정은 아니다. 새 base와 후보에서
+#8132의 동일 입력 37개·Native/fresh WASM 전쪽 TSV, 대체 글꼴 저장/재열기,
+실제 Studio 준비·그리기·provider 해제와 혼합 family PUA 경계를 대조한다.
+원래 보정 대상의 검증도 새 생산자로 갱신한다. 이전 빌드 결과는 이전 SHA의
+근거로만 남기며, 148738070의 3·4쪽 하단선 차이와 최종 필수 검증은 계속한다.
