@@ -337,6 +337,7 @@ impl LayoutEngine {
                 || resolved.engrave
                 || resolved.superscript
                 || resolved.subscript
+                || resolved.font_position_for_lang(source_run.lang_index) != 0
                 || resolved.emphasis_dot != 0
                 || resolved
                     .letter_spacing_for_lang(source_run.lang_index)
@@ -789,17 +790,9 @@ impl LayoutEngine {
             shape_table_cell_ref,
             false,
         );
-        // [#6121] 셀 문단에 앵커된 비-TAC 개체(글 뒤로 제외)에 원본 text_wrap/z_order
-        // 를 layer 로 실어 둔다 — 페이지 조립 후처리
-        // (`lift_cell_anchored_objects_above_text`)가 이 마킹을 소비해 셀 본문
-        // 텍스트 위로 올린다. TAC 는 텍스트 흐름의 일부라 순서를 건드리지 않고,
-        // 글 뒤로(BehindText)는 기존 문단-순서 페인트가 이미 텍스트 아래다.
-        if !child_common.treat_as_char
-            && !matches!(
-                child_common.text_wrap,
-                crate::model::shape::TextWrap::BehindText
-            )
-        {
+        // Cell-local paint order is settled after all paragraphs are assembled.
+        // BehindText must move below even the text emitted before its anchor.
+        if !child_common.treat_as_char {
             let stable_index = table_cell_ctx
                 .map(|(_, _, _, _, cell_para_i, inner_ci)| {
                     Self::object_stable_index(cell_para_i, inner_ci)
@@ -812,6 +805,8 @@ impl LayoutEngine {
             );
             for child in cell_node.children.iter_mut().skip(children_before) {
                 child.set_layer(layer);
+                child.cell_frame_paint =
+                    crate::model::border_paint::is_cell_frame_attributes(child_common);
             }
         }
     }

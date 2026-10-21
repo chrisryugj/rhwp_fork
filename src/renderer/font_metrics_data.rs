@@ -48,6 +48,19 @@ pub struct FontMetric {
     pub hangul: Option<&'static HangulMetric>,
 }
 
+/// Source SFNT hhea descent for the Windows Korean UI families. Like the
+/// generated advance tables this is program metadata, independent of an
+/// installed rendering substitute. Gulim.ttc faces 0..=3 have upem=1024 and
+/// descender=-145; provenance is recorded with the TAC baseline qualification.
+/// Other programs retain the caller's existing compatibility fallback.
+pub(crate) fn source_descent_em(name: &str, bold: bool, italic: bool) -> Option<f64> {
+    let metric = find_metric(name, bold, italic)?.metric;
+    match metric.name {
+        "Gulim" | "GulimChe" | "Dotum" | "DotumChe" => Some(145.0 / 1024.0),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub struct LatinRange {
     pub start: u32,
@@ -368,10 +381,39 @@ fn legacy_find_metric(name: &str, bold: bool, italic: bool) -> Option<MetricMatc
 
 include!("font_metrics_generated.rs");
 include!("font_metrics_overlays.rs");
+include!("font_metrics_core14.rs");
 
-/// 기존 600-entry 물리 순서를 노출하는 논리 view.
+/// Published AFMs are independent of the historical 600-entry evidence ledger.
+pub(crate) fn core14_metric_source(metric: &FontMetric) -> Option<(&'static str, &'static str)> {
+    if !CORE14_FONT_METRICS
+        .iter()
+        .any(|entry| std::ptr::eq(entry, metric))
+    {
+        return None;
+    }
+    Some(match (metric.bold, metric.italic) {
+        (false, false) => (
+            "data/font-metrics/adobe-core14/Helvetica.afm",
+            "CORE14_0_RANGES",
+        ),
+        (true, false) => (
+            "data/font-metrics/adobe-core14/Helvetica-Bold.afm",
+            "CORE14_1_RANGES",
+        ),
+        (false, true) => (
+            "data/font-metrics/adobe-core14/Helvetica-Oblique.afm",
+            "CORE14_2_RANGES",
+        ),
+        (true, true) => (
+            "data/font-metrics/adobe-core14/Helvetica-BoldOblique.afm",
+            "CORE14_3_RANGES",
+        ),
+    })
+}
+
+/// 기존 600-entry 물리 순서를 보존하고 독립 AFM 메트릭을 뒤에 연결한다.
 ///
-/// generated 595개 뒤에 measured overlay 5개를 연결하며 정렬·dedupe하지 않는다.
+/// generated 595개와 measured overlay 5개를 정렬·dedupe하지 않는다.
 struct FontMetrics;
 
 static FONT_METRICS: FontMetrics = FontMetrics;
@@ -381,6 +423,7 @@ impl FontMetrics {
         GENERATED_FONT_METRICS
             .iter()
             .chain(MEASURED_FONT_METRIC_OVERLAYS.iter())
+            .chain(CORE14_FONT_METRICS.iter())
             .chain(han_santteut::METRICS.iter())
             .chain(legacy_hft::METRICS.iter())
             .chain(hci_poppy::METRICS.iter())

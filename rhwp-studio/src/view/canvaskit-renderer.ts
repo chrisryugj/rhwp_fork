@@ -28,6 +28,7 @@ import type {
   LayerBounds,
   LayerCharOverlapOp,
   LayerClipNode,
+  LayerPathClipNode,
   LayerEllipseOp,
   LayerEquationLayoutBox,
   LayerEquationOp,
@@ -933,7 +934,7 @@ export class CanvasKitLayerRenderer {
       while (nodes.length > 0 && ++work <= 50_000) {
         const node = nodes.pop()!;
         if (node.kind === 'group') nodes.push(...node.children);
-        else if (node.kind === 'clipRect') nodes.push(node.child);
+        else if ((node.kind === 'clipRect' || node.kind === 'clipPath')) nodes.push(node.child);
         else for (const op of node.ops) {
           if (op.type === 'image') this.imageForOp(op);
           else if (op.type === 'pageBackground' && op.image) {
@@ -1030,7 +1031,7 @@ export class CanvasKitLayerRenderer {
         const node = stack.pop()!;
         if (node.kind === 'group') {
           stack.push(...node.children);
-        } else if (node.kind === 'clipRect') {
+        } else if ((node.kind === 'clipRect' || node.kind === 'clipPath')) {
           stack.push(node.child);
         } else {
           hasPageBackground = node.ops.some((op) => op.type === 'pageBackground');
@@ -1535,7 +1536,7 @@ export class CanvasKitLayerRenderer {
       for (const child of node.children) this.selectTextVariants(child, canvas);
       return;
     }
-    if (node.kind === 'clipRect') {
+    if ((node.kind === 'clipRect' || node.kind === 'clipPath')) {
       this.selectTextVariants(node.child, canvas);
       return;
     }
@@ -1741,6 +1742,15 @@ export class CanvasKitLayerRenderer {
   private renderNodeContents(canvas: SkCanvas, node: LayerNode, profile: LayerRenderProfile,
     replayPlane: CanvasKitReplayPlane, inheritedLayer: LayerInfo | null): void {
     const activeLayer = node.layer ?? inheritedLayer;
+    if (node.kind === 'group' && Array.isArray(node.groupKind?.paintTransform)) {
+      const [a,b,c,d,e,f] = node.groupKind.paintTransform as number[];
+      canvas.save();
+      try {
+        canvas.concat([a,c,e,b,d,f,0,0,1]);
+        this.renderNodeContents(canvas, { ...node, groupKind: { ...node.groupKind, paintTransform: undefined } }, profile, replayPlane, inheritedLayer);
+      } finally { canvas.restore(); }
+      return;
+    }
     if (node.kind === 'group') {
       const recordingBounds = this.staticPictureBounds(node);
       if (!this.recordingStaticPicture && this.currentPictureContext && this.currentTreeFingerprint
@@ -1807,8 +1817,8 @@ export class CanvasKitLayerRenderer {
       }
       return;
     }
-    if (node.kind === 'clipRect') {
-      if (!this.currentClipEnabled) {
+    if ((node.kind === 'clipRect' || node.kind === 'clipPath')) {
+      if (!this.currentClipEnabled && node.kind !== 'clipPath') {
         this.renderNode(canvas, node.child, profile, replayPlane, activeLayer);
         return;
       }
@@ -1851,12 +1861,29 @@ export class CanvasKitLayerRenderer {
 
   private renderClipNode(
     canvas: SkCanvas,
-    node: LayerClipNode,
+    node: LayerClipNode | LayerPathClipNode,
     profile: LayerRenderProfile,
     replayPlane: CanvasKitReplayPlane,
     inheritedLayer: LayerInfo | null,
   ): void {
     canvas.save();
+    if (node.kind === 'clipPath') {
+      try {
+        for (const clip of node.paths ?? []) {
+          const data = clip.commands.map(command => command === 'Close' ? 'Z'
+            : 'Move' in command ? `M${command.Move.join(' ')}`
+            : 'Line' in command ? `L${command.Line.join(' ')}` : `C${command.Cubic.join(' ')}`).join(' ');
+          const path = this.canvasKit.Path.MakeFromSVGString(data);
+          if (!path) throw new Error('Source text clip path could not be decoded');
+          try {
+            path.setFillType(clip.even_odd ? this.canvasKit.FillType.EvenOdd : this.canvasKit.FillType.Winding);
+            canvas.clipPath(path, this.canvasKit.ClipOp?.Intersect ?? 0, true);
+          } finally { path.delete(); }
+        }
+        this.renderNode(canvas, node.child, profile, replayPlane, inheritedLayer);
+      } finally { canvas.restore(); }
+      return;
+    }
     canvas.clipRect(
       canvasKitCanonicalClipRect(node.clip, (x, y, width, height) =>
         this.canvasKit.XYWHRect(x, y, width, height),
@@ -5028,7 +5055,9 @@ export class CanvasKitLayerRenderer {
         paint.delete?.();
       }
     }
-    if (!fillShader && !style?.fillColor && !style?.strokeColor && !style?.pattern) {
+    // An explicit transparent style paints nothing. Only an omitted legacy
+    // style requests the default outline; do not invent a text-box frame.
+    if (!fillShader && style === undefined) {
       const paint = this.makeStrokePaint('#000000', 1);
       draw(paint);
       paint.delete?.();
@@ -5203,7 +5232,7 @@ export class CanvasKitLayerRenderer {
       try {
         this.drawStrokeWithDash(style.dash, paint, () => {
           canvas.drawLine(x1 + ox, y1 + oy, x2 + ox, y2 + oy, paint);
-        });
+        }, style.dashPattern);
       } finally {
         paint.delete?.();
       }
@@ -5241,7 +5270,16 @@ export class CanvasKitLayerRenderer {
     dash: LayerStrokeDash | undefined,
     paint: SkPaint,
     draw: () => void,
+    explicitPattern?: number[],
   ): void {
+    if (explicitPattern !== undefined && (
+      explicitPattern.length === 0 || explicitPattern.length > 16
+      || explicitPattern.length % 2 !== 0
+      || explicitPattern.some(value => !Number.isFinite(value) || value <= 0)
+    )) {
+      this.unsupportedOps.add('strokeDash:invalidPhysicalPattern');
+      return;
+    }
     const patterns: Partial<Record<Exclude<LayerStrokeDash, number[]>, number[]>> = {
       dash: [6, 3], dot: [2, 2], dashDot: [6, 3, 2, 3], dashDotDot: [6, 3, 2, 3, 2, 3],
       hwpDash: [7.5, 4.5], hwpDot: [1.5, 2.25], hwpDashDot: [15, 4.5, 1.5, 4.5],
@@ -5251,12 +5289,12 @@ export class CanvasKitLayerRenderer {
     const hwpPattern = typeof dash === 'string' && dash.startsWith('hwp');
     const outline = 96 / 600;
     const scale = hwpPattern ? Math.max(paint.getStrokeWidth() - outline, outline) : 1;
-    const intervals = Array.isArray(dash) ? dash : dash === undefined || dash === 'solid'
+    const intervals = explicitPattern ?? (Array.isArray(dash) ? dash : dash === undefined || dash === 'solid'
       ? null
       : patterns[dash]?.map((value, index) => {
         const edge = hwpPattern && dash !== 'hwpCircle' ? (index % 2 === 0 ? outline : -outline) : 0;
         return value * scale + edge;
-      });
+      }));
     if (intervals === undefined) {
       this.unsupportedOps.add(`strokeDash:${String(dash)}`);
       return;

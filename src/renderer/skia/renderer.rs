@@ -1183,6 +1183,10 @@ impl SkiaLayerRenderer {
             });
             paint.set_color(colorref_to_skia(style.color, 1.0));
             apply_dash(&mut paint, style.dash);
+            if let Some(intervals) = &style.dash_pattern {
+                let intervals = intervals.iter().map(|v| *v as f32).collect::<Vec<_>>();
+                paint.set_path_effect(PathEffect::dash(&intervals, 0.0));
+            }
             paint
         };
         let draw_placeholder = |bbox: crate::renderer::render_tree::BoundingBox, label: &str| {
@@ -1285,8 +1289,20 @@ impl SkiaLayerRenderer {
             LayerNodeKind::Group {
                 children,
                 cache_hint,
-                ..
+                group_kind,
             } => {
+                let _restore = if let crate::paint::GroupKind::Group(group) = group_kind {
+                    group.paint_transform.map(|[a, b, c, d, e, f]| {
+                        let guard = skia_safe::AutoCanvasRestore::guard(canvas, true);
+                        canvas.concat(&skia_safe::Matrix::new_all(
+                            a as f32, c as f32, e as f32, b as f32, d as f32, f as f32, 0.0, 0.0,
+                            1.0,
+                        ));
+                        guard
+                    })
+                } else {
+                    None
+                };
                 let child_context = cache_context.with_hint(*cache_hint);
                 let render_children = |target: &Canvas, next_id: &mut u32| {
                     for child in children {
@@ -1377,6 +1393,54 @@ impl SkiaLayerRenderer {
                 } else {
                     render_children(canvas, next_text_source_id)?;
                 }
+            }
+            LayerNodeKind::ClipPath { paths, child } => {
+                use crate::model::text_clip::ClipCommand;
+                canvas.save();
+                for clip in paths {
+                    let mut path = skia_safe::PathBuilder::new();
+                    for command in &clip.commands {
+                        match *command {
+                            ClipCommand::Move(x, y) => {
+                                path.move_to((x as f32, y as f32));
+                            }
+                            ClipCommand::Line(x, y) => {
+                                path.line_to((x as f32, y as f32));
+                            }
+                            ClipCommand::Cubic(a, b, c, d, e, f) => {
+                                path.cubic_to(
+                                    (a as f32, b as f32),
+                                    (c as f32, d as f32),
+                                    (e as f32, f as f32),
+                                );
+                            }
+                            ClipCommand::Close => {
+                                path.close();
+                            }
+                        }
+                    }
+                    path.set_fill_type(if clip.even_odd {
+                        skia_safe::PathFillType::EvenOdd
+                    } else {
+                        skia_safe::PathFillType::Winding
+                    });
+                    canvas.clip_path(&path.detach(), None, Some(antialias));
+                }
+                let result = self.render_node(
+                    canvas,
+                    child,
+                    output_options,
+                    hft_outline_enabled,
+                    resources,
+                    replay_plane,
+                    active_layer,
+                    next_text_source_id,
+                    fallback_raster_scale,
+                    strict_resource_failures,
+                    cache_context,
+                );
+                canvas.restore();
+                result?;
             }
             LayerNodeKind::ClipRect { clip, child, .. } => {
                 if !clip_enabled {

@@ -220,6 +220,7 @@ fn horizontal_shaping_initial_lane_preflight(
         && !style.engrave
         && !style.superscript
         && !style.subscript
+        && style.font_position.unwrap_or_default() == 0
         && style.emphasis_dot == 0
         && crate::model::color::char_shade(style.shade_color).is_none();
     let para_style_supported = styles
@@ -10534,8 +10535,24 @@ impl LayoutEngine {
             .lines
             .get(vars.line_idx + 1)
             .is_some_and(|next| next.char_start == comp_line.char_start && !next.runs.is_empty());
-        let empty_line_tac_allowed =
-            cell_ctx.is_none() || is_caption_cell_context(cell_ctx.as_ref()) || owns_boundary_tac;
+        // A regenerated frame can publish a terminal picture-only row with no
+        // visible characters. Its raw control slot owns that row just as on a
+        // body line. Consume the common inline box here (including margins),
+        // instead of letting the cell fallback infer an image origin again.
+        let generated_picture_row = para.is_some_and(|p| {
+            p.line_segs.get(vars.line_idx).is_some_and(|seg| {
+                seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY != 0
+            }) && !line_tac_offsets.is_empty()
+                && line_tac_offsets.iter().all(|(_, _, ci)| {
+                    matches!(p.controls.get(*ci), Some(Control::Picture(picture))
+                        if picture.common.treat_as_char && picture.caption.is_none())
+                        && super::control_line_seg_index(p, *ci) == Some(vars.line_idx)
+                })
+        });
+        let empty_line_tac_allowed = cell_ctx.is_none()
+            || is_caption_cell_context(cell_ctx.as_ref())
+            || owns_boundary_tac
+            || generated_picture_row;
         if !line_tac_offsets.is_empty() {
             if let (Some(p), Some(bdc)) = (para, bin_data_content) {
                 // TAC 이미지 전체 폭 계산 후 문단 정렬 적용
@@ -10728,6 +10745,20 @@ impl LayoutEngine {
                                 )
                             };
                             let img_y = base_img_y + sibling_reserved_px + margin_top;
+                            // Normalization preserves the paragraph anchor of
+                            // a floating picture stack. The inline emitter and
+                            // the cell fallback must publish the same origin.
+                            let img_left = img_x
+                                + margin_left
+                                + super::table_partial::inline_para_horizontal_offset_px(
+                                    &pic.common,
+                                    p.line_segs.get(vars.line_idx).is_some_and(|segment| {
+                                        segment.tag
+                                            & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
+                                            != 0
+                                    }),
+                                    self.dpi,
+                                );
                             let bin_data_id = pic.image_attr.bin_data_id;
                             let image_data = find_bin_data_bytes(bdc, bin_data_id);
                             let crop = pic.render_crop_rect();
@@ -10744,7 +10775,7 @@ impl LayoutEngine {
                                 original_size_hu,
                                 bin_data_id,
                                 image_data,
-                                BoundingBox::new(img_x + margin_left, img_y, pic_w, pic_h),
+                                BoundingBox::new(img_left, img_y, pic_w, pic_h),
                             );
                             self.append_picture_image_node(tree, line_node, pic, img_node);
                             // [Task #418/#376] layout_shape_item 의 Task #347 분기 (빈 문단 +
@@ -10755,7 +10786,7 @@ impl LayoutEngine {
                                 vars.para_index,
                                 tac_ci,
                                 cell_ctx.as_ref(),
-                                img_x + margin_left,
+                                img_left,
                                 img_y,
                             );
                             img_x += tac_w;

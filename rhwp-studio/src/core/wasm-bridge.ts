@@ -1216,7 +1216,7 @@ export class WasmBridge {
       throw new Error(`[WasmBridge] PageLayerTree JSON shape 오류 (page=${pageNum}): root.kind가 없습니다`);
     }
     const rootKind = (tree.root as { kind?: unknown }).kind;
-    if (rootKind !== 'group' && rootKind !== 'clipRect' && rootKind !== 'leaf') {
+    if (rootKind !== 'group' && rootKind !== 'clipRect' && rootKind !== 'clipPath' && rootKind !== 'leaf') {
       throw new Error(`[WasmBridge] PageLayerTree JSON shape 오류 (page=${pageNum}): 알 수 없는 root.kind=${String(rootKind)}`);
     }
     if (tree.profile !== profile) {
@@ -1963,6 +1963,7 @@ export class WasmBridge {
     }>;
     borderFillLenBefore?: number;
     docInfoDirtyBefore?: boolean;
+    borderPaintUndoId?: number | null;
   } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return JSON.parse(this.doc.setCellProperties(sec, parentPara, controlIdx, cellIdx, JSON.stringify(props)));
@@ -1993,6 +1994,7 @@ export class WasmBridge {
         endCol: number;
         id: number | null;
       }>;
+      borderPaintUndoIds?: number[];
     },
   ): { ok: boolean } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
@@ -2000,6 +2002,11 @@ export class WasmBridge {
       applyCellBorderFillIds(sec: number, parentPara: number, controlIdx: number, json: string): string;
     };
     return JSON.parse(doc.applyCellBorderFillIds(sec, parentPara, controlIdx, JSON.stringify(payload)));
+  }
+
+  discardBorderPaintUndo(id: number): void {
+    const doc = this.doc as unknown as { discardBorderPaintUndo?: (id: number) => void };
+    doc?.discardBorderPaintUndo?.(id);
   }
 
   /**

@@ -2221,6 +2221,7 @@ impl LayoutEngine {
                 let mut group_node = RenderNode::new(
                     group_id,
                     RenderNodeType::Group(GroupNode {
+                        paint_transform: None,
                         section_index: Some(section_index),
                         para_index: Some(para_index),
                         control_index: Some(control_index),
@@ -3053,6 +3054,16 @@ impl LayoutEngine {
                 inner_area.height,
             ),
         );
+
+        if let Some(paths) = &text_box.paint_clip {
+            let scale = self.dpi / 7200.0;
+            textbox_node.paint_clip = Some(
+                paths
+                    .iter()
+                    .map(|p| p.map(|x, y| (base_x + x * scale, base_y + y * scale)))
+                    .collect(),
+            );
+        }
 
         // [Task #874 #3 / #930] shortcut.hwp 1 페이지 우측하단 자동번호 "1" 시각 정합:
         // 도형이 원본 (sa.original_*) 대비 확대된 마스터 페이지 글상자는 한컴이 내부

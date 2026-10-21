@@ -2462,6 +2462,10 @@ impl DocumentCore {
                             self.visit(child, active_layer, clip);
                         }
                     }
+                    LayerNodeKind::ClipPath { child, .. } => {
+                        self.cacheable = false;
+                        self.visit(child, active_layer, clip);
+                    }
                     LayerNodeKind::ClipRect {
                         child,
                         clip: node_clip,
@@ -2809,20 +2813,22 @@ impl DocumentCore {
                         );
                     }
                 }
-                LayerNodeKind::ClipRect { child, .. } => collect(
-                    child,
-                    behind,
-                    front,
-                    image_count,
-                    raw_svg_count,
-                    flow_image_count,
-                    flow_raw_svg_count,
-                    has_behind,
-                    has_front,
-                    occlusion,
-                    page_background,
-                    active_layer,
-                ),
+                LayerNodeKind::ClipRect { child, .. } | LayerNodeKind::ClipPath { child, .. } => {
+                    collect(
+                        child,
+                        behind,
+                        front,
+                        image_count,
+                        raw_svg_count,
+                        flow_image_count,
+                        flow_raw_svg_count,
+                        has_behind,
+                        has_front,
+                        occlusion,
+                        page_background,
+                        active_layer,
+                    )
+                }
                 LayerNodeKind::Leaf { ops } => {
                     for op in ops {
                         let plane = paint_op_replay_plane_with_layer(op, active_layer);
@@ -3715,6 +3721,9 @@ impl DocumentCore {
             controls: &mut Vec<String>,
             doc: &crate::model::document::Document,
         ) {
+            if node.cell_frame_paint {
+                return;
+            }
             // [Task #1280 v2] 컨트롤별 plane/zOrder/stableIndex 노출 — 렌더 정렬키
             // `paper_node_sort_key`(layout.rs)를 그대로 재사용해 프런트 히트테스트가
             // 겹침 시 "최상단 개체"를 선택할 수 있게 한다.

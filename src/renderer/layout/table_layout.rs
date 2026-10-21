@@ -823,6 +823,7 @@ fn ensure_fragment_horizontal_frame_inside_clip(
 
 pub(super) fn translate_render_subtree_y(node: &mut RenderNode, delta_y: f64) {
     node.bbox.y += delta_y;
+    node.translate_paint_clip_y(delta_y);
     if let RenderNodeType::Line(line) = &mut node.node_type {
         line.y1 += delta_y;
         line.y2 += delta_y;
@@ -3115,7 +3116,7 @@ impl LayoutEngine {
         let object_height = hwpunit_to_px(common.height as i32, self.dpi);
         let top_offset = if matches!(common.vert_rel_to, VertRelTo::Para) {
             hwpunit_to_px(
-                crate::renderer::float_placement::cell_wrap_vertical_offset_hu(common).max(0),
+                crate::renderer::float_placement::cell_wrap_vertical_offset_hu(common),
                 self.dpi,
             )
         } else {
@@ -3124,7 +3125,11 @@ impl LayoutEngine {
         top_offset + object_height
     }
 
-    pub(crate) fn calc_cell_wrap_objects_bottom_height(&self, paragraphs: &[Paragraph]) -> f64 {
+    pub(crate) fn calc_cell_wrap_objects_bottom_height(
+        &self,
+        paragraphs: &[Paragraph],
+        styles: &ResolvedStyleSet,
+    ) -> f64 {
         let saved_picture_extent =
             crate::renderer::float_placement::stored_cell_flow_picture_extent_hu(
                 paragraphs,
@@ -3139,7 +3144,8 @@ impl LayoutEngine {
         let mut prev_extent = 0.0f64;
         paragraphs
             .iter()
-            .map(|p| {
+            .enumerate()
+            .map(|(pi, p)| {
                 let first_vpos = p
                     .line_segs
                     .first()
@@ -3160,10 +3166,19 @@ impl LayoutEngine {
                     .fold(0.0f64, f64::max);
                 let objects_above_line = probe_object_bottom > 0.0
                     && prev_extent + probe_object_bottom <= first_vpos + 0.5;
+                let before = crate::renderer::cell_paragraph_spacing::paragraph_before(
+                    p,
+                    pi,
+                    styles
+                        .para_styles
+                        .get(p.para_shape_id as usize)
+                        .map_or(0.0, |s| s.spacing_before),
+                    self.dpi,
+                );
                 let para_top = if objects_above_line {
                     prev_extent
                 } else {
-                    first_vpos
+                    before.stored_anchor_top(first_vpos)
                 };
                 let para_extent = p
                     .line_segs
@@ -5659,7 +5674,7 @@ impl LayoutEngine {
         let object_based = self
             .calc_nested_controls_bottom_height(&composed_paras, paragraphs, styles)
             .max(self.calc_non_inline_controls_flow_height(paragraphs))
-            .max(self.calc_cell_wrap_objects_bottom_height(paragraphs));
+            .max(self.calc_cell_wrap_objects_bottom_height(paragraphs, styles));
         (line_based_height, object_based)
     }
 
@@ -8026,18 +8041,21 @@ impl LayoutEngine {
                                     .max(0.0),
                                 ..inner_area
                             };
-                            // [#6494] 나란히 무리에서는 음수 세로 오프셋을 버린다 — 위 주석 참조.
+                            // The displaced-flow correction cannot apply to overlay
+                            // pictures: they do not move their host paragraph. Their
+                            // signed offset still selects the declared source origin.
+                            let reset_group_flow_offset = side_by_side_float_group && !overlay_para;
                             let flow_offset =
                                 crate::renderer::float_placement::cell_wrap_vertical_offset_hu(
                                     &pic.common,
                                 );
                             let positioned_common = (flow_offset
                                 != signed_hwpunit(pic.common.vertical_offset)
-                                || (side_by_side_float_group
+                                || (reset_group_flow_offset
                                     && signed_hwpunit(pic.common.vertical_offset) < 0))
                                 .then(|| {
                                     let mut c = pic.common.clone();
-                                    c.vertical_offset = if side_by_side_float_group {
+                                    c.vertical_offset = if reset_group_flow_offset {
                                         0
                                     } else {
                                         flow_offset as u32
@@ -8306,6 +8324,11 @@ impl LayoutEngine {
                             );
                             let pic_y = if let Some(origin) = planned_picture_origin {
                                 inner_area.y + origin
+                            } else if overlay_para {
+                                // Overlay paint may straddle the cell edge (e.g.
+                                // a border's half stroke). The cell clip owns its
+                                // visibility; moving the bitmap changes its paint.
+                                pic_y
                             } else {
                                 let cell_top = content_cell_y.min(inner_area.y);
                                 let cell_bottom = (content_cell_y + cell_h)
@@ -10143,7 +10166,7 @@ impl LayoutEngine {
                     styles,
                 );
                 let wrap_object_bottom =
-                    self.calc_cell_wrap_objects_bottom_height(&cell.paragraphs);
+                    self.calc_cell_wrap_objects_bottom_height(&cell.paragraphs, styles);
                 if cell.paragraphs.iter().any(|para| {
                     para.controls
                         .iter()
@@ -10359,7 +10382,7 @@ impl LayoutEngine {
             // + 282(`tc cellSz height` = cellMargin top+bottom, 곧 글 내용 높이 0).
             let non_flow_object_extent = self
                 .calc_nested_controls_bottom_height(&composed_paras, &cell.paragraphs, styles)
-                .max(self.calc_cell_wrap_objects_bottom_height(&cell.paragraphs))
+                .max(self.calc_cell_wrap_objects_bottom_height(&cell.paragraphs, styles))
                 .max(self.calc_non_inline_controls_flow_height(&cell.paragraphs));
             // [#2148 #2279] 저장 vpos 흐름이 물리적으로 줄들을 담지 못하는 퇴화
             // 형상(다문단 전부 vpos=0 등, 36399374 pi=79 병합 셀: extent 35px vs
@@ -15793,7 +15816,8 @@ impl LayoutEngine {
                             .cells
                             .iter()
                             .map(|c| {
-                                let obj = self.calc_cell_wrap_objects_bottom_height(&c.paragraphs);
+                                let obj = self
+                                    .calc_cell_wrap_objects_bottom_height(&c.paragraphs, styles);
                                 if obj <= 0.0 {
                                     return 0.0;
                                 }

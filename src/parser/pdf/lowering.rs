@@ -32,6 +32,20 @@ pub(super) fn rgb(c: Color) -> u32 {
     channel(c.r) | (channel(c.g) << 8) | (channel(c.b) << 16)
 }
 
+/// PDF BaseFont may be a PostScript face name, whereas HWP stores a family.
+/// This exact pair is independently present in Arial's OpenType name records
+/// (nameID 6 / nameID 1). Do not guess a family by deleting arbitrary suffixes.
+fn imported_font_family(name: &str) -> &str {
+    let base = name
+        .split_once('+')
+        .filter(|(tag, _)| tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()))
+        .map_or(name, |(_, family)| family);
+    match base {
+        "ArialMT" => "Arial",
+        _ => base,
+    }
+}
+
 pub(super) fn component(width: u32, height: u32) -> ShapeComponentAttr {
     ShapeComponentAttr {
         original_width: width,
@@ -75,7 +89,7 @@ fn text_para(text: &str, shape: u32, width: u32, size: u32) -> Paragraph {
         .chars()
         .map(|c| {
             let offset = length;
-            length += c.len_utf16() as u32;
+            length += Paragraph::char_stream_len(c);
             offset
         })
         .collect();
@@ -118,8 +132,17 @@ pub(super) fn lower(
     let (left, bottom, right, top) = page.media_box;
     let section = doc.sections.len() - 1;
     let pd = &mut doc.sections[section].section_def.page_def;
-    pd.width = hu(right - left)?;
-    pd.height = hu(top - bottom)?;
+    let width = hu(right - left)?;
+    let height = hu(top - bottom)?;
+    // HWP stores the portrait paper dimensions and applies orientation when
+    // deriving the physical page. A wide MediaBox with portrait orientation
+    // renders locally but Hancom normalizes it to a narrow page on printing.
+    pd.landscape = width > height;
+    (pd.width, pd.height) = if pd.landscape {
+        (height, width)
+    } else {
+        (width, height)
+    };
     pd.margin_left = 0;
     pd.margin_right = 0;
     pd.margin_top = 0;
@@ -316,24 +339,24 @@ pub(super) fn lower(
     }
 
     let mut unknown_fonts = 0;
+    let mut font_identity_mappings = std::collections::BTreeMap::new();
+    // These are all fields changed from the common scaffold shape below.
+    // Reuse equal source styles within a page instead of allocating one per
+    // PDF text-show. Source spans and paint order remain separately recorded.
+    let mut source_shapes = std::collections::BTreeMap::new();
     for (span_index, span) in page.spans.iter().enumerate() {
         if span.text.is_empty() {
             continue;
-        }
-        if span.rotation_degrees != 0.0 || span.wmode != 0 || span.mirrored {
-            return Err("rotated/vertical/mirrored text requires additional lowering".into());
         }
         let font_name = if span.font_name == "Unknown" || span.font_name.is_empty() {
             unknown_fonts += 1;
             "함초롬바탕"
         } else {
-            // ISO 32000-1 9.6.4: a six-uppercase-letter subset tag is not
-            // part of the installed font family/PostScript name.
-            span.font_name
-                .split_once('+')
-                .filter(|(tag, _)| tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()))
-                .map_or(span.font_name.as_str(), |(_, family)| family)
+            imported_font_family(&span.font_name)
         };
+        if font_name == "Arial" && span.font_name != "Arial" {
+            font_identity_mappings.insert(span.font_name.as_str(), font_name);
+        }
         let font_id = if let Some(i) = doc.doc_info.font_faces[0]
             .iter()
             .position(|f| f.name == font_name)
@@ -355,8 +378,53 @@ pub(super) fn lower(
         cs.bold = span.font_weight.is_bold();
         cs.italic = span.is_italic;
         cs.text_color = rgb(span.color);
-        let shape = doc.doc_info.char_shapes.len() as u32;
-        doc.doc_info.char_shapes.push(cs);
+        // PDF space advances belong to the source font/text state, not HWP's
+        // default half-em space. Select the existing common IR contract only
+        // when measured origin-to-origin spaces agree with the declared metric.
+        // Nominal char_widths omit TJ/Tw displacement, so they cannot prove it.
+        if let Some(metric) =
+            crate::renderer::font_metrics_data::find_metric(font_name, cs.bold, cs.italic)
+        {
+            if let Some(space) = metric.metric.get_width(' ') {
+                let expected = span.font_size * f32::from(space) / f32::from(metric.metric.em_size);
+                let source_spaces: Vec<_> = span
+                    .text
+                    .chars()
+                    .enumerate()
+                    .filter(|(_, ch)| *ch == ' ')
+                    .map(|(i, _)| {
+                        span.char_x_offsets
+                            .get(i + 1)
+                            .zip(span.char_x_offsets.get(i))
+                            .map(|(next, here)| next - here)
+                    })
+                    .collect();
+                if span.char_x_offsets.len() == span.text.chars().count()
+                    && !source_spaces.is_empty()
+                    && source_spaces
+                        .iter()
+                        .all(|width| width.is_some_and(|width| (width - expected).abs() <= 0.01))
+                {
+                    cs.use_font_space = true;
+                }
+            }
+        }
+        let key = (
+            font_id,
+            cs.base_size,
+            cs.bold,
+            cs.italic,
+            cs.text_color,
+            cs.use_font_space,
+        );
+        let shape = if let Some(&id) = source_shapes.get(&key) {
+            id
+        } else {
+            let id = doc.doc_info.char_shapes.len() as u32;
+            doc.doc_info.char_shapes.push(cs);
+            source_shapes.insert(key, id);
+            id
+        };
         // On the supported unrotated path, bbox.y is a baseline. Exact font metrics remain a limitation.
         let attrs = common(
             span.bbox.x - left,
@@ -371,7 +439,7 @@ pub(super) fn lower(
         let mut paragraph = text_para(&text, shape, width, height);
         paragraph.para_shape_id = single_line_id;
         paragraph.char_count_msb = true;
-        let rect = RectangleShape {
+        let mut rect = RectangleShape {
             common: attrs,
             x_coords: [0, width as i32, width as i32, 0],
             y_coords: [0, 0, height as i32, height as i32],
@@ -381,6 +449,11 @@ pub(super) fn lower(
                 text_box: Some(TextBox {
                     max_width: width,
                     text_margin_explicit: true,
+                    paint_clip: super::text_clip::local_paths(
+                        page.span_clips[span_index].as_deref(),
+                        span.bbox.x,
+                        span.bbox.y + span.font_size * 0.95,
+                    )?,
                     paragraphs: vec![paragraph],
                     ..Default::default()
                 }),
@@ -388,6 +461,12 @@ pub(super) fn lower(
             },
             ..Default::default()
         };
+        super::rotated_text::apply(
+            &mut rect,
+            span,
+            page.media_box,
+            page.span_clips[span_index].as_deref(),
+        )?;
         paint_orders.push((owner.controls.len(), page.span_orders[span_index].clone()));
         owner
             .controls
@@ -434,6 +513,7 @@ pub(super) fn lower(
         "singleLineParagraphs":"SQUEEZE",
         "detectedTables":detected, "semanticTables":0,
         "unsupportedPaths":unsupported_paths, "unknownFontSpans":unknown_fonts,
+        "fontIdentityMappings":font_identity_mappings,
         "compatibilityCorrections":["picture-point-pair-layout", "picture-frame-HWPUNIT", "full-image-crop-extent", "explicit-zero-text-margins", "single-line-span-reflow"],
         "hancomCompatibility":"unverified-awaiting-editor-retest",
         "warnings":warnings

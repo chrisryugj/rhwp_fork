@@ -63,7 +63,7 @@ export function collectHostFontRequests(tree: PageLayerTree): LocalFontRecord[] 
   while (stack.length) {
     const node = stack.pop()!;
     if (node.kind === 'group') stack.push(...node.children);
-    else if (node.kind === 'clipRect') stack.push(node.child);
+    else if ((node.kind === 'clipRect' || node.kind === 'clipPath')) stack.push(node.child);
     else for (const op of node.ops) {
       if (op.type === 'equation') {
         for (const family of hancomEquationFamilies(op.layoutBox)) {

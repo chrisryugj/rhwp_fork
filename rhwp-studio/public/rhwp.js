@@ -2145,6 +2145,13 @@ export class HwpDocument {
         }
     }
     /**
+     * Discard source-border fragments owned by an evicted undo entry.
+     * @param {number} id
+     */
+    discardBorderPaintUndo(id) {
+        wasm.hwpdocument_discardBorderPaintUndo(this.__wbg_ptr, id);
+    }
+    /**
      * 삭제 조각을 제거하여 메모리를 해제한다 — 히스토리 축출·클리어 시 스냅샷
      * `discardSnapshot` 과 짝으로 호출한다(#5769).
      * @param {number} id
@@ -11997,6 +12004,11 @@ export function version() {
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
+        __wbg___wbindgen_boolean_get_c9c83ebd41b34df3: function(arg0) {
+            const v = arg0;
+            const ret = typeof(v) === 'boolean' ? v : undefined;
+            return isLikeNone(ret) ? 0xFFFFFF : ret ? 1 : 0;
+        },
         __wbg___wbindgen_is_function_5e4570eb24ffa122: function(arg0) {
             const ret = typeof(arg0) === 'function';
             return ret;
@@ -12071,6 +12083,9 @@ function __wbg_get_imports() {
         },
         __wbg_clip_11b699e637bb5b4c: function(arg0) {
             arg0.clip();
+        },
+        __wbg_clip_19f3482515ce11e2: function(arg0, arg1) {
+            arg0.clip(__wbindgen_enum_CanvasWindingRule[arg1]);
         },
         __wbg_closePath_c56cc36eea49716f: function(arg0) {
             arg0.closePath();
@@ -12467,6 +12482,7 @@ function __wbg_get_imports() {
     };
 }
 
+const __wbindgen_enum_CanvasWindingRule = ["nonzero", "evenodd"];
 const DocumentExportFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_documentexport_free(ptr, 1));
