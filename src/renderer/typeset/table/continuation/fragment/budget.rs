@@ -712,6 +712,28 @@ impl TypesetEngine {
                 vert_offset_overhead,
             )
         });
+        let fragment_placement = fragment_placement.or_else(|| {
+            (!is_continuation
+                && cursor_row == 0
+                && start_cut.is_empty()
+                && (st.profile.hwp5_stored_pagination_layout() || st.profile.hwpx_stored_layout())
+                && !st.profile.session_edited()
+                && st.current_zone_y_offset.abs() < f64::EPSILON
+                && table_footnotes.is_empty()
+                && st.current_footnote_height <= 0.0
+                && !self.render_normalization.table_text_reflowed(table)
+                && table.cells.iter().all(|cell| !cell.dirty_flag))
+            .then(|| {
+                let previous = input.source.paragraphs_all.get(para_idx.checked_sub(1)?)?;
+                let before = input.source.styles.para_styles
+                    .get(para.para_shape_id as usize)?.spacing_before;
+                crate::renderer::float_placement::ParagraphFloatPlacement::from_stored_empty_overlay_host(
+                    previous, para, table, st.current_height, before,
+                    st.vpos_page_base.unwrap_or(0), self.dpi,
+                )
+            })
+            .flatten()
+        });
         let mut fragment_placement = fragment_placement.or_else(|| {
             let spacing_before = input
                 .source

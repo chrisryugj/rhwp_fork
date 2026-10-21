@@ -9508,6 +9508,22 @@ impl LayoutEngine {
                         .map(|style| style.spacing_before)
                         .unwrap_or(0.0);
                     y_offset = col_area.y + origin - spacing_before;
+                    // 인증한 빈 장식 호스트의 줄 축도 같은 원점에서 다시 연다.
+                    // 이전 쪽에서 숨긴 안내 줄의 간격으로 lazy 기준을 역산하지 않는다.
+                    let host = &paragraphs[item_para];
+                    if host.text.is_empty()
+                        && matches!(host.controls.as_slice(), [Control::Table(table)]
+                            if !table.common.treat_as_char && matches!(table.common.text_wrap,
+                                crate::model::shape::TextWrap::InFrontOfText
+                                | crate::model::shape::TextWrap::BehindText))
+                    {
+                        if let Some(line) = host.line_segs.first().filter(|line| {
+                            line.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
+                                == 0
+                        }) {
+                            hcursor.seed_stored_flow_origin(line.vertical_pos, col_area.y + origin);
+                        }
+                    }
                 }
             }
             if matches!(
@@ -15918,7 +15934,11 @@ impl LayoutEngine {
                             && paragraphs
                                 .get(*para_index)
                                 .and_then(|para| para.controls.get(*control_index))
-                                .is_some_and(|control| matches!(control, Control::Shape(_)))
+                                .is_some_and(|control| {
+                                    matches!(control, Control::Shape(_))
+                                        || (matches!(control, Control::Table(_))
+                                            && frame.stored_host_origin.is_some())
+                                })
                     })
                     .map(|frame| col_area.y + frame.anchor_y);
                 let ordinary_para_y = accepted_shape_origin
