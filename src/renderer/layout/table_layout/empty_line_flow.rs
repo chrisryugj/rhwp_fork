@@ -111,7 +111,9 @@ impl LayoutEngine {
             return para.controls.is_empty();
         }
         // 실제 종료 줄은 뒤 문단이 없어도 앞 저장 메트릭의 닫힘으로 소유를 증명한다.
-        if closed_stored_empty_line_owns_advance(cell, unit, styles, self.dpi) {
+        if closed_stored_empty_line_owns_advance(cell, unit, styles, self.dpi)
+            || self.closed_nested_frame_owns_following_empty_line(cell, table, unit, styles)
+        {
             return true;
         }
         let Some(next) = cell.paragraphs.get(unit.para_idx + 1) else {
