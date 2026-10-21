@@ -16117,7 +16117,7 @@ impl LayoutEngine {
                             false,
                             false,
                             false,
-                            false,
+                            cut.owns_stored_frame,
                             cut.end_row_height,
                             None,
                             &[],

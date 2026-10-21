@@ -748,6 +748,8 @@ pub struct OverlayCut {
     pub end_row: usize,
     pub end_cut: Vec<usize>,
     pub end_row_height: Option<f64>,
+    /// 내용 컷 밖의 물리 띠까지 인증한 원본 프레임의 정렬 소유.
+    pub owns_stored_frame: bool,
 }
 
 /// 한 행의 앞/뒤 조각은 동일한 셀 유닛 컷과 점유 높이를 소비한다.
@@ -756,6 +758,7 @@ pub struct OverlayRowFragment {
     pub end_cut: Vec<usize>,
     pub opening_height: f64,
     pub remaining_height: f64,
+    pub owns_stored_frame: bool,
 }
 
 /// [#4568] 쪽을 넘긴 overlay 표의 잔여 행 조각.

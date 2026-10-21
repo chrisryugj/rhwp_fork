@@ -298,6 +298,106 @@ impl LayoutEngine {
         Some((first.para_idx, before))
     }
 
+    /// 닫힌 TAC 다음의 원본 재시작은 첫 Common 프레임을 끝낸다.
+    /// 선택 내용과 물리 빈 띠를 구분하며, 앞 행이 자랐으면 원본 좌표를 재사용하지 않는다.
+    pub(crate) fn stored_inline_opening_row_frame(
+        &self,
+        table: &Table,
+        row: usize,
+        end: &[usize],
+        measured_rows: &[f64],
+        styles: &ResolvedStyleSet,
+    ) -> Option<f64> {
+        if !self.stored_row_boxes_exceed_first_frame(table) || row >= measured_rows.len() {
+            return None;
+        }
+        let source_rows = table.get_raw_row_heights();
+        let spacing = crate::renderer::hwpunit_to_px(table.cell_spacing as i32, self.dpi);
+        let prefix = measured_rows[..row].iter().sum::<f64>() + spacing * row as f64;
+        let source_prefix = source_rows
+            .get(..row)?
+            .iter()
+            .map(|&height| crate::renderer::hwpunit_to_px(height as i32, self.dpi))
+            .sum::<f64>()
+            + spacing * row as f64;
+        let epsilon = crate::renderer::hwpunit_to_px(2, self.dpi);
+        if (prefix - source_prefix).abs() > epsilon {
+            return None;
+        }
+        let height = crate::renderer::hwpunit_to_px(table.common.height as i32, self.dpi) - prefix;
+        let cells = Self::row_cut_cell_order(table, row);
+        if cells.is_empty() || cells.len() != end.len() || height <= 0.0 {
+            return None;
+        }
+        let mut owns_reset = false;
+        for (&index, &cut) in cells.iter().zip(end) {
+            let cell = table.cells.get(index)?;
+            if cell.dirty_flag
+                || cell.row_span != 1
+                || cell.row as usize != row
+                || height >= crate::renderer::hwpunit_to_px(cell.height as i32, self.dpi)
+            {
+                return None;
+            }
+            let units = self.cell_units(cell, table, styles);
+            if cut == units.len() {
+                continue;
+            }
+            let next = units.get(cut)?;
+            let previous = units.get(cut.checked_sub(1)?)?;
+            if previous.para_idx >= next.para_idx || next.vis_start != 0 {
+                return None;
+            }
+            let before = self.stored_inline_owner_frame(table, cell, previous.para_idx, styles)?;
+            let after = self.stored_inline_owner_frame(table, cell, next.para_idx, styles)?;
+            let paragraph = &cell.paragraphs[next.para_idx];
+            let lead = styles
+                .para_styles
+                .get(paragraph.para_shape_id as usize)?
+                .spacing_before;
+            if after.line_top_hu != crate::renderer::px_to_hwpunit(lead, self.dpi)
+                || before.line_top_hu <= after.line_top_hu
+            {
+                return None;
+            }
+            let paragraphs = cell.paragraphs.get(..next.para_idx)?;
+            let mut source_end = 0;
+            for paragraph in paragraphs {
+                if paragraph.stored_text_partition_is_dirty()
+                    || paragraph.cell_format_vpos_dirty
+                    || paragraph.line_segs.is_empty()
+                {
+                    return None;
+                }
+                for line in &paragraph.line_segs {
+                    if line.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY != 0
+                        || line.vertical_pos < source_end
+                        || line.line_height <= 0
+                        || line.line_spacing < 0
+                    {
+                        return None;
+                    }
+                    source_end = line.vertical_pos;
+                }
+            }
+            let closing = cell.paragraphs[previous.para_idx].line_segs.last()?;
+            let expected = crate::renderer::hwpunit_to_px(
+                closing
+                    .vertical_pos
+                    .checked_add(closing.line_height)?
+                    .checked_add(closing.line_spacing)?,
+                self.dpi,
+            );
+            let advance: f64 = units[..cut].iter().map(|unit| unit.height).sum();
+            if (advance - expected).abs() > epsilon {
+                return None;
+            }
+            owns_reset = true;
+        }
+        let content = self.row_cut_content_height(table, row, &[], end, styles);
+        (owns_reset && height >= content).then_some(height)
+    }
+
     /// 다음 저장 쪽의 TAC를 소비하지 않아도 현재 쪽의 행 상자는 본문 끝을 소유한다.
     /// 내용 컷과 빈 물리 띠를 분리하며, 원점0 재시작·닫힌 원본 호스트를 함께 확인한다.
     pub(crate) fn stored_inline_restart_row_end_frame(

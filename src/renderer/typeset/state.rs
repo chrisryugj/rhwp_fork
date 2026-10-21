@@ -375,6 +375,7 @@ impl TypesetState {
                 crate::renderer::pagination::OverlayCut {
                     end_row: continuation.first_unfit + usize::from(fragment.is_some()),
                     end_row_height: fragment.as_ref().map(|f| f.opening_height),
+                    owns_stored_frame: fragment.as_ref().is_some_and(|f| f.owns_stored_frame),
                     end_cut: fragment.map_or_else(Vec::new, |f| f.end_cut),
                 },
             ));
