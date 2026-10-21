@@ -1,11 +1,23 @@
-# planet6897 누적 PR 26개 체리픽 통합 계획 — 2026-10-18
+# planet6897 누적 PR 27개 체리픽 통합 계획 — 2026-10-18
 
 ## 현재 누적 범위
 
-누적 검토 범위는 원 PR 26개다. 현재 고정 기준은
-`2e3b4f880bd11d35398e6ea0100846611f13a72d`이며, 실제 Git 이력의 source trailer는
-114개다. 최신 대조 원장은 `submission-authoritative-source-map.json`과 추가 출처
-원장에 있다. 최초 11개 적용 표와 아래의 과거 SHA·입력 수는 당시 스냅샷으로 읽는다.
+현재 누적 범위는 원 PR 27개이며 원 기여 124개를 메인터너 보정보다 앞에 유지한다.
+고정 기준은 #8132를 반영한 `f45878c7caafb43ca1fd017ddd93484a0acc6ad2`,
+현재 코드 후보는 `8be45687fc55b5cf2055ce5b9160f020015e256e`다. 충돌 구간은
+사용자 지시에 따라 #8132를 우선했다. 원 PR별 본문·댓글·review 원장은
+`output/pr-review/planet6897-20261018/source27-review-context-20261021.json`에 있다.
+
+원래 보정 범위의 61개 입력, 후속 실패 보정의 83818·유효 번호 대조군, 기존 대조군을
+합친 72개 입력은 새 base와 후보에서 Native/fresh WASM 전쪽 TSV를 대조한다.
+새 base의 #8132 입력 37개도 별도로 같은 두 backend에서 기능 보존을 확인한다.
+후보의 Native 핵심 55건과 148738070 전 7쪽의 Native/fresh WASM·직접 경계 판독은 통과했다.
+Studio 단위 2,356건·TypeScript·배포 빌드·실제 브라우저 3종·Native FFI/Qt도 통과했다.
+새 3건의 관계·좌표 회귀는 현재 라이브러리에서 통과했고, 정확한 수정 전 실패 입증과
+최종 전쪽 비교·전체 회귀·lint·Skia 검증을 진행 중이다. 아직 PR을 생성하지 않았다.
+최초 11개 적용 표와 아래의 과거 SHA·입력 수·통과 수는 당시 스냅샷으로 읽는다.
+
+### 이전 단계 요약
 
 작업지시자가 지정한 현재 보정 대상은 61개 입력·backend별 1,462쪽이다. 이미 이관한
 14개 조건과 현재 보정과 무관한 보존 입력 184개로 검증 범위를 다시 넓히지 않는다.
@@ -8888,3 +8900,43 @@ HWP 대체 face/type 파서·직렬화와 글꼴 추적 증적, Studio의 첫 �
 최적화 기준 WASM과 실제 브라우저의 대체 준비·늦은 local face·preflight 캐시·
 provider 해제도 실제 실행했으며 응답 bytes를 생산자와 대조했다.
 후보 fresh WASM과 최종 전쪽·전체 회귀·남은 게이트는 이 Native 결과로 대체하지 않는다.
+
+
+### 2026-10-22 시스템 한도·디스크 정리와 최적화 WASM의 실제 검증
+
+사용자 승인에 따라 ubuntu-ted·ubuntu-ted2·ubuntu-ted3의 사용자별 inotify 한도를
+watches 65,536→524,288, instances 128→1,024로 올리고
+`/etc/sysctl.d/99-zz-rhwp-inotify.conf`에 영구 반영했다. queued_events 16,384는 유지했다.
+사용 중인 VS Code를 종료하지 않았으며, 조정 뒤 #8132 기준 브라우저 3종과 후보 3종에
+기존 ENOSPC가 재발하지 않았다. 호스트별 명령·전후 값은
+`output/pr-review/planet6897-20261018/inotify-host-tuning-20261021.json`에 있다.
+
+종료·소유·사용 중 여부와 정확한 경로를 확인한 Puppeteer 캐시 및 검토용 증분 캐시를
+정리해 세 호스트 합계 실제 여유 공간 약 48.09GiB를 확보했다. ted의 Cargo 작업은
+실행 중이므로 그 증분 캐시는 보존했다. 의존성·fingerprint·바이너리·검증 증거·golden은
+이 정리에서 제거하지 않았다. 전후 여유 공간과 제거 경로는 같은 output의
+`disk-cleanup-20261021.json`에 기록했다.
+
+초기 WASM 실행에서 공유 target의 이전 base 산출물 재사용을 실제 9쪽 출력으로 검출했다.
+그 패키지는 후보 증거에서 제외하고, 현재 runtime/build 입력의 바이트를 유지한 채 mtime만
+갱신해 실제 `Compiling rhwp`를 확인했다. 새 최적화 패키지 SHA-256은
+`964c7148f441d08f7bc8b2f35b643106ed88317441b2b392fea4866aab0f305f`다.
+Native/fresh WASM 148738070 전체 7쪽의 raw 최저는 각각 98.34102%·98.38504%이며,
+3·4·5·6쪽 review를 직접 열어 실제 하단선·마지막 첨부 문구·후속 표의 소속과 순서를 확인했다.
+기존 글꼴 모양·획 굵기 차이는 남아 있으며 그 차이까지 해결했다는 주장은 하지 않는다.
+
+정식 `issue_5585_overlapping_line_boxes_are_not_resets`의 선택적 외부 코퍼스·조용한 return과
+500px 고정 영역을 커밋된 원본·독립 7쪽 Print의 소유·내용 보존 관계로 바꾼다. 어려웠던
+3·4쪽 이어받기 하단·5쪽 종료 하단과, 같은 후속 본문의 공동 raw 최솟값이 가장 높은
+6쪽 표 외곽에는 독립 좌표 ±2px를 적용한다. 이 쪽들은 양쪽 raw 98% 이상이며 관계 검사도
+함께 유지한다. 전쪽 TSV·대표 review/overlay/compare와 독립 근거는
+[완료된 감싼 표 프레임 증거](../pr/assets/issue_7840/completed_wrapper_frame/README.md)에 보존했다.
+현재 3건은 모두 PASS다. 기존 보존 라이브러리의 오래된 의존성 메타데이터가 현재 target과
+맞지 않아 수정 전 실행은 보정 직전 `c017c4da82`의 실제 재빌드로 보완 중이다.
+
+새 패키지를 실제로 로딩한 Studio 글꼴 준비·CanvasKit provider·Canvas2D provider 3종은
+기능과 200 응답의 WASM/JS 바이트 동일성 검사를 모두 통과했다. TypeScript, 단위 2,356건,
+배포 빌드도 통과했다. Native FFI 빌드와 Qt 어댑터 25건·실제 렌더·합성 한글 IME·
+클립보드·저장/재열기도 통과했다. OS IME 검증으로 확대하지 않는다. Visual Sweep 도구의
+Python 36건·Node 8건도 통과했다. 이 결과는 남은 최종 전체 Rust·lint·Skia·전쪽 비교를
+대체하지 않으며 아직 제출 준비 완료로 판정하지 않는다.
