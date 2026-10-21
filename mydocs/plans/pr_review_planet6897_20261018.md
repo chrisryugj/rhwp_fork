@@ -8654,3 +8654,42 @@ PrintMethod=0·one-up으로 출력했다(job ca0188db-9afb-454b-a0ea-3138ea3c149
 정상 조판의 근거로 사용하던 주석도 정정했다. 상속된 appVersion은 실제 저장
 제품의 출처 증거가 아니다. 폭 불일치 대조군의 실제 출력 보정·90% 재검증은
 여전히 남아 있으며 새 정상 fixture나 회귀 검사로 추가하지 않았다.
+
+
+### 148738070의 마지막 저장 줄·닫는 괘선 공통 상자
+
+새 Native 직접 판독에서 5쪽 마지막 첨부 목록의 기준선 809.333px가 실제 괘선
+794.667px 아래에 있었다. Table/Cell bbox만 812px까지 확장된 통과를 실제 테두리
+계약으로 수용하지 않는다. 독립 Print의 괘선은 624.276978pt(832.369304px)다.
+원본 마지막 빈 줄도 vpos 54036HU와 높이 800HU로 공간을 소유한다. 그 끝 54836HU와
+실효 안 여백 141+141HU, 바깥 여백 283+283HU의 합은 55684HU이며, 바로 뒤 빈
+본문 문단의 원본 vpos 55684HU와 정확히 닫힌다. 문서 ID나 화면 좌표 조건이 아니다.
+
+기존 stored_single_cell_closing_frame_bottom은 바깥 아래 여백이 0일 때만 후속
+저장 프레임을 소비했다. 여백이 있더라도 위 독립 종료식으로 입증된 괘선 하단을
+계산하고, 기존 emit의 end_row_height_override를 통해 예약·행 높이·셀·edge grid가
+같은 값을 소비하도록 보정한다. 마지막 줄의 빈 문자열을 비점유로 취급하지 않는다.
+기존 여백 0의 계약은 유지한다. 저장 줄이 합성·dirty이거나 닫힘을 입증하지 못하면
+이 새 프레임으로 수용하지 않는다. 수정 전 실제 라이브러리의 관계 진단은 마지막
+첨부 기준선이 괘선 안에 있어야 한다는 이유로 FAIL(exit 101)했다. 원장은
+`148738070-current-boundary-review-20261021/`의 source-witness·frame-diagnostic·
+terminal-border-before이며, 보정 뒤 실제 출력·정상 대조군·전쪽 양쪽 검증은 남아 있다.
+
+
+보정 Native 빌드는 6분 33초·exit 0이며 실제 마지막 괘선 관계와 정상 대조군
+18건이 PASS였다. 저장소 원본을 항상 읽고 마지막 원문·실제 괘선·후속 두 쪽의
+표 소유와 6쪽 독립 좌표를 보호하는 검사 초안도 2 PASS였다. 아직 정식 검사를
+바꾸지 않았고 새 fresh WASM 전쪽·직접 판독을 확인한 뒤 반영한다.
+
+같은 전 7쪽 Native TSV에서 5쪽 raw가 95.50722 → 98.40193%(+2.89471%p)로
+올랐고 나머지 여섯 쪽은 원래 점수와 정확히 같았다. 표의 실제 아래 괘선은
+794.667 → 약 833.17px로 이동해 독립 PDF 832.3693px와 1px 안에서 닫혔다.
+새 review/overlay에서 마지막 두 첨부 문구의 셀 내부 표시와 후속 6쪽의 내용·
+표 위치 보존을 판독했다. 글꼴 획·안티앨리어싱의 잔여 차이는 남는다.
+원장은 `148738070-terminal-frame-trial-20261021/` 아래 native-results, verification-results,
+revised-guard-draft-results, native-before-after와 direct-review다.
+
+검증 준비 공간은 실행 중 Cargo/Rust/wasm-opt 및 열린 파일 참조가 없는 것을 확인한
+뒤 72시간 이상 지난 검토용 debug/incremental 하위 311개만 정리해 약 7.66GB를
+확보했다. target/pr-review 자체·deps·프로필·현재 바이너리·증적은 보존했다.
+정리 원장은 `terminal-frame-pre-gates-incremental-cleanup-20261021.json`이다.

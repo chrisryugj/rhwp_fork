@@ -2366,7 +2366,6 @@ pub(crate) fn stored_single_cell_closing_frame_bottom(
         || !is_para_topbottom_float(&table.common)
         || table.page_break != TablePageBreak::RowBreak
         || table.caption.is_some()
-        || table.outer_margin_bottom != 0
         || table.common.height == 0
         || table.common.height >= cell.height
         || cell.height > i32::MAX as u32
@@ -2388,7 +2387,12 @@ pub(crate) fn stored_single_cell_closing_frame_bottom(
     {
         return None;
     }
-    Some(hwpunit_to_px(next.vertical_pos, dpi))
+    let bottom = if table.outer_margin_bottom == 0 {
+        next.vertical_pos
+    } else {
+        stored_closed_cell_frame::terminal_cell_border_before_successor_hu(table, successor)?
+    };
+    Some(hwpunit_to_px(bottom, dpi))
 }
 
 /// 독립 두 프레임 종료식으로 입증된 종료 조각 본체 높이.
