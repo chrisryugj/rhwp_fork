@@ -8642,3 +8642,15 @@ PrintMethod=0·one-up으로 출력했다(job ca0188db-9afb-454b-a0ea-3138ea3c149
 77.86014%로, 남은 저장 폭 ±1HU의 세 줄 경계는 별도로 보정해야 한다. 원장은
 `numbered-probe-order-control-20261021/order-diagnosis.json`이며 대조군 통과를
 원본 입력의 통과로 바꿔 보고하지 않는다.
+
+
+### 번호 대조군 생성기의 속성 배열 순서 보정
+
+`make_numbered_stale_tail.py`가 새 paraPr ID 20/21을 ID 0 뒤에 끼워 넣던 오류를
+바로잡아 기존 속성 뒤에 추가한다. 생성기만 수정한 시험 출력의 모든 ZIP member가
+앞서 독립 한컴 Print를 만든 속성 정렬 대조군과 바이트 단위로 같았다. 원장은
+`numbered-probe-order-control-20261021/generator-order-trial-result.json`이다.
+기존 HWP/HWPX와 PDF는 변경·폐기하지 않았으며 기존 HWPX의 번호 누락 관측을
+정상 조판의 근거로 사용하던 주석도 정정했다. 상속된 appVersion은 실제 저장
+제품의 출처 증거가 아니다. 폭 불일치 대조군의 실제 출력 보정·90% 재검증은
+여전히 남아 있으며 새 정상 fixture나 회귀 검사로 추가하지 않았다.

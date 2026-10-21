@@ -15,9 +15,11 @@
 #   numbered_stale_tail.hwp (`rhwp convert` 로 HWP5 변환) → numbered_stale_tail-hwp-2024.pdf:
 #     번호(«-»·«1.») 를 그린 문단은 모두 한 줄(D2·H2·D2f·H2f·H2a·H2b·H2w). 번호 없는 문단은 폭이 맞으면
 #     저장 줄 두 줄(P2·L2·P2f), 폭이 1HU 라도 다르면 한 줄(P2w·L2w·P2W). 줄 flags 는 무관.
-#   numbered_stale_tail.hwpx → numbered_stale_tail-hwpx-2024.pdf: 한/글이 여기서 덧붙인 «-» 번호를
-#     그리지 않았다(H2 글줄 시작이 번호 없는 P2 와 같은 x) — «-» 번호 행은 증거가 아니다. «1.» 번호(D2)와
-#     폭 불일치 행은 HWP5 와 같다. appVersion 9.1.1(2014)·11.0(2020) 둘 다 같은 결과.
+#   기존 numbered_stale_tail.hwpx → numbered_stale_tail-hwpx-2024.pdf는 새 paraPr를 id=0 뒤에
+#     끼워 넣은 생성기 오류를 포함한다. 번호 누락·다른 들여쓰기는 정상 조판 증거가 아니다.
+#   속성 내용은 그대로 두고 ID 순서로 배열한 대조군의 한/글 2024 Print에서는 번호가 복원되고
+#     HWP5와 같은 줄 분할이 관측됐다. 기존 입력·PDF는 원래 실험으로 보존한다.
+#   appVersion은 수동 생성 메타데이터이며 실제 한/글 2014 저장 출처를 입증하지 않는다.
 import sys, zipfile, re
 tpl, out = sys.argv[1], sys.argv[2]
 APP = sys.argv[3] if len(sys.argv) > 3 else None
@@ -36,7 +38,9 @@ DIGIT, DASH = max(ids) + 1, max(ids) + 2
 def numbered(pid, num):
     return pp0.replace('id="0"', 'id="%d"' % pid, 1).replace(
         '<hh:heading type="NONE" idRef="0" level="0"/>', '<hh:heading type="NUMBER" idRef="%d" level="0"/>' % num)
-head = head.replace(pp0, pp0 + numbered(DIGIT, 1) + numbered(DASH, 2), 1)
+# 새 ID는 기존 속성 뒤에 둔다. id=0 바로 뒤에 삽입하면 한컴이 참조 위치를
+# 다른 기존 문단 모양으로 해석해 번호·들여쓰기가 달라진다. 원본 실험은 별도 보존한다.
+head = head.replace('</hh:paraProperties>', numbered(DIGIT, 1) + numbered(DASH, 2) + '</hh:paraProperties>', 1)
 head = re.sub(r'(<hh:paraProperties itemCnt=")(\d+)', lambda m: m.group(1) + str(int(m.group(2)) + 2), head, 1)
 files['Contents/header.xml'] = head.encode()
 
