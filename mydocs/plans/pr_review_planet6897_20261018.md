@@ -7953,3 +7953,71 @@ opt-level 1이며 최종 opt-level 3·fresh WASM 검증과 적격 정식 회귀 
 `issue4514-ending-spacing-{before,after}-probe-results.json`과 해당 실행 로그다.
 Native opt-level 1 진단이며 최종 전체 검증·fresh WASM의 증거가 아니다. 편람 선택 쪽과
 #1535/#6280 대조는 별도 동결 바이너리로 계속 진행한다.
+
+
+### #4514 43쪽: 첫 행도 인증된 Common 첫 프레임을 소유
+
+도입 커밋 108edfbf8은 뒤 행의 좌표 정규화를 위해 첫 행을 일괄 제외했다. 이후
+66bd789e9의 마지막 프레임 판정이 동일 인증을 일반 행 최소 보존 조건으로 소비하면서,
+첫 행의 실제 선언 최소까지 잃었다. pi765는 셀 높이 131554HU=1754.0533px,
+Common 첫 프레임 66084HU=881.12px이고 원본 문단 내부에 실제 양수→0 재시작이 있다.
+앞 조각의 수용 상자 881.1333px를 뺀 잔여 872.92px는 독립 Print 43쪽의 표 하단
+949.361328px와 일치한다. 후보는 인증 함수가 row0을 거부해 내용 끝만 사용하고
+표 하단을 826px 부근에서 닫는다. 가운데 정렬 본문도 함께 위로 이동한다.
+
+첫 행의 원점은 0이므로 동일한 공통 좌표 계산을 사용할 수 있다. row0이라는 이유만으로
+거부하는 조건을 제거하되, 원본·미편집·실제 줄·같은 여백 좌표·문단 내부 재시작·
+Common 끝이 해당 원본 행 안에 있다는 기존 인증은 유지한다. 뒤 행의 최소 보존 조건을
+무조건 완화하거나 Common 전체를 내용 높이로 덮어쓰지 않는다. source frame 인증 →
+ordinary row remainder → 다음 조각 스캔·paint가 같은 상자를 소비하는 경로를 확인한다.
+9·43쪽 독립 Print 경계 진단, 원본 전 46쪽과 압력 방호 전 12쪽, 기존 정상 계약으로
+실제 효과와 반례를 먼저 확인한다. 80168의 올바른 행 최소 제한은 유지한다.
+
+
+압력 방호 보정 커밋 a5d450b62에 대응하는 동결 producer의 보정 대상 61개 입력·전
+1462쪽 Native 진단이 완료됐다. 모든 입력이 독립 PDF와 쪽수가 일치하고 raw 최저는
+92.49647%다. 고정 devel과 쪽수 대응이 가능한 55개 입력에서 0.1%p 이상 하락은 없다.
+기준 쪽수가 다른 6개(soft-hyphen, 1150200, page-anchored-band, 148738070,
+156465345, curriculum-1342000)는 비교 불가 상태를 그대로 기록했다. 후보 자체의
+전쪽 90% 통과를 기준과의 쪽수 대응으로 바꾸어 보고하지 않는다. baseline artifact와
+고정 devel의 실행 소스 차이는 clipboard.rs뿐임을 Git diff로 다시 확인했다.
+정확한 원장은 `closing-picture-and-terminal-empty-line-native-vs-devel-whole.json`이다.
+미수용 overlay 두 파일이 함께 들어간 producer이며, be8a17a53 이후의 새 소스 또는
+최종 opt-level 3·fresh WASM 검증 완료를 뜻하지 않는다.
+
+첫 행 제외 조건만 제거한 후보는 집중 46건·정상 83건·압력 방호 전 12쪽을 유지하지만,
+43쪽 독립 Print 하단 진단은 수정 전후 모두 실패했다. 행 번호 제외만이 유일한 원인이라는
+가설은 이 결과로 기각한다. 아직 수용·커밋하지 않았으며 첫 Common 프레임 인증의
+실제 거부 지점에 진단 로그를 추가해 다음 원인을 확인한다. 이 진단 패치도 최종 코드의
+개선 완료로 계산하지 않는다. wrapper의 종료 0과 내부 테스트 exit 101을 구분해
+`issue4514-ending-spacing-probe-wrapper-result-audit.json`에 대조했고, 다음 진단 wrapper는
+테스트 종료 코드를 그대로 반환하고 컴파일 입력 사본·SHA도 기록하도록 수정했다.
+
+
+실제 거부 로그는 `FIRST_FRAME_OWNER non_single_unit index=0 para=0 range=0..0`이다.
+원본 첫 빈 줄과 다음 빈 구분 줄은 가시 글줄 범위가 0..0이지만 높이는 각각
+(800+1160)/75=26.1333px, (500+724)/75=16.32px다. 기존 `RHWP_DIAG_CELL_UNITS`와
+새 첫 프레임 로그로 양쪽을 확인했다. 공간을 소유한 빈 유닛을 가시 줄 개수만으로
+거부한 가정이 문제다. 첫 행의 같은 좌표 인증과 함께, 실제 단일 저장 빈 줄을 대표하는
+0..0 유닛도 기존 원점·전진·여백 인증을 받게 한다. 유닛 높이와 원본 전진이 다르거나
+저장 줄이 없는 보조 spacer는 여전히 거부한다. 진단용 환경 분기는 제거한다.
+같은 독립 9·43쪽 경계와 전체 원본·정상 대조군을 다시 실행한다.
+
+
+`stored-source-empty-frame-owner`의 실제 검증 결과, 독립 Print 9·43쪽 경계 진단은
+2건 모두 통과했다. 43쪽은 실제 수정 전 FAIL / 수정 후 PASS다. 전 46쪽 TSV에서
+43쪽 raw는 3.56781 → 60.16359%로 고정 devel과 같은 값으로 복구됐다. 표 높이
+873.2px와 첫 대응 글줄 y=141.5px도 base와 같다. 독립 Print와 직접 review를 대조하면
+기존 약 6~7px 본문 위치 차이는 남아 있으므로 원본 전체의 시각 개선 완료로 판정하지 않는다.
+9쪽은 97.58118%를 유지했다. 현재 새 devel 대비 0.1%p 이상 하락이 남은 쪽은
+15·20·29·40쪽이며 정확한 표·노드 차이는
+`issue4514-remaining-base-current-table-geometry.json`,
+`issue4514-p40-matched-node-geometry-differences.json`에 기록했다.
+
+집중 46건과 정상 9+28+46건은 모두 통과했고 압력 방호 전 12쪽 최저 97.80468%도
+유지했다. 편람 HWP/HWPX 선택 8쪽과 #1535 전 2쪽·#6280 전 21쪽의 Native 결과는
+직전 후보와 같다. 원장은 `stored-source-empty-frame-owner-diagnostic-results.json`,
+`stored-source-empty-frame-owner-targeted-visual-results.json`이다. 재현 진단은 컴파일한
+소스 사본과 SHA·내부 테스트 종료 코드를 함께 기록했다. 이 검증은 Native opt-level 1
+진단이며 최종 통합 head의 전체 회귀·opt-level 3·fresh WASM을 대체하지 않는다.
+이 단계에는 공통 인증 코드와 해당 기록만 커밋하며 미수용 overlay 두 파일은 제외한다.

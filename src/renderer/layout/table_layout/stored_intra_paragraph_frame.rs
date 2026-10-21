@@ -78,8 +78,9 @@ impl LayoutEngine {
     }
 
     fn source_first_cell_frame_height(&self, table: &Table, cell: &Cell) -> Option<f64> {
-        if cell.row == 0
-            || !self.stored_plain_text_cell_frame(table, cell)
+        // 첫 행의 원점도 0으로 정규화한다. 원본 줄과 같은 물리 상자를
+        // 인증하는 조건은 아래에서 뒤 행과 동일하게 적용한다.
+        if !self.stored_plain_text_cell_frame(table, cell)
             || table.common.height == 0
             || table.common.height > i32::MAX as u32
         {
@@ -158,14 +159,19 @@ impl LayoutEngine {
         let mut previous: Option<&crate::model::paragraph::LineSeg> = None;
         let mut advance = 0.0;
         for (index, unit) in units.iter().enumerate() {
-            if unit.vis_end != unit.vis_start + 1 {
+            let paragraph = cell.paragraphs.get(unit.para_idx)?;
+            // 글자가 없는 물리 전진 유닛은 가시 줄 범위가 비어 있어도 실제 저장
+            // 줄 하나를 대표할 수 있다. 아래의 원본 원점·높이·간격 대조를 그대로
+            // 통과해야 하며, 높이 없는 보조 꼬리를 근거 없이 인증하지 않는다.
+            let source_only_empty_line = unit.empty_spacer
+                && unit.vis_start == 0
+                && unit.vis_end == 0
+                && paragraph.text.trim().is_empty()
+                && paragraph.line_segs.len() == 1;
+            if unit.vis_end != unit.vis_start + 1 && !source_only_empty_line {
                 return None;
             }
-            let line = cell
-                .paragraphs
-                .get(unit.para_idx)?
-                .line_segs
-                .get(unit.vis_start)?;
+            let line = paragraph.line_segs.get(unit.vis_start)?;
             if let Some(before) = previous {
                 if line.vertical_pos == 0 && before.vertical_pos > 0 {
                     let ink = hwpunit_to_px(
