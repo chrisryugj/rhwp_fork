@@ -276,9 +276,12 @@ pub(super) fn prepare(
             top
         }
     });
-    let raw_top = closed_source_placement
-        .map(|placement| placement.table_top)
-        .or(saved_page_top)
+    // 닫힌 후속 줄은 프레임의 높이를 증명하며 현재 흐름을 절대 쪽 원점으로
+    // 바꾸지는 않는다. 이미 수용한 저장 앵커를 먼저 선택하고, 아래 lane의
+    // 확정 이동을 같은 placement의 원점·점유 끝·후속 줄에 함께 반영한다.
+    let raw_top = saved_page_top
+        .or(legacy_stored_top)
+        .or_else(|| closed_source_placement.map(|placement| placement.table_top))
         .or(stored_single_topbottom_top)
         .unwrap_or_else(|| (para_start_height + v_offset_px).max(para_start_height));
     // [#6795] 같은 문단의 **앞 자리차지 표가 쪽에 걸쳐 쪼개져** 이 쪽을 이미 차지한
