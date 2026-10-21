@@ -58,3 +58,22 @@ PDF 잉크 외곽을 같은 것으로 가정하지 않는다.
 ![fresh WASM 4쪽 review](wasm-p004-review.png)
 
 ![fresh WASM 4쪽 overlay](wasm-p004-overlay.png)
+
+
+### 신규 공개 원본의 IR 래칫 등록
+
+입력 SHA-256 `0ca950ef7424e197a432df115aabb8a8c4169f9f4a4f0ccce7816c8931bb6744`를
+devel `80968497c2c178eeecb3b2e1d04d086ad27a0dc7`과 현재 셀 폭 보정 빌드에서
+각각 `sweep_hwp5_rebuild_roundtrip`으로 실행했다. 양쪽 모두 원본의 빈
+`raw_ctrl_extra`가 재직렬화 때 대표 Language 및 확장 영역의 10바이트 0으로
+정규화됐다. 전체 집계는 다음 두 경로가 각각 1건이며 양쪽 결과가 같다.
+
+- `sections[].section_def.raw_ctrl_extra.len`: 0 → 10바이트, 1건
+- `sections[].paragraphs[].controls[].section_def.raw_ctrl_extra.len`: 0 → 10바이트, 1건
+
+신규 sample 등록 절차(`local_validation.md` 4.3.1)에 따라 위 두 신규 행만
+IR 래칫에 추가한다. 기존 sample의 기준값·직렬화 구현은 변경하지 않는다.
+기존 issue5941·issue6057·issue6921의 원본에도 같은 경로의 원장이 있다.
+실행 명령·동결 라이브러리 SHA·원본/왕복 후 바이트와 전체 집계는
+`output/pr-review/planet6897-20261018/1150200-rebuild-ir-20261021/`의
+`results.json`, `probe.rs`, 양쪽 `*-run.log`에 보존했다.

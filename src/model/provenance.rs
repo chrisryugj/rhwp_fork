@@ -55,6 +55,9 @@ pub struct SourceProvenance {
 pub struct StoredGeometryPolicy {
     pub(crate) preserve_hwp3_origins: bool,
     pub(crate) requires_realign: bool,
+    /// OWPML 셀의 현재 속성이 계산 가능한 내용 프레임의 폭을 소유한다.
+    /// 원 HWP5와 그 marker HWPX의 저장 행 소유권과 구분한다.
+    pub(crate) hwpx_cell_geometry: bool,
     /// [#7702] 저장 줄이 한/글 2020 이전 제품의 줄 나눔이다.
     pub(crate) stored_rows_before_hancom_2020: bool,
 }
@@ -64,6 +67,7 @@ impl From<bool> for StoredGeometryPolicy {
         Self {
             preserve_hwp3_origins,
             requires_realign: false,
+            hwpx_cell_geometry: false,
             stored_rows_before_hancom_2020: false,
         }
     }
@@ -166,6 +170,7 @@ impl LayoutCompatibilityProfile {
         StoredGeometryPolicy {
             preserve_hwp3_origins: self.legacy_hwp3_stored_geometry(),
             requires_realign: self.hwp3_external_realign,
+            hwpx_cell_geometry: self.hwpx_stored_layout,
             stored_rows_before_hancom_2020: self.stored_rows_before_hancom_2020,
         }
     }

@@ -4239,11 +4239,7 @@ impl LayoutEngine {
             for x in col_x.iter_mut() {
                 *x *= fit;
             }
-            for rx in row_col_x.iter_mut() {
-                for x in rx.iter_mut() {
-                    *x *= fit;
-                }
-            }
+            row_col_x.scale(fit);
             table_width *= fit;
         }
         let table_height = if let Some(col_row_y) = independent_col_row_y.as_ref() {
@@ -9941,7 +9937,7 @@ impl LayoutEngine {
         enclosing_cell_ctx: Option<CellContext>,
         // 셀 내용 주소의 기준 — 펼친 투명 래퍼 단계까지 담는다.
         content_cell_ctx: Option<CellContext>,
-        row_col_x: &[Vec<f64>],
+        row_col_x: &super::border_rendering::RowColumnGeometry,
         row_y: &[f64],
         independent_col_row_y: Option<&[Vec<f64>]>,
         col_count: usize,
@@ -10007,7 +10003,7 @@ impl LayoutEngine {
             let end_col = (c + cell.col_span as usize).min(col_count);
             let end_row = (r + cell.row_span as usize).min(row_count);
             let cell_spacing = hwpunit_to_px(i32::from(table.cell_spacing), self.dpi);
-            let cell_w = row_col_x[r][end_col] - row_col_x[r][c] - cell_spacing;
+            let cell_w = row_col_x.cell_width(r, c, end_col, cell_spacing);
             let raw_cell_h = cell_col_y
                 .and_then(|cy| {
                     let start = cy.get(r).copied()?;

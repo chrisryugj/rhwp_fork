@@ -1070,7 +1070,7 @@ impl LayoutEngine {
         // [#7063 레인②] 첫 행을 쪽 상자로 고정한 조각에서 **내용이 쓸 높이**(예산이 자른 값).
         // 테두리 상자는 `row_heights` 를 쓰고, 내용은 이 값을 쓴다.
         budget_row_height_0: Option<f64>,
-        row_col_x: &[Vec<f64>],
+        row_col_x: &super::border_rendering::RowColumnGeometry,
         header_rows: &[usize],
         render_rows: &[usize],
         render_row_y: &[f64],
@@ -1145,7 +1145,8 @@ impl LayoutEngine {
 
             // 병합 셀 크기
             let end_col = (cell_col + cell.col_span as usize).min(col_count);
-            let cell_w = rcx[end_col] - rcx[cell_col] - cell_spacing;
+            let cell_w =
+                row_col_x.cell_width(cell_row.min(row_count - 1), cell_col, end_col, cell_spacing);
 
             // 행 높이: 병합 셀의 경우 렌더링 범위 내의 행만 합산
             let mut cell_h = 0.0;
@@ -7072,7 +7073,7 @@ impl LayoutEngine {
             })
             .collect();
         let fragment_row_col_x = if fragment_row_col_x.is_empty() {
-            row_col_x.clone()
+            row_col_x.to_vec()
         } else {
             fragment_row_col_x
         };

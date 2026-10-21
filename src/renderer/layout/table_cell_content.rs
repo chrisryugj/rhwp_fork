@@ -974,7 +974,7 @@ impl LayoutEngine {
             let cell_y = table_y + row_y[r];
             let end_col = (c + cell.col_span as usize).min(col_count);
             let end_row = (r + cell.row_span as usize).min(row_count);
-            let cell_w = rcx[end_col] - rcx[c] - cell_spacing;
+            let cell_w = row_col_x.cell_width(r, c, end_col, cell_spacing);
             let cell_h = row_y[end_row] - row_y[r] - cell_spacing;
 
             let cell_id = tree.next_id();

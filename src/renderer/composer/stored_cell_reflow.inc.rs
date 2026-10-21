@@ -566,9 +566,23 @@ pub fn recompose_cell_lines_in_frame(
 
     let inner_width_px = cell_box.width_px(dpi);
     let rebuilt = if has_authoritative_line_segs {
-        // 셀 소유자가 전달한 물리 상자와 저장 행의 키를 공통 resolver에서 비교한다.
-        // 유효한 캐시는 보존하고 폭·원점이 다르면 같은 상자로 다시 나눈다.
-        // 외부 어울림·다른 쪽 프레임 등 계산할 수 없는 출처는 resolver가 먼저 거절한다.
+        // OWPML 셀은 현재 속성의 내용 프레임으로 저장 키의 불일치를 해소한다.
+        // 원 HWP5의 clean miss는 아직 이 프레임이 소유하지 않는 저장 기하다.
+        // 편집 무효화·재정렬 요청은 출처와 별개로 공통 stale 판정을 따른다.
+        // 외부 어울림·다른 물리 쪽 등 계산 불가능한 경로는 resolver가 거절한다.
+        // 같은 셀의 외부 어울림이 정한 원점을 현재 문단 상자로 재현할 수는 없다.
+        // 폭의 소유권만으로 저장 원점까지 덮어쓰지 않는다(#5818 로고 옆 글줄).
+        let cell_box = cell_box.for_stored_body_rows(para);
+        let frame_origin = cell_box.effective().start;
+        let owns_stored_origins = para
+            .line_segs
+            .iter()
+            .all(|line| line.column_start == frame_origin);
+        let miss_policy = if stored_geometry_policy.hwpx_cell_geometry && owns_stored_origins {
+            line_breaking::StoredRowMissPolicy::Reflow
+        } else {
+            line_breaking::StoredRowMissPolicy::UnmodelledUnlessStale
+        };
         recompose_stored_lines_in_frame(
             composed,
             para,
@@ -577,7 +591,7 @@ pub fn recompose_cell_lines_in_frame(
             styles,
             dpi,
             stored_geometry_policy,
-            line_breaking::StoredRowMissPolicy::Reflow,
+            miss_policy,
             // 셀 줄의 어울림 배제는 #5818 셀 계약이 따로 소유한다.
             &[],
         )
@@ -717,6 +731,19 @@ pub(crate) fn floored_cell_line_width_padding(
 /// 규칙을 고를 수 없게 한다.
 pub(crate) fn cell_inner_text_width(cell_w: f64, pad_left: f64, pad_right: f64, dpi: f64) -> f64 {
     let (pad_left, pad_right) = floored_cell_line_width_padding(pad_left, pad_right, cell_w, dpi);
+    // 원본 정수 폭과 안 여백은 정수 축에서 먼저 빼고 한 번만 픽셀로 바꾼다.
+    // 각각 정확히 왕복하는 피연산자의 부동소수 뺄셈도 9980HU를 9979HU로
+    // 떨어뜨릴 수 있다. 연속 좌표에는 이 출처를 추정하거나 허용치를 더하지 않는다.
+    let source_units = [cell_w, pad_left, pad_right].map(|value| {
+        let unit = crate::renderer::px_to_hwpunit(value, dpi);
+        (crate::renderer::hwpunit_to_px(unit, dpi).to_bits() == value.to_bits())
+            .then_some(i64::from(unit))
+    });
+    if let [Some(width), Some(left), Some(right)] = source_units {
+        if let Ok(inner) = i32::try_from((width - left - right).max(0)) {
+            return crate::renderer::hwpunit_to_px(inner, dpi);
+        }
+    }
     (cell_w - pad_left - pad_right).max(0.0)
 }
 
