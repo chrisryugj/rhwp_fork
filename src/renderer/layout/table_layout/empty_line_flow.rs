@@ -89,6 +89,57 @@ fn closed_stored_empty_line_owns_advance(
 }
 
 impl LayoutEngine {
+    /// 다음 원본 프레임 직전의 빈 줄도 앞 저장 슬롯이 정확히 닫으면 자기 높이를 소유한다.
+    /// 프레임 경계는 호출자가 실제 컷과 같은 판별자로 확인해 전달한다.
+    pub(super) fn stored_closing_empty_line_advance_hu(
+        &self,
+        cell: &Cell,
+        index: usize,
+        next_starts_frame: bool,
+        styles: &ResolvedStyleSet,
+    ) -> Option<i32> {
+        if !next_starts_frame || cell.dirty_flag {
+            return None;
+        }
+        let previous = cell.paragraphs.get(index.checked_sub(1)?)?;
+        let paragraph = cell.paragraphs.get(index)?;
+        let next = cell.paragraphs.get(index + 1)?;
+        if [previous, paragraph, next].iter().any(|para| {
+            para.stored_text_partition_is_dirty() || para.cell_format_vpos_dirty
+        }) || !paragraph.text.trim().is_empty()
+            || !paragraph.controls.is_empty()
+            || previous.controls.iter().any(|control| {
+                !matches!(control, crate::model::control::Control::Table(table) if table.common.treat_as_char)
+            })
+        {
+            return None;
+        }
+        let [line] = paragraph.line_segs.as_slice() else {
+            return None;
+        };
+        let before = previous.line_segs.last()?;
+        if [before, line].iter().any(|segment| {
+            segment.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY != 0
+                || segment.vertical_pos < 0
+                || segment.line_height <= 0
+        }) || line.line_spacing < 0
+        {
+            return None;
+        }
+        let left_style = styles.para_styles.get(previous.para_shape_id as usize)?;
+        let right_style = styles.para_styles.get(paragraph.para_shape_id as usize)?;
+        let paragraph_gap_hu = (left_style.spacing_after + right_style.spacing_before)
+            * crate::renderer::HWPUNIT_PER_INCH
+            / self.dpi;
+        let incoming_delta = i64::from(before.vertical_pos)
+            + i64::from(before.line_height)
+            + i64::from(before.line_spacing)
+            - i64::from(line.vertical_pos);
+        (paragraph_gap_hu.is_finite() && (incoming_delta as f64 + paragraph_gap_hu).abs() <= 2.0)
+            .then(|| line.line_height.checked_add(line.line_spacing))
+            .flatten()
+    }
+
     /// 실제 저장 줄 상자는 글자가 없어도 높이를 소유한다. 보조 spacer의
     /// 무높이 소비 규칙을 원본 LINE_SEG 빈 줄에 적용하면 컷만 앞서 진행하고
     /// 배치는 그 줄을 다시 그려 표가 쪽을 넘는다.
@@ -111,7 +162,8 @@ impl LayoutEngine {
             return para.controls.is_empty();
         }
         // 실제 종료 줄은 뒤 문단이 없어도 앞 저장 메트릭의 닫힘으로 소유를 증명한다.
-        if closed_stored_empty_line_owns_advance(cell, unit, styles, self.dpi)
+        if unit.owns_stored_closing_line
+            || closed_stored_empty_line_owns_advance(cell, unit, styles, self.dpi)
             || self.closed_nested_frame_owns_following_empty_line(cell, table, unit, styles)
         {
             return true;

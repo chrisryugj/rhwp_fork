@@ -1874,6 +1874,8 @@ pub(super) struct CellUnit {
     recursive_block_prelude_role: RecursiveBlockPreludeRole,
     top_and_bottom_flow: bool,
     empty_spacer: bool,
+    /// 컷 생산자가 인증한 원본 프레임 직전의 빈 줄. 줄 상자와 끝 간격을 따로 소비한다.
+    owns_stored_closing_line: bool,
     /// Square/Tight/Through non-inline flow fragment가 걸친 원 문단 control index 범위
     /// (inclusive). 높이·unit 경계는 바꾸지 않고 partial renderer의 page owner 판단에만 쓴다.
     non_inline_control_range: Option<(usize, usize)>,
@@ -14093,6 +14095,7 @@ impl LayoutEngine {
                     recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                     top_and_bottom_flow: false,
                     empty_spacer: cell.paragraphs[pi].text.trim().is_empty(),
+                    owns_stored_closing_line: false,
                     nested_host_closing_line_height: 0.0,
                     non_inline_control_range: None,
                     host_trailing_spacing_charged: false,
@@ -14137,6 +14140,7 @@ impl LayoutEngine {
                         if picture.common.text_wrap == TextWrap::TopAndBottom)
                 }),
                 empty_spacer: false,
+                owns_stored_closing_line: false,
                 nested_host_closing_line_height: 0.0,
                 non_inline_control_range: Some((0, cell.paragraphs[0].controls.len() - 1)),
                 host_trailing_spacing_charged: false,
@@ -14613,6 +14617,7 @@ impl LayoutEngine {
                         recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                         top_and_bottom_flow: false,
                         empty_spacer: false,
+                        owns_stored_closing_line: false,
                         nested_host_closing_line_height: 0.0,
                         non_inline_control_range: None,
                         host_trailing_spacing_charged: false,
@@ -14650,6 +14655,7 @@ impl LayoutEngine {
                     recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                     top_and_bottom_flow: true,
                     empty_spacer: false,
+                    owns_stored_closing_line: false,
                     // [#4468] 쪽을 걸친 셀에서 TopAndBottom 그림이 앞·뒤 조각에 중복
                     // 페인트되지 않도록, atomic unit 을 control identity 로 표지한다.
                     // Square 경로와 같이 그 control 의 **첫** unit 을 품은 cut 만 emit 한다.
@@ -14865,9 +14871,30 @@ impl LayoutEngine {
                     )
                 })
                 .flatten();
+            let closing_empty_line_advance = is_empty_spacer_para
+                .then(|| {
+                    self.stored_closing_empty_line_advance_hu(
+                        cell,
+                        pi,
+                        cell.paragraphs[pi]
+                            .line_segs
+                            .first()
+                            .zip(
+                                cell.paragraphs
+                                    .get(pi + 1)
+                                    .and_then(|next| next.line_segs.first()),
+                            )
+                            .is_some_and(|(line, next)| {
+                                is_stored_frame_rewind(line, next, pi + 1, 0)
+                            }),
+                        styles,
+                    )
+                })
+                .flatten();
             let stored_frame_empty_advance = authenticated_hwpx_frame
                 .then(|| self.stored_empty_line_advance_hu(cell, pi))
                 .flatten()
+                .or(closing_empty_line_advance)
                 .map(|advance| hwpunit_to_px(advance, self.dpi));
             // [#6923] 겹침 걸음 사다리(음수 line_spacing)의 빈 줄은 접지 않는다 — 저장
             // 사다리가 그 줄의 점유를 직접 말한다. 규칙과 근거는
@@ -15056,7 +15083,8 @@ impl LayoutEngine {
             let collapse_empty_rowbreak_spacer = (legacy_single_cell_empty_spacer
                 || collapse_native_float_ladder_spacer
                 || collapse_stored_square_picture_empty_run)
-                && stored_overlap_spacer_advance_px.is_none();
+                && stored_overlap_spacer_advance_px.is_none()
+                && closing_empty_line_advance.is_none();
             let is_last_para = pi + 1 == para_count;
             // [Task #1488] 가시 텍스트 문단 여부 — 비가시(빈) 오버레이 스페이서 문단이 만든
             // vpos 리셋을 하드 브레이크(강제 페이지 분할)에서 제외하기 위한 게이트.
@@ -15809,6 +15837,7 @@ impl LayoutEngine {
                                             RecursiveBlockPreludeRole::None,
                                         top_and_bottom_flow: false,
                                         empty_spacer: false,
+                                        owns_stored_closing_line: false,
                                         nested_host_closing_line_height: 0.0,
                                         non_inline_control_range: None,
                                         host_trailing_spacing_charged: false,
@@ -15991,6 +16020,7 @@ impl LayoutEngine {
                             recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                             top_and_bottom_flow: false,
                             empty_spacer: false,
+                            owns_stored_closing_line: false,
                             nested_host_closing_line_height: 0.0,
                             non_inline_control_range: None,
                             host_trailing_spacing_charged,
@@ -16234,6 +16264,7 @@ impl LayoutEngine {
                                 recursive_block_prelude_role: fragment.recursive_block_prelude_role,
                                 top_and_bottom_flow: false,
                                 empty_spacer: false,
+                                owns_stored_closing_line: false,
                                 nested_host_closing_line_height: 0.0,
                                 non_inline_control_range: None,
                                 host_trailing_spacing_charged: false,
@@ -16361,6 +16392,7 @@ impl LayoutEngine {
                             recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                             top_and_bottom_flow: false,
                             empty_spacer: false,
+                            owns_stored_closing_line: false,
                             nested_host_closing_line_height: 0.0,
                             non_inline_control_range: None,
                             host_trailing_spacing_charged: false,
@@ -16529,6 +16561,7 @@ impl LayoutEngine {
                                 recursive_block_prelude_role: fragment.recursive_block_prelude_role,
                                 top_and_bottom_flow: false,
                                 empty_spacer: false,
+                                owns_stored_closing_line: false,
                                 nested_host_closing_line_height: 0.0,
                                 non_inline_control_range: None,
                                 host_trailing_spacing_charged: false,
@@ -16690,7 +16723,11 @@ impl LayoutEngine {
                         }
                     }
                 }
-                let following_line_advance = if source_controls.is_empty()
+                let following_line_advance = if closing_empty_line_advance.is_some() {
+                    p.line_segs
+                        .last()
+                        .map_or(0.0, |line| hwpunit_to_px(line.line_spacing, self.dpi))
+                } else if source_controls.is_empty()
                     && para_has_visible_text
                     && stored_empty_successor_advance.is_none()
                     && stored_frame_empty_advance.is_none()
@@ -16749,6 +16786,7 @@ impl LayoutEngine {
                     recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                     top_and_bottom_flow: para_top_and_bottom_flow_unit,
                     empty_spacer: is_empty_spacer_para,
+                    owns_stored_closing_line: closing_empty_line_advance.is_some(),
                     nested_host_closing_line_height: 0.0,
                     non_inline_control_range: None,
                     host_trailing_spacing_charged: false,
@@ -16852,7 +16890,11 @@ impl LayoutEngine {
                     }
                     // 줄간격은 실제 조판 결과에서 한 번 생산한다. 빈 줄·개체의
                     // 대체 점유나 저장 spacer는 글줄 뒤의 여백으로 추측하지 않는다.
-                    let following_line_advance = if source_controls.is_empty()
+                    let following_line_advance = if closing_empty_line_advance.is_some() {
+                        p.line_segs
+                            .get(last_fragment)
+                            .map_or(0.0, |line| hwpunit_to_px(line.line_spacing, self.dpi))
+                    } else if source_controls.is_empty()
                         && line.runs.iter().any(|run| !run.text.trim().is_empty())
                         && include_trailing_ls
                         && stored_empty_successor_advance.is_none()
@@ -16913,6 +16955,7 @@ impl LayoutEngine {
                         },
                         top_and_bottom_flow: para_top_and_bottom_flow_unit,
                         empty_spacer: is_empty_spacer_para,
+                        owns_stored_closing_line: closing_empty_line_advance.is_some(),
                         nested_host_closing_line_height: 0.0,
                         non_inline_control_range: None,
                         host_trailing_spacing_charged: false,
@@ -17036,7 +17079,7 @@ impl LayoutEngine {
             //  리셋으로 닫힌 구간인가)
             let mut spans: Vec<(SegKey, SegKey, i32, i32, bool, bool)> = Vec::new();
             let mut cur: Option<(SegKey, i32, i32, bool)> = None;
-            let mut prev_end = i32::MIN;
+            let mut previous_segment = None;
             'seg_scan: for (pi, p) in cell.paragraphs.iter().enumerate() {
                 let hosts_table = p.controls.iter().any(|c| matches!(c, Control::Table(_)));
                 for (si, seg) in p.line_segs.iter().enumerate() {
@@ -17044,7 +17087,10 @@ impl LayoutEngine {
                         all_stored = false;
                         break 'seg_scan;
                     }
-                    let reset = prev_end != i32::MIN && seg.vertical_pos < prev_end;
+                    // 순방향으로 겹치는 줄 상자는 새 프레임이 아니다.
+                    // 실제 컷과 같은 원본 되감김 판정을 소비한다.
+                    let reset = previous_segment
+                        .is_some_and(|previous| is_stored_frame_rewind(previous, seg, pi, si));
                     if reset {
                         if let Some((s, fv, ev, host)) = cur.take() {
                             // 다음 줄이 위로 되감겼다 = 이 구간은 여기서 닫혔다.
@@ -17060,7 +17106,7 @@ impl LayoutEngine {
                         }
                         None => cur = Some(((pi, si), seg.vertical_pos, end, hosts_table)),
                     }
-                    prev_end = end;
+                    previous_segment = Some(seg);
                 }
             }
             if let Some((s, fv, ev, host)) = cur.take() {
@@ -26830,6 +26876,7 @@ mod row_cut_tests {
             recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
             top_and_bottom_flow: false,
             empty_spacer: false,
+            owns_stored_closing_line: false,
             nested_host_closing_line_height: 0.0,
             non_inline_control_range: None,
             host_trailing_spacing_charged: false,
@@ -26874,6 +26921,7 @@ mod row_cut_tests {
             recursive_block_prelude_role: role,
             top_and_bottom_flow: false,
             empty_spacer: false,
+            owns_stored_closing_line: false,
             nested_host_closing_line_height: 0.0,
             non_inline_control_range: None,
             host_trailing_spacing_charged: false,

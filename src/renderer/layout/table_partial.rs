@@ -6331,6 +6331,7 @@ impl LayoutEngine {
         if single_cell_page_fragment
             && row_count == 1
             && !owns_declared_opening_frame
+            && !(end_row_owns_stored_frame && end_row_height_override.is_some())
             && end_cut.iter().any(|&unit| unit > 0)
         {
             let box_bottom = crate::renderer::float_placement::single_cell_page_fragment_bottom(

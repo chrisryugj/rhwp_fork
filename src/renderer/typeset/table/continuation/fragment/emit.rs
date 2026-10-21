@@ -1538,6 +1538,62 @@ impl TypesetEngine {
             }
         }
 
+        // 위 정렬 원본 셀의 선언 높이는 최소 점유다. 앞 조각이 수용한 물리 상자를
+        // 먼저 빼고, 실제 저장 프레임 컷의 내용과 남은 최소 점유 중 큰 값을 쓴다.
+        // 내용 자체를 줄이지 않으며, 같은 상자를 예약·paint·다음 조각 원장에 전달한다.
+        let source_single_cell_band = (single_cell_fragment_shape
+            && is_continuation
+            && split_block_start.is_none()
+            && split_end_limit > 0.0
+            && start_cut.len() == 1
+            && split_end_cut.len() == 1
+            && source_frame_band == 0.0
+            && !span_band_owns_end_row
+            && !completed_empty_row_frame
+            && !st.profile.session_edited()
+            && st.profile.hwp5_stored_pagination_layout()
+            && !self.render_normalization.table_text_reflowed(table)
+            && table_footnotes.is_empty())
+        .then(|| {
+            let cell = table.cells.first()?;
+            if !matches!(cell.vertical_align, crate::model::table::VerticalAlign::Top)
+                || cell.height > i32::MAX as u32
+                || hwpunit_to_px(cell.height as i32, self.dpi) <= st.layout.body_area.height
+                || !layout_engine.cell_unit_opens_stored_page_frame(
+                    cell,
+                    table,
+                    styles,
+                    start_cut[0],
+                )
+                || !layout_engine.cell_unit_opens_stored_page_frame(
+                    cell,
+                    table,
+                    styles,
+                    split_end_cut[0],
+                )
+            {
+                return None;
+            }
+            let physical_top = fragment_placement.map_or(fragment_top, |p| p.table_top);
+            let capacity = single_cell_box_height.unwrap_or_else(|| {
+                (crate::renderer::float_placement::single_cell_page_fragment_bottom(
+                    table,
+                    st.available_height(),
+                    self.dpi,
+                ) - physical_top)
+                    .max(0.0)
+            });
+            let remaining = (hwpunit_to_px(cell.height as i32, self.dpi)
+                - continuation.single_cell_box_sum_px)
+                .max(0.0);
+            Some(partial_height.max(remaining.min(capacity)))
+        })
+        .flatten();
+        if let Some(height) = source_single_cell_band {
+            partial_height = height;
+            end_row_height_override = Some(height);
+        }
+
         let accepted_straddle_cells = if !start_cut_is_block && split_block_start.is_none() {
             layout_engine.accepted_straddle_fragment_units(
                 row_geometry_table,
@@ -1663,6 +1719,7 @@ impl TypesetEngine {
             // 걸침 칸·나뉜 행의 몫으로 쪽 끝 띠까지 수용한 끝 행 상자도 원본 프레임이다.
             // 배치는 이 상자를 끝 줄간격 접기로 다시 줄이지 않는다.
             end_row_owns_stored_frame: source_frame_band > 0.0
+                || source_single_cell_band.is_some()
                 || (is_continuation && stored_complete_extent.is_some())
                 || span_band_owns_end_row
                 || completed_empty_row_frame,
@@ -1672,7 +1729,9 @@ impl TypesetEngine {
         // 첫 조각의 위는 흐름 커서가 아니라 호스트의 저장 vpos 다 — 렌더러가 그 자리에 칠하고,
         // 흐름은 저장 사다리보다 늦을 수 있다(7062: 흐름 484.3 ↔ 저장 488.8, 156645214:
         // 116.3 ↔ 121.0). 흐름으로 재면 첫 상자가 그만큼 커져 끝 상자가 모자란다.
-        let single_cell_box_height = if declared_opening_frame {
+        let single_cell_box_height = if let Some(height) = source_single_cell_band {
+            Some(height)
+        } else if declared_opening_frame {
             Some(partial_height)
         } else {
             single_cell_box_height
