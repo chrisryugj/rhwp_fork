@@ -374,18 +374,14 @@ impl Tokenizer {
         let next = self.peek(1).unwrap_or('\0');
         let third = self.peek(2).unwrap_or('\0');
 
-        // 문서 모드는 새 저장 수식 경로의 Symbol 계약을 유지한다.
-        // 공개 호환 API는 아래 명령 토큰 계약과 화살표 이웃의 분리를 사용한다.
-        // 공백·Unicode minus·인용은 두 경로 모두 보존한다.
-        if let Some(symbol) = self
-            .document_commands
-            .then_some(match (ch, next) {
-                ('+', '-') => Some("±"),
-                ('-', '+') => Some("∓"),
-                _ => None,
-            })
-            .flatten()
-        {
+        // 붙은 부호와 화살표의 우선순위는 공개 API와 문서 경로가 공유한다.
+        // `+->`는 `±`와 `>`, `<-+`는 아래 화살표 분기의 `<-`와 `+`다.
+        // 공백·Unicode minus·인용은 이 축약에 포함하지 않는다.
+        if let Some(symbol) = match (ch, next) {
+            ('+', '-') => Some("±"),
+            ('-', '+') => Some("∓"),
+            _ => None,
+        } {
             self.pos += 2;
             return Some(Token::new(TokenType::Symbol, symbol, start));
         }
@@ -397,30 +393,8 @@ impl Tokenizer {
             return Some(Token::new(TokenType::Symbol, s, start));
         }
 
-        // [#7865] 한컴 수식 편집기의 `+-`·`-+` 축약은 ±·∓ 다. `PLUSMINUS`·`MINUSPLUS` 명령
-        // 토큰으로 돌려 symbols 표의 기존 매핑을 탄다. `+->` 는 `+` 뒤 화살표이고,
-        // `<-+` 의 `-+` 는 `<` 뒤 부호 둘이므로 종전대로 나눈다(따옴표 안은 read_quoted 가
-        // 먼저 먹는다).
-        if ch == '+' && next == '-' && third != '>' {
-            self.pos += 2;
-            return Some(Token::new(TokenType::Command, "PLUSMINUS", start));
-        }
-        if ch == '-' && next == '+' {
-            let prev = if self.pos > 0 {
-                self.chars[self.pos - 1]
-            } else {
-                '\0'
-            };
-            if prev != '<' {
-                self.pos += 2;
-                return Some(Token::new(TokenType::Command, "MINUSPLUS", start));
-            }
-        }
-
         // 붙은 ASCII 화살표 축약. `<`-`의 명시적 공백은 이 축약이 아니다.
-        if (ch == '-' && next == '>')
-            || (ch == '<' && next == '-' && (self.document_commands || third != '+'))
-        {
+        if matches!((ch, next), ('-', '>') | ('<', '-')) {
             self.pos += 2;
             return Some(Token::new(
                 TokenType::Symbol,

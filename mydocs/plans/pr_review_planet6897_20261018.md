@@ -8389,3 +8389,46 @@ serde_json extern을 누락한 최초 진단 컴파일 오류는 환경 오류�
 근거로 유지하며, 추가 source를 반영한 최종 검증을 대신하지 않는다. 자세한 source
 SHA・추가분・원문・실제 실행은 `source27-*-20261021.json`과
 `additional-source-contracts-20261021/`에 보존한다. PR 제출은 아직 보류다.
+
+### 추가 source 선반영과 최신 devel #8120 재배치
+
+원 PR 27개의 본문·댓글·리뷰를 다시 수집했고 모두 reviewer `jangster77` 지정이 유지됐다.
+추가 source 10개를 기존 source 114개 뒤에 순서대로 적용한 다음 메인터너 보정 320개를
+재배치했다. 중간 후보 `dc9421add`의 Native opt-level 3 빌드는 6분 36초에 exit 0으로
+끝났다. 기존 runtime에서 11 PASS/4 FAIL이었던 추가 경계 15개는 이 후보에서 15 PASS다.
+같은 독립 Print 12쪽의 declared-row-band Native 전쪽 raw 최저는 99.88299%이며,
+2·6·8·12쪽의 이전 미달이 사라졌다. 이 결과는 fresh WASM 검증이나 새 devel의 검증을
+대신하지 않는다. 기존 #4138 두 경로·교정된 #2439·#7687 정상 H1~H6도 같은 후보의
+고정 라이브러리와 동일 입력으로 다시 통과했다.
+
+후속 fetch에서 #8120이 병합되어 base가 `2e3b4f880`에서 `80968497c`로 바뀌었다.
+기존 source 124개 → 메인터너 320개 순서를 유지한 444개를 새 base 위로 재배치했고 후보는
+`304a37c06`이다. 모듈 선언의 `pdf_stroke`/`native_pua_fonts`, 독립적인 border-paint undo/
+PUA 세션 예외를 양쪽 모두 유지했다. 444개의 author·전체 메시지가 원문과 같음을 확인했다.
+실행 중이던 고정 runtime의 문서 검증은 현재 문서 종료 후 조율기만 멈췄으며, 재배치 후
+실제 소비 입력·PDF·폰트·측정 스크립트의 동일성을 확인해 재개했다. 변경된 2개 test entrypoint는
+그 측정의 실행·import 경로가 아니며 별도 원장에 구분했다.
+
+기준 producer는 새 경로를 만들지 않고 기존의 clean한 detached 검증 worktree를
+`80968497c`로 fast-forward하여 구축한다. Cargo는 주 작업공간의 `target/pr-review` 한 곳과
+jobs 8을 사용해 순차 실행한다. 전체 Native/fresh WASM·lint·회귀·Skia·Studio·실제 backend·
+FFI/Qt와 #8120 기능 보존은 해당 producer와 최종 후보의 실행으로 계속 확인한다.
+원 PR별 최종 review·오늘할일·PR·CI·merge·후속 정리는 아직 완료되지 않았다.
+
+### 닫힌 #7976의 댓글과 공개 수식 API 계약 보정
+
+원 #7976은 devel #8064가 같은 축약 결함을 고쳤고 `+->`/`<-+`의 기여 예외가 한컴과
+다르다는 작성자의 Print 비교를 남기고 닫혔다. 기존 메인터너 `216dadf8c6`은 문서 모드만
+올바른 Symbol 경로에 남기고, 공개 토크나이저에 기여 예외를 유지했다. 그러나 통합 전
+실제 devel의 공개 API도 그 예외가 없는 계약이었다. 같은 독립 계약 검사에서 고정 devel
+`2e3b4f880`은 2 PASS, 후보 `dc9421add`는 1 PASS/1 FAIL이며 첫 실패는 `a +-> b`의
+`[a,+,->,b]` 대 `[a,±,>,b]` 차이다. 빌드 오류가 아니라 실제 공개 API의 후퇴다.
+
+부호 쌍과 화살표 우선순위를 공통 `try_read_multi_char_symbol`에서 원래 devel과 같은
+Symbol 결과로 돌린다. 문서/공개 API별 이웃 예외를 없애고 인용·명시 공백·Unicode minus는
+보존한다. 기존 `tests/cases/issue_7865_eq_plusminus_tokens.rs`의 잘못된 Command/이웃
+기대만 고쳐 실제 기호 AST 검사와 이웃·인용 대조를 유지·보강한다. 기대값은 현재 구현에서
+추출하지 않고 기존 devel 공개 API와 원 PR의 독립 한컴 관측을 따른다. 이 조항은 문서의
+직접 Print 비교를 새로 실행했다고 주장하지 않으며, 최종 실제 라이브러리·Native/fresh WASM
+및 공개/문서 소비 경로 재검증은 계속 진행한다. 진단과 원문은 ignored
+`issue7865-public-operator-order-20261021/` 및 `source27-review-context-20261021.json`에 있다.

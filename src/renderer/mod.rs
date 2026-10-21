@@ -87,8 +87,8 @@ pub(crate) mod table_row_frame;
 // layout/publication callers remain closed until their own approved slices.
 #[cfg(any(feature = "native-skia", target_arch = "wasm32"))]
 pub(crate) mod cubic_sampling;
-pub(crate) mod pdf_stroke;
 pub mod native_pua_fonts;
+pub(crate) mod pdf_stroke;
 #[allow(dead_code)]
 pub(crate) mod shaping_vertical;
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-skia"))]

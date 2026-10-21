@@ -1,10 +1,10 @@
 //! [#7865] 수식 스크립트의 `+-`·`-+` 축약은 ±·∓ 다.
 //!
 //! 한컴 수식 편집기는 `a +- b` 를 «a ± b», `a -+ b` 를 «a ∓ b» 로 읽는다. 종전
-//! 토크나이저는 두 글자를 따로 떼어 `+`·`-` 두 기호로 그렸다. `PLUSMINUS`·`MINUSPLUS`·
-//! `pm`·`mp` 명령은 이미 symbols 표에 있으므로 축약만 같은 명령 토큰으로 묶는다.
-//! 따옴표 안의 글자, `+->`(`+` 뒤 화살표), `<-+`(`<` 뒤 부호 둘)는 종전대로 나뉜다.
-//! 수정 전에는 첫 검사에서 `["a", "+", "-", "b"]` 로 실패한다.
+//! 토크나이저는 두 글자를 따로 떼어 `+`·`-` 두 기호로 그렸다. devel의 기호 토큰 계약을
+//! 공개 API와 문서 경로가 공유한다. #7976의 종료 댓글과 기존 devel 계약에서 `+->`는
+//! `±`·`>`, `<-+`는 `←`·`+`다. 기여 원본의 이웃 예외를 공개 API에 남기면 잘못된 해석이다.
+//! 따옴표와 공백으로 떨어진 부호는 보존한다.
 
 use rhwp::renderer::equation::ast::EqNode;
 use rhwp::renderer::equation::parser::parse;
@@ -36,14 +36,14 @@ fn math_symbols(node: &EqNode, out: &mut Vec<String>) {
 }
 
 #[test]
-fn plus_minus_abbreviations_become_symbol_commands() {
-    assert_eq!(values("a +- b"), vec!["a", "PLUSMINUS", "b"]);
-    assert_eq!(values("a -+ b"), vec!["a", "MINUSPLUS", "b"]);
+fn plus_minus_abbreviations_become_math_symbols() {
+    assert_eq!(values("a +- b"), vec!["a", "±", "b"]);
+    assert_eq!(values("a -+ b"), vec!["a", "∓", "b"]);
     let tokens = tokenize("a +- b");
     assert_eq!(
         tokens[1].ty,
-        TokenType::Command,
-        "±는 명령 토큰이다: {tokens:?}"
+        TokenType::Symbol,
+        "±는 devel과 같은 기호 토큰이다: {tokens:?}"
     );
     let mut symbols = Vec::new();
     math_symbols(
@@ -60,11 +60,15 @@ fn plus_minus_abbreviations_become_symbol_commands() {
 }
 
 #[test]
-fn quoted_text_and_arrow_neighbors_stay_split() {
+fn quoted_text_and_operator_neighbors_keep_hancom_order() {
     assert_eq!(values("\"+-\""), vec!["+-"]);
     assert_eq!(tokenize("\"+-\"")[0].ty, TokenType::Quoted);
-    assert_eq!(values("a +-> b"), vec!["a", "+", "->", "b"]);
-    assert_eq!(values("a <-+ b"), vec!["a", "<", "-", "+", "b"]);
+    assert_eq!(values("a +-> b"), vec!["a", "±", ">", "b"]);
+    assert_eq!(values("a <-+ b"), vec!["a", "<-", "+", "b"]);
+    assert_eq!(values("a -+> b"), vec!["a", "∓", ">", "b"]);
+    assert_eq!(values("a <+- b"), vec!["a", "<", "±", "b"]);
+    assert_eq!(values("a ->+ b"), vec!["a", "->", "+", "b"]);
     // 공백으로 떨어진 두 부호는 여전히 두 기호다.
     assert_eq!(values("a + - b"), vec!["a", "+", "-", "b"]);
+    assert_eq!(values("a +− b"), vec!["a", "+", "−", "b"]);
 }
