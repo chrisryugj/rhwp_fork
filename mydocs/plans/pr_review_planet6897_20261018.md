@@ -8721,3 +8721,23 @@ UnmodelledUnlessStale로 거절해, 입력이 다른 폭을 선언해도 기존 
 이 시점의 전쪽 Native 및 최적화 fresh WASM·전체 필수 회귀는 아직 남아 있다.
 `stored-cell-key-reflow-trial-20261021/`의 native-results·verification-results·
 selected-native-before-after와 `stored-cell-key-reflow-native-all-20261021/`을 연결한다.
+
+
+### 번호 대조군의 시각 선행 조건 완료와 정식 회귀 보강
+
+최적화 fresh WASM `16652711f9a756883b7421151fd98ff4228842a4c8037a99cd053742dfea0330`의
+실제 원 PUA 소비·저장 bold 날짜·13줄 법 조항·종료 셀 괘선 실행 검증을 완료했다.
+번호 HWP와 속성 배열 순서만 바로잡은 HWPX는 전 1쪽 raw 100%다.
+기존 잘못된 배열의 HWPX/PDF는 원래 진단 경로에 그대로 두고, 유효한 새 대조군을
+`tests/fixtures/issue8105/numbered_stale_tail_ordered.hwpx`와
+`pdf/issue8105/numbered_stale_tail_ordered-2024.pdf`에 보존한다.
+Native/fresh WASM raw 100%·직접 review/overlay 판독 후 정식 기존 모듈에 15개 대조 사례의
+원문·자동 번호·줄 소속·표 소유·순서와 독립 PDF ±2px 경계를 보강했다.
+같은 검사는 이전 dcb10ad325에서 P2w 저장 두 줄 때문에 실제 FAIL, 91203ff194에서 PASS다.
+근거는 `mydocs/pr/assets/issue_8105/ordered_stored_tail/README.md`에 연결한다.
+
+Native FFI 빌드는 exit 0이다. Qt 첫 실행은 기존 PySide6 설치 경로를 빠뜨린 검증 환경 오류로
+실패했다. 기존 `qt7930-validation-python`을 PYTHONPATH에 지정해 같은 라이브러리로 재실행했고
+25개 어댑터와 실제 렌더·합성 IME·클립보드·undo/redo·저장/재열기가 통과했다.
+OS IME 검증으로 확대하지 않는다. 초기 실패 로그와 환경 보정 재실행 결과를 모두 보존했다.
+현재 148738070 3·4쪽 하단선 차이는 남아 있어 최종 시각 승인이나 PR 제출 완료로 판정하지 않는다.
