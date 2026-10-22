@@ -53,19 +53,33 @@
 ![116쪽 base / head / Print](images/p116-native-base-head-print.png)
 ![179쪽 base / head / Print](images/p179-native-base-head-print.png)
 
-## fresh WASM 변경 페이지
+## 최종 fresh WASM 변경 페이지
 
-| 입력 | 쪽 | base raw % | 후보 raw % | 차이 %p |
-| --- | ---: | ---: | ---: | ---: |
-| handbook-hwpx | 85 | 99.69485 | 99.69468 | -0.00017 |
-| handbook-hwpx | 86 | 96.03674 | 96.01247 | -0.02427 |
-| handbook-hwpx | 87 | 98.69302 | 98.68206 | -0.01096 |
-| handbook-hwpx | 116 | 99.19411 | 99.23262 | 0.03851 |
-| handbook-hwpx | 144 | 97.85593 | 98.81191 | 0.95598 |
-| handbook-hwpx | 179 | 99.77512 | 99.77499 | -0.00013 |
-| handbook-hwp | 85 | 99.69482 | 99.69465 | -0.00017 |
-| handbook-hwp | 86 | 96.03899 | 96.01472 | -0.02427 |
-| handbook-hwp | 87 | 98.69307 | 98.68210 | -0.01097 |
-| handbook-hwp | 116 | 99.17707 | 99.21334 | 0.03627 |
-| handbook-hwp | 144 | 97.85582 | 98.81185 | 0.95603 |
-| handbook-hwp | 179 | 99.77427 | 99.77414 | -0.00013 |
+같은 213개 face 공급 조건으로 다시 산출한 최종 값이다. 최초 글꼴 목록이 비었던 진단 값은 제출 TSV와 아래 표에 사용하지 않는다.
+
+| 입력 | backend | 쪽 | base raw % | 후보 raw % | 차이 %p |
+| --- | --- | ---: | ---: | ---: | ---: |
+| handbook-hwp | wasm | 85 | 99.69482 | 99.69465 | -0.00017 |
+| handbook-hwp | wasm | 86 | 96.03899 | 96.01472 | -0.02427 |
+| handbook-hwp | wasm | 87 | 98.69307 | 98.68210 | -0.01097 |
+| handbook-hwp | wasm | 116 | 99.17707 | 99.21334 | 0.03627 |
+| handbook-hwp | wasm | 144 | 97.85582 | 98.81185 | 0.95603 |
+| handbook-hwp | wasm | 179 | 99.77427 | 99.77414 | -0.00013 |
+| handbook-hwpx | wasm | 85 | 99.69478 | 99.69462 | -0.00016 |
+| handbook-hwpx | wasm | 86 | 96.03849 | 96.01422 | -0.02427 |
+| handbook-hwpx | wasm | 87 | 98.69296 | 98.68200 | -0.01096 |
+| handbook-hwpx | wasm | 116 | 99.19384 | 99.23235 | 0.03851 |
+| handbook-hwpx | wasm | 144 | 97.85537 | 98.81159 | 0.95622 |
+| handbook-hwpx | wasm | 179 | 99.77509 | 99.77496 | -0.00013 |
+
+전쪽 100% 및 페이지별 중요 위치 ±2px 검사는 별도 후속 #8153으로 추적한다. 현재 보정의 모든 changed bbox는 이동한 도장 영역과 대응한다.
+
+## 최종 글꼴 조건의 fresh WASM 확대 비교
+
+같은 원본 96dpi 좌표 영역을 표시용으로 2배 확대했다. 좌표 검사 단위와 TSV의 DPI는 바꾸지 않았다.
+
+![85쪽 base / head / Print, WASM](images/p085-wasm-base-head-print.png)
+![86쪽 base / head / Print, WASM](images/p086-wasm-base-head-print.png)
+![87쪽 base / head / Print, WASM](images/p087-wasm-base-head-print.png)
+![116쪽 base / head / Print, WASM](images/p116-wasm-base-head-print.png)
+![179쪽 base / head / Print, WASM](images/p179-wasm-base-head-print.png)
