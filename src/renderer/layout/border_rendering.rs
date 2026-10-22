@@ -127,6 +127,10 @@ fn merge_edge_slot(slot: &mut Option<BorderLine>, border: &BorderLine, prefer_on
     });
 }
 
+#[path = "border_rendering/row_column_geometry.rs"]
+mod row_column_geometry;
+pub(crate) use row_column_geometry::RowColumnGeometry;
+
 /// 행별 열 누적 위치를 계산한다.
 /// HWP에서는 각 셀이 독립적인 너비를 가질 수 있어, 같은 열이라도 행마다 열 경계 위치가 다를 수 있다.
 /// col_span==1인 셀의 실제 너비를 사용하고, 해당 위치에 셀이 없으면 전역 col_widths를 폴백한다.
@@ -138,7 +142,7 @@ pub(crate) fn build_row_col_x(
     cell_spacing: f64,
     dpi: f64,
     width_scale: f64,
-) -> Result<Vec<Vec<f64>>, TableGridTooLarge> {
+) -> Result<RowColumnGeometry, TableGridTooLarge> {
     use super::super::hwpunit_to_px;
     TableGridTooLarge::check(row_count, col_count)?;
     // 셀 너비 그리드 구축 (O(cells) 탐색 1회)
@@ -189,9 +193,10 @@ pub(crate) fn build_row_col_x(
         (base_rx.last().copied().unwrap_or(0.0) - target_total).abs() <= 0.5;
     if !global_grid_matches_declared {
         let mut declared = vec![base_rx.clone(); row_count];
+        let mut declared_widths = vec![col_widths.to_vec(); row_count];
         let mut any_declared_row = false;
         for (r, row_x) in declared.iter_mut().enumerate().take(row_count) {
-            let Some(candidate) = declared_row_col_x(
+            let Some((candidate, source_widths)) = declared_row_col_x(
                 table,
                 r,
                 col_count,
@@ -213,6 +218,7 @@ pub(crate) fn build_row_col_x(
             }
             any_declared_row = true;
             *row_x = candidate;
+            declared_widths[r] = source_widths;
         }
         if any_declared_row {
             // [#5720] 선언 완결 행이 있는 표에서, 전역 grid 폴백으로 남은 행
@@ -226,7 +232,7 @@ pub(crate) fn build_row_col_x(
             let base_total = base_rx.last().copied().unwrap_or(0.0);
             if target_total > 0.0 && base_total > target_total + 0.5 {
                 let scale = target_total / base_total;
-                for row_x in declared.iter_mut() {
+                for (r, row_x) in declared.iter_mut().enumerate() {
                     let is_base_fallback = row_x
                         .iter()
                         .zip(base_rx.iter())
@@ -235,15 +241,28 @@ pub(crate) fn build_row_col_x(
                         for x in row_x.iter_mut() {
                             *x *= scale;
                         }
+                        // 폴백 경계와 같은 배율의 폭을 유지한다. 간격도 경계와 함께
+                        // 축소되므로 마지막 간격을 빼는 소비 계약까지 반영한다.
+                        for width in &mut declared_widths[r] {
+                            *width = (*width + cell_spacing) * scale - cell_spacing;
+                        }
                     }
                 }
             }
-            return Ok(declared);
+            return Ok(RowColumnGeometry::new(
+                declared,
+                declared_widths,
+                cell_spacing,
+            ));
         }
     }
 
     if table.common.treat_as_char {
-        return Ok(vec![base_rx; row_count]);
+        return Ok(RowColumnGeometry::new(
+            vec![base_rx; row_count],
+            vec![col_widths.to_vec(); row_count],
+            cell_spacing,
+        ));
     }
 
     let has_independent_widths = cell_width_grid.iter().any(|row| {
@@ -253,26 +272,33 @@ pub(crate) fn build_row_col_x(
         })
     });
     if !has_independent_widths {
-        return Ok(vec![base_rx; row_count]);
+        return Ok(RowColumnGeometry::new(
+            vec![base_rx; row_count],
+            vec![col_widths.to_vec(); row_count],
+            cell_spacing,
+        ));
     }
 
     let fallback_w = hwpunit_to_px(1800, dpi);
     let mut row_col_x = vec![vec![cell_spacing; col_count + 1]; row_count];
+    let mut row_widths = vec![vec![0.0; col_count]; row_count];
     for r in 0..row_count {
         for c in 0..col_count {
             let w = cell_width_grid[r][c]
                 .or_else(|| col_widths.get(c).copied())
                 .unwrap_or(fallback_w);
             row_col_x[r][c + 1] = row_col_x[r][c] + w + cell_spacing;
+            row_widths[r][c] = w;
         }
         // 저장 파일의 cell.width는 병합 제약을 풀기 전 보조값일 수 있다.
         // 행별 누적 폭이 표 외곽 폭과 맞지 않으면 독립 segment가 아니라 전역 grid를 따른다.
         // Stage 12의 로컬 segment 리사이즈는 보상 리사이즈로 행 전체 폭을 유지하므로 이 조건을 통과한다.
         if (row_col_x[r][col_count] - target_total).abs() > 0.5 {
             row_col_x[r].clone_from_slice(&base_rx);
+            row_widths[r].clone_from_slice(col_widths);
         }
     }
-    Ok(row_col_x)
+    Ok(RowColumnGeometry::new(row_col_x, row_widths, cell_spacing))
 }
 
 /// [Issue #5590] 한 행이 자기 열 구획을 스스로 완결했는지 보고, 그렇다면 그 행의 x 경계를 만든다.
@@ -293,7 +319,7 @@ fn declared_row_col_x(
     dpi: f64,
     width_scale: f64,
     target_total: f64,
-) -> Option<Vec<f64>> {
+) -> Option<(Vec<f64>, Vec<f64>)> {
     use super::super::hwpunit_to_px;
     let mut row_cells: Vec<_> = table
         .cells
@@ -309,6 +335,7 @@ fn declared_row_col_x(
     row_cells.sort_by_key(|cell| cell.col);
 
     let mut candidate = vec![cell_spacing; col_count + 1];
+    let mut widths = vec![0.0; col_count];
     let mut cursor = cell_spacing;
     let mut next_col = 0usize;
     for cell in row_cells {
@@ -320,6 +347,13 @@ fn declared_row_col_x(
         }
         candidate[c] = cursor;
         let cell_w = hwpunit_to_px(cell.width as i32, dpi) * width_scale;
+        for width in &mut widths[c..end] {
+            *width = if span == 1 {
+                cell_w
+            } else {
+                (cell_w + cell_spacing) / span as f64 - cell_spacing
+            };
+        }
         for inner_col in c + 1..end {
             let ratio = (inner_col - c) as f64 / span as f64;
             candidate[inner_col] = cursor + (cell_w + cell_spacing) * ratio;
@@ -345,8 +379,11 @@ fn declared_row_col_x(
         for x in candidate.iter_mut() {
             *x *= scale;
         }
+        for width in &mut widths {
+            *width = (*width + cell_spacing) * scale - cell_spacing;
+        }
     }
-    Some(candidate)
+    Some((candidate, widths))
 }
 
 /// Separate cells keep their own edges; neighboring sides are not the same line.

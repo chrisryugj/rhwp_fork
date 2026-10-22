@@ -23,6 +23,12 @@ mod hci_tulip;
 #[path = "font_metric_math_alphabet.rs"]
 mod math_alphabet;
 
+#[path = "font_metric_math_symbols.rs"]
+mod math_symbols;
+
+#[path = "font_metric_cjk_punctuation.rs"]
+mod cjk_punctuation;
+
 pub(crate) use legacy_hft::{
     is_metric_face as is_legacy_hft_metric_face, metric_face_name as legacy_hft_metric_face,
 };
@@ -97,7 +103,9 @@ impl FontMetric {
             return if w > 0 { Some(w) } else { None };
         }
         // 기존 범위는 그대로 우선하며, 확인된 프로그램의 누락 구간만 보충한다.
-        verified_technical_symbol_width(self, ch).or_else(|| math_alphabet::width(self, ch))
+        verified_technical_symbol_width(self, ch)
+            .or_else(|| math_symbols::width(self, ch))
+            .or_else(|| math_alphabet::width(self, ch))
     }
 }
 
@@ -106,7 +114,9 @@ include!("font_metrics_technical_symbols.rs");
 /// 실제 프로그램에서 확인한 cmap. DB의 미수집 범위를 glyph 결측으로 취급하지 않는다.
 pub(crate) fn verified_metric_has_glyph(metric: &FontMetric, ch: char) -> Option<bool> {
     verified_program_has_glyph(metric, ch)
+        .or_else(|| math_symbols::has_glyph(metric, ch))
         .or_else(|| math_alphabet::entry(metric, ch).map(|(present, _)| present))
+        .or_else(|| cjk_punctuation::primary_has_glyph(metric.name, metric.bold, metric.italic, ch))
 }
 
 /// DB 항목이 없어도 확인한 원 face의 cmap은 독립적으로 조회한다.
@@ -117,6 +127,7 @@ pub(crate) fn verified_named_program_has_glyph(
     ch: char,
 ) -> Option<bool> {
     math_alphabet::primary_has_glyph(family, bold, italic, ch)
+        .or_else(|| cjk_punctuation::primary_has_glyph(family, bold, italic, ch))
 }
 
 /// find_metric의 반환값: 메트릭 + 폴백 정보
@@ -334,11 +345,17 @@ pub fn layout_metric_face_name(font_family: &str, bold: bool, italic: bool) -> O
         .trim()
         .trim_matches('\'');
     // KoPub 은 kopub_char_width 전용 표가 find_metric 보다 앞선다 — face 자체가 정체.
-    let lower = primary.to_lowercase();
+    // `measure_char_width_embedded` 의 `KoPubFamily::from_primary` 와 같은 이름 판정
+    // (`KoPubWorld` 개정판도 구분하며 각 face의 전진폭은 해당 측정 표가 결정한다).
+    let lower = primary.to_lowercase().replace(' ', "");
     if primary.contains("KoPub돋움체")
-        || lower.contains("kopub dotum")
+        || primary.contains("KoPubWorld돋움체")
+        || lower.contains("kopubdotum")
+        || lower.contains("kopubworlddotum")
         || primary.contains("KoPub바탕체")
-        || lower.contains("kopub batang")
+        || primary.contains("KoPubWorld바탕체")
+        || lower.contains("kopubbatang")
+        || lower.contains("kopubworldbatang")
     {
         return Some(primary.to_string());
     }

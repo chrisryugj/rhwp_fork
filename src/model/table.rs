@@ -282,22 +282,6 @@ impl Cell {
         total
     }
 
-    /// [Task #501 / #5751] 한컴 방어 가드의 발동 기준 — 셀 상하 안 여백 합이 셀
-    /// 선언 높이 **자체**를 넘으면 그 저장값을 비정상으로 본다
-    /// (mel-001 p2 셀[21]: pad 3400 HU vs h 1280 HU).
-    ///
-    /// 렌더(`table_layout`: padding 비례 축소)와 측정(`height_measurer`: 선언 높이
-    /// 권위 clamp)이 **같은 기준**을 쓰도록 단일 출처로 둔다 (#1785 의
-    /// `use_cell_padding_axis` 와 같은 결). 기준이 갈리면 측정만 행을 안 늘리고
-    /// 렌더는 저장 여백을 그대로 써서 글자가 아래 괘선을 넘는다 — 여백이 셀
-    /// 높이의 절반~1배인 정상 조밀 표에서 오발동한 #5751 이 그 사례다
-    /// (156505020 데이터 셀: pad 15.09px, h 21.09px).
-    /// 여백 합과 같은 선언 높이는 내용 높이가 아직 반영되지 않은 정상 최소값이다.
-    /// 이를 축소하면 실제 줄로 성장한 행에서도 컷 계산만 여백을 잃는다.
-    pub fn vertical_padding_is_abnormal(cell_height_px: f64, total_v_pad_px: f64) -> bool {
-        cell_height_px > 0.0 && total_v_pad_px > cell_height_px
-    }
-
     /// 1×1 표의 선언된 바깥 높이는 유일한 셀의 물리 높이이기도 하다.
     /// 여러 쪽에 걸치는 표도 셀에는 작은 초기 행 높이를 저장할 수 있다.
     /// 이 초기값만으로 판단하면 실제 안 여백이 축소된다(#7406, PrEP 39–40쪽:
@@ -634,7 +618,11 @@ impl Table {
             return owners;
         }
         let base_total = base_tracks.iter().copied().map(u64::from).sum::<u64>();
-        let table_width = u64::from(self.common.width);
+        // 선언 폭에는 바깥 두 간격과 각 열 사이 간격도 들어 있다.
+        // 이 물리 띠는 마지막 열의 문단 폭으로 다시 배분하지 않는다.
+        let grid_spacing =
+            i64::from(self.outer_cell_spacing_hu()) + self.inner_cell_spacing_hu(col_count);
+        let table_width = (i64::from(self.common.width) - grid_spacing).max(0) as u64;
         if table_width > base_total {
             let residual = (table_width - base_total).min(u64::from(u32::MAX)) as u32;
             if let Some(last) = base_tracks.last_mut() {
@@ -675,7 +663,11 @@ impl Table {
                 row_total = row_total.saturating_add(u64::from(cell.width));
                 next_col = end;
             }
-            if !complete || next_col != col_count || row_total == table_width {
+            let row_spacing = i64::from(self.outer_cell_spacing_hu())
+                + self.inner_cell_spacing_hu(cell_indices.len());
+            let row_outer_width = (row_total as i64).saturating_add(row_spacing);
+            if !complete || next_col != col_count || row_outer_width == i64::from(self.common.width)
+            {
                 continue;
             }
             for &cell_index in cell_indices.iter() {
@@ -687,6 +679,10 @@ impl Table {
                     .copied()
                     .map(u64::from)
                     .sum::<u64>();
+                // 병합 셀은 span 안의 열 사이 간격도 자기 물리 상자에 포함한다.
+                let resolved = (resolved as i64)
+                    .saturating_add(self.inner_cell_spacing_hu(usize::from(cell.col_span)))
+                    .max(0) as u64;
                 owners[cell_index] = to_i32(resolved);
             }
         }

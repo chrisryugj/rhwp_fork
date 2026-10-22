@@ -345,6 +345,22 @@ fn collect_exact_font_slots_from_paragraphs(
     remaining_work_units: &mut usize,
     depth: usize,
 ) {
+    collect_exact_font_slots_from_paragraphs_filtered(
+        paragraphs,
+        slots,
+        remaining_work_units,
+        depth,
+        false,
+    );
+}
+
+pub(crate) fn collect_exact_font_slots_from_paragraphs_filtered(
+    paragraphs: &[Paragraph],
+    slots: &mut std::collections::HashSet<ExactFontSlot>,
+    remaining_work_units: &mut usize,
+    depth: usize,
+    pua_only: bool,
+) {
     const MAX_EXACT_FONT_TRAVERSAL_DEPTH: usize = 128;
     if depth > MAX_EXACT_FONT_TRAVERSAL_DEPTH
         || slots.len() >= MAX_KERNING_REGISTRY_SLOTS
@@ -363,7 +379,13 @@ fn collect_exact_font_slots_from_paragraphs(
                 return;
             }
             *remaining_work_units -= 1;
-            if !run.text.is_empty() {
+            if !run.text.is_empty()
+                && (!pua_only
+                    || run
+                        .text
+                        .chars()
+                        .any(crate::renderer::native_pua_fonts::is_supported_symbol))
+            {
                 slots.insert(ExactFontSlot::new(run.char_style_id, run.lang_index));
                 if slots.len() >= MAX_KERNING_REGISTRY_SLOTS {
                     return;
@@ -378,74 +400,86 @@ fn collect_exact_font_slots_from_paragraphs(
             match control {
                 Control::Table(table) => {
                     if let Some(caption) = &table.caption {
-                        collect_exact_font_slots_from_paragraphs(
+                        collect_exact_font_slots_from_paragraphs_filtered(
                             &caption.paragraphs,
                             slots,
                             remaining_work_units,
                             depth + 1,
+                            pua_only,
                         );
                     }
                     for cell in &table.cells {
-                        collect_exact_font_slots_from_paragraphs(
+                        collect_exact_font_slots_from_paragraphs_filtered(
                             &cell.paragraphs,
                             slots,
                             remaining_work_units,
                             depth + 1,
+                            pua_only,
                         );
                     }
                 }
-                Control::Shape(shape) => collect_exact_font_slots_from_shape(
+                Control::Shape(shape) => collect_exact_font_slots_from_shape_filtered(
                     shape,
                     slots,
                     remaining_work_units,
                     depth + 1,
+                    pua_only,
                 ),
                 Control::Picture(picture) => {
                     if let Some(caption) = &picture.caption {
-                        collect_exact_font_slots_from_paragraphs(
+                        collect_exact_font_slots_from_paragraphs_filtered(
                             &caption.paragraphs,
                             slots,
                             remaining_work_units,
                             depth + 1,
+                            pua_only,
                         );
                     }
                 }
-                Control::Header(header) => collect_exact_font_slots_from_paragraphs(
+                Control::Header(header) => collect_exact_font_slots_from_paragraphs_filtered(
                     &header.paragraphs,
                     slots,
                     remaining_work_units,
                     depth + 1,
+                    pua_only,
                 ),
-                Control::Footer(footer) => collect_exact_font_slots_from_paragraphs(
+                Control::Footer(footer) => collect_exact_font_slots_from_paragraphs_filtered(
                     &footer.paragraphs,
                     slots,
                     remaining_work_units,
                     depth + 1,
+                    pua_only,
                 ),
-                Control::Footnote(note) => collect_exact_font_slots_from_paragraphs(
+                Control::Footnote(note) => collect_exact_font_slots_from_paragraphs_filtered(
                     &note.paragraphs,
                     slots,
                     remaining_work_units,
                     depth + 1,
+                    pua_only,
                 ),
-                Control::Endnote(note) => collect_exact_font_slots_from_paragraphs(
+                Control::Endnote(note) => collect_exact_font_slots_from_paragraphs_filtered(
                     &note.paragraphs,
                     slots,
                     remaining_work_units,
                     depth + 1,
+                    pua_only,
                 ),
-                Control::HiddenComment(comment) => collect_exact_font_slots_from_paragraphs(
-                    &comment.paragraphs,
-                    slots,
-                    remaining_work_units,
-                    depth + 1,
-                ),
+                Control::HiddenComment(comment) => {
+                    collect_exact_font_slots_from_paragraphs_filtered(
+                        &comment.paragraphs,
+                        slots,
+                        remaining_work_units,
+                        depth + 1,
+                        pua_only,
+                    )
+                }
                 Control::Field(field) if !field.memo_paragraphs.is_empty() => {
-                    collect_exact_font_slots_from_paragraphs(
+                    collect_exact_font_slots_from_paragraphs_filtered(
                         &field.memo_paragraphs,
                         slots,
                         remaining_work_units,
                         depth + 1,
+                        pua_only,
                     )
                 }
                 _ => {}
@@ -457,11 +491,12 @@ fn collect_exact_font_slots_from_paragraphs(
     }
 }
 
-fn collect_exact_font_slots_from_shape(
+fn collect_exact_font_slots_from_shape_filtered(
     shape: &crate::model::shape::ShapeObject,
     slots: &mut std::collections::HashSet<ExactFontSlot>,
     remaining_work_units: &mut usize,
     depth: usize,
+    pua_only: bool,
 ) {
     if depth > 128 || slots.len() >= MAX_KERNING_REGISTRY_SLOTS || *remaining_work_units == 0 {
         return;
@@ -469,43 +504,53 @@ fn collect_exact_font_slots_from_shape(
     *remaining_work_units -= 1;
     if let Some(drawing) = shape.drawing() {
         if let Some(text_box) = &drawing.text_box {
-            collect_exact_font_slots_from_paragraphs(
+            collect_exact_font_slots_from_paragraphs_filtered(
                 &text_box.paragraphs,
                 slots,
                 remaining_work_units,
                 depth + 1,
+                pua_only,
             );
         }
         if let Some(caption) = &drawing.caption {
-            collect_exact_font_slots_from_paragraphs(
+            collect_exact_font_slots_from_paragraphs_filtered(
                 &caption.paragraphs,
                 slots,
                 remaining_work_units,
                 depth + 1,
+                pua_only,
             );
         }
     }
     match shape {
         crate::model::shape::ShapeObject::Group(group) => {
             if let Some(caption) = &group.caption {
-                collect_exact_font_slots_from_paragraphs(
+                collect_exact_font_slots_from_paragraphs_filtered(
                     &caption.paragraphs,
                     slots,
                     remaining_work_units,
                     depth + 1,
+                    pua_only,
                 );
             }
             for child in &group.children {
-                collect_exact_font_slots_from_shape(child, slots, remaining_work_units, depth + 1);
+                collect_exact_font_slots_from_shape_filtered(
+                    child,
+                    slots,
+                    remaining_work_units,
+                    depth + 1,
+                    pua_only,
+                );
             }
         }
         crate::model::shape::ShapeObject::Picture(picture) => {
             if let Some(caption) = &picture.caption {
-                collect_exact_font_slots_from_paragraphs(
+                collect_exact_font_slots_from_paragraphs_filtered(
                     &caption.paragraphs,
                     slots,
                     remaining_work_units,
                     depth + 1,
+                    pua_only,
                 );
             }
         }
@@ -6539,6 +6584,14 @@ impl DocumentCore {
         } else {
             None
         };
+        let next_stored_vpos = (para_index + 1 < body_len)
+            .then(|| paragraphs.get(para_index + 1))
+            .flatten()
+            .and_then(|next| next.line_segs.first())
+            .filter(|line| {
+                line.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+            })
+            .map(|line| line.vertical_pos);
         Some(typesetter.dump_formatted_paragraph_height(
             para,
             composed,
@@ -6551,6 +6604,7 @@ impl DocumentCore {
                     .flat_map(|page| &page.column_contents)
                     .find_map(|column| column.inline_flow_plans.get(&para_index))
             }),
+            next_stored_vpos,
         ))
     }
 
@@ -9262,6 +9316,7 @@ mod tests {
             stored_column_top_spacings: Default::default(),
             paragraph_float_placements: Default::default(),
             float_pushed_line_spacings: Default::default(),
+            page_band_flow_starts: Default::default(),
         };
 
         let h = compute_hwp_used_height(&cc, &paragraphs, 96.0).expect("값이 있어야 함");

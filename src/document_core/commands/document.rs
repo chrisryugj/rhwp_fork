@@ -224,6 +224,22 @@ impl DocumentCore {
             }
         }
 
+        // [#7702] 저장 줄을 만든 제품 세대. 컨테이너가 기록한 마지막 저장만 본다 — HWPX 가
+        // 원본 HWP5 요약 정보를 그대로 싣고 있어도(`36388711…청년오피스.hwpx`: 요약 8.0, 저장
+        // 11.0) 그 줄은 HWPX 를 저장한 제품의 것이다. 메타데이터가 없으면 판정하지 않는다.
+        let last_saved = match document.provenance.format {
+            crate::model::provenance::SourceFormat::Hwp5 => {
+                crate::parser::hwp_summary::last_saved_with(&document.extra_streams)
+            }
+            crate::model::provenance::SourceFormat::Hwpx => {
+                crate::parser::hwp_summary::hwpx_last_saved_with(&document.hwpx_aux_entries)
+            }
+            _ => None,
+        };
+        document.provenance.stored_rows_before_hancom_2020 = last_saved
+            .and_then(|saved| saved.version.split('.').next()?.parse::<u32>().ok())
+            .is_some_and(|major| (1..11).contains(&major));
+
         // [Task #1001] HWP3 변환본의 ParaShape 단위 1/2 추가 보정
         let mut styles = resolve_styles_for_document(&document, DEFAULT_DPI);
         // [#7051] 계보 신호가 없는 저장본은 저장 줄 사다리로 HFT ASCII 반각 조판을 판정한다.
@@ -308,6 +324,7 @@ impl DocumentCore {
 
         let sec_count = document.sections.len();
         let mut doc = DocumentCore {
+            native_pua_fonts: Default::default(),
             document,
             pagination: Vec::new(),
             styles,
@@ -543,6 +560,18 @@ impl DocumentCore {
             // [#4898] 이 구역의 저장 lineseg 가 배치 권위를 갖는지 먼저 판정한다 —
             // 권위가 있으면 0높이 lineseg(한컴이 접어 둔 숨은 블록)를 재조판하지 않는다.
             let section_sized = Self::section_has_sized_lineseg(section);
+            let unpositioned_body = include_empty
+                && super::source_line_ladder::body_ladder_is_unpositioned(&section.paragraphs);
+            let retain_declared_equation_frames = include_empty
+                && !profile.session_edited()
+                && ((unpositioned_body
+                    && super::source_line_ladder::body_ladder_has_original_source(
+                        &section.paragraphs,
+                    ))
+                    || section
+                        .paragraphs
+                        .iter()
+                        .all(|para| para.line_segs.is_empty()));
             let page_def = &section.section_def.page_def;
             let column_def = Self::find_initial_column_def(&section.paragraphs);
             let layout = PageLayoutInfo::from_page_def(page_def, &column_def, dpi);
@@ -576,6 +605,14 @@ impl DocumentCore {
             let mut reflowed_paras: std::collections::HashSet<usize> =
                 std::collections::HashSet::new();
             for (pi, para) in section.paragraphs.iter_mut().enumerate() {
+                if retain_declared_equation_frames {
+                    super::source_line_ladder::retain_declared_equation_frames(para);
+                }
+                if unpositioned_body {
+                    // 미계산 원점의 캐시를 일부만 재사용하면 낡은 높이·간격이 새
+                    // vpos 체인에 섞인다. 원본 파일은 보존하고 본문 캐시만 무효화한다.
+                    para.replace_line_segs(Vec::new());
+                }
                 // 본문 문단 reflow
                 // [#2195 stage68] 본문 텍스트 NO_LS 확장(stage1)은 기각 — 후속 축
                 // (전각 폴백·pad 규칙·스트레치·after_for_fit)이 게이트 정합을 대체했고,
@@ -3288,8 +3325,8 @@ impl DocumentCore {
         }
 
         /// 파서만 알 수 있는 **표기 출처** 비트 — 재계산으로 되살릴 수 없으므로 보존한다.
-        /// 지금은 묶음 빈칸(0x1E)만 파서가 세운다(#5174).
-        const REPRESENTATION_ORIGIN_MASK: u32 = 1u32 << 0x001E;
+        /// 묶음 빈칸(0x1E, #5174)과 소프트 하이픈 요소(0x18, #7993)를 파서가 세운다.
+        const REPRESENTATION_ORIGIN_MASK: u32 = (1u32 << 0x001E) | (1u32 << 0x0018);
 
         fn process_para(para: &mut Paragraph) {
             if para.char_shapes.is_empty() {
