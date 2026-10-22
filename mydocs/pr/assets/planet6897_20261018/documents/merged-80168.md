@@ -1,6 +1,6 @@
 # 80168 17쪽 표제의 문단 소유와 내용 보존
 
-- 실제 runtime source: `10995c1ef8c718fb50453bc08d72551ec17c3b0d`. Native와 최적화한 fresh WASM의 모든 runtime 소스 바이트를 대조했습니다.
+- 실제 runtime source: `3cb5a4c290663343123074be1e2fc0dda18d3db4`. 해당 소스에서 Native와 최적화한 fresh WASM을 산출하고 전체 페이지 TSV와 대표 PNG를 다시 생성했습니다.
 - 입력: [원본](<../../../../../samples/80168_regulatory_analysis.hwp>), SHA-256 `c8ad10fe9f07be5119cd804278017aefa46e555bbee4f05f0f5132fe4f591a22`.
 - 독립 기준: [한컴 2024 Print PDF](<../../../../../pdf/80168_regulatory_analysis-hwp-2024.pdf>), SHA-256 `b233df7098547df43455f49c13ba5b63f1f06113c853a4773f86a94d6b34a982`.
 - print 프로필, compat 2024, 96dpi, 색상 경계 보정 전 2px `silhouette_raw_match_percent`입니다.

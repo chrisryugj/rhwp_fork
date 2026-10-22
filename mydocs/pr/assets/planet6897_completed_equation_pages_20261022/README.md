@@ -26,7 +26,7 @@
 
 ## 실제 검사 실행과 확대 판독
 
-- 후보 frozen Native 라이브러리에서 같은 다섯 검사를 실행해 5 PASS·0 FAIL을 확인했습니다. 정식 자동 수집·lint·최신 CI는 등록 뒤 별도로 확인합니다.
+- 후보 frozen Native 라이브러리에서 같은 다섯 검사를 실행해 5 PASS·0 FAIL을 확인했습니다. 정식 등록 `e25dbd0f5d47bc32686016c08054d2bf718be6a7`의 별도 검증 checkout에서도 자동 수집된 5건이 통과했고 fmt·Clippy 3종·workspace build·manifest 검사가 통과했습니다. [실제 명령·결과](../planet6897_20261018/documents/validation_commands.md)를 연결하며 최신 GitHub CI는 제출 head에서 별도로 확인합니다.
 - 같은 입력과 같은 검사로 고정 devel Native 라이브러리를 실행한 실제 결과: `test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s`. 통과한 기존 동작의 예방 검사와 실패를 검출한 검사를 구분하며 다섯 검사가 모두 devel 결함을 검출했다고 주장하지 않습니다.
 - 아래 패널은 같은 좌표를 nearest 3배 확대했습니다. Print/기준/후보를 독립 정렬하거나 이동하지 않았습니다. 정체/기울임·기호·첨자·분수·명시 간격과 다음 글줄의 배치를 직접 대조했습니다.
 - `eq-plusminus`는 스크립트를 수동 변경한 합성 표본입니다. 이웃 본문과 일부 겹침은 독립 Print에도 있습니다. 이 검사는 원래 한컴 출력의 ±/∓ 구별과 글리프 원점을 보호하며 이 합성을 겹침 없는 실물 문서로 표현하지 않습니다.

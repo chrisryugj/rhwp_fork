@@ -9269,3 +9269,5 @@ Native FFI·Qt 25건, 새 base의 Native 소비 38건·실측 12개, WASM 대조
 생성 suite·manifest나 `ci.yml` 개별 호출을 추가하지 않는다. 정식 등록 commit의
 별도 검증 checkout에서 Rust lint 묶음과 자동 수집된 focused 5건을 실행한 뒤
 제출 완료를 판단한다. 이 추가 테스트·문서 단계는 위 runtime 소스를 바꾸지 않는다.
+
+정식 등록 `e25dbd0f5d47bc32686016c08054d2bf718be6a7`의 별도 checkout에서 fmt·Clippy 3종·workspace build·manifest 검사가 모두 통과했고, `regression_suite_010::equation_completed_document_boundaries`의 5건이 실제 자동 수집·실행되어 통과했다. runtime 소스 2,744개는 위 전쪽 검증 source와 바이트가 같다. PR별 대표 15쪽의 새 review·overlay와 #8026의 저장 HWP/기존 HWPX 재조판 비적용 범위는 [추가 대표 판독](../pr/assets/planet6897_source27_representatives_20261022/README.md)에 기록했다. #7993은 참조 상태로 유지한다.

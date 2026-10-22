@@ -1,6 +1,6 @@
 # 편람 HWPX 375쪽 완료 서식의 소유·여백·내용 보존
 
-- 실제 runtime source: `10995c1ef8c718fb50453bc08d72551ec17c3b0d`. Native와 최적화한 fresh WASM의 모든 runtime 소스 바이트를 대조했습니다.
+- 실제 runtime source: `3cb5a4c290663343123074be1e2fc0dda18d3db4`. 해당 소스에서 Native와 최적화한 fresh WASM을 산출하고 전체 페이지 TSV와 대표 PNG를 다시 생성했습니다.
 - 입력: [원본](<../../../../../samples/2025 행정업무운영 편람(최종).hwpx>), SHA-256 `c6dd7e847a99f219681afc5a29c80a9665c04df9cda4d820a3350d739664fdf6`.
 - 독립 기준: [한컴 2024 Print PDF](<../../../../../pdf/2025 행정업무운영 편람(최종)-hwpx-kopub-2024.pdf>), SHA-256 `299cb2d994bba8b63f78b681bd74580286e298f25689b4ff4f40c66c54bfa85e`.
 - print 프로필, compat 2024, 96dpi, 색상 경계 보정 전 2px `silhouette_raw_match_percent`입니다.
