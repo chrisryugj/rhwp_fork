@@ -9510,11 +9510,17 @@ impl LayoutEngine {
                             }
                             let float_x = cell_float_lane_x
                                 .or_else(|| stored_float_frame.and_then(|frame| frame.table_left));
-                            // ⚠ `ctrl_area.x` 는 건드리지 않는다 — 아래 `layout_table` 의
-                            // `inline_x_override` 가 이미 절대 x 를 정한다. 둘 다 주면
-                            // 오프셋이 **두 번** 실린다(카드 A 119.2 → 139.8).
+                            // 글 앞/뒤 표는 셀의 단 원점에 붙는다. 앞 텍스트의 pen을
+                            // 더하지 않고, 공통 중첩 앵커 계산에서 바깥여백·정렬·저장
+                            // 오프셋을 한 번 적용한다. inline override로 우회하면
+                            // 바깥여백이 빠지고 RIGHT/CENTER 앵커도 사라진다.
                             let ctrl_area = LayoutRect {
-                                x: inner_area.x + tac_text_offset,
+                                x: inner_area.x
+                                    + if hwpx_nested_behind_text_overlay {
+                                        0.0
+                                    } else {
+                                        tac_text_offset
+                                    },
                                 y: nested_y,
                                 width: (inner_area.width - tac_text_offset).max(0.0),
                                 height: (inner_area.height - (nested_y - inner_area.y)).max(0.0),
@@ -9570,9 +9576,9 @@ impl LayoutEngine {
                                 nested_ctx,
                                 para_margin_left_px,
                                 para_margin_right_px,
-                                // 배경은 문단 원점에 오프셋을 적용하고, 나란한 무리는
-                                // 아래의 확정 원점으로 가로 오프셋·바깥여백 재가산을 막는다.
-                                hwpx_nested_behind_text_overlay.then_some(inner_area.x),
+                                // 나란한 무리의 확정 원점은 아래에서 전달한다.
+                                // 배경 표도 공통 중첩 가로 앵커를 소비한다.
+                                None,
                                 nested_split,
                                 None,
                                 None,
