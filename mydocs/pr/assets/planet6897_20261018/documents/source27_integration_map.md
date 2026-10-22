@@ -4,7 +4,7 @@
 - 원 PR 본문·댓글·review·reviewer 재조회: `2026-10-21T22:22:01.648050+00:00`. 이전 조회와 변경이 없으며 27개 모두 기능 tip의 현재 통합 commit을 확인했습니다.
 - 이력은 최초 작업 계획 `ddbe5da9720d4720cb24613cc491456b09f9f2cd` 한 개 → 원 기여 124개 연속 → 메인터너 보정 순서입니다. 최초 계획 commit은 계획 Markdown 한 파일만 수정합니다. 원 기여 마지막은 `0a8618dc8e6eb4f6b4d3a34655442a9c1816d049`, 첫 메인터너 보정은 `cee69143e564c913c5c039d9ea8c3803baee08fd`입니다.
 - 각 원 PR의 실제 head와 기능 tip을 구분합니다. 일부 원 head에는 devel merge가 포함되어 있습니다. #7975는 그 merge에서 새로 작성한 parser·fixture 기능 차이를 일반 commit으로 별도 추출했고, 아래에 함께 기록합니다. 원 기여자의 source branch는 변경하지 않았습니다.
-- 실제 source와 통합 뒤 공통 보정의 기능 범위·기존 이관·최종 판정·CI는 code candidate CI 성공 뒤 같은 PR의 원 번호별 archive 검토 기록으로 최종화합니다.
+- 실제 source와 공통 보정의 기능 범위·기존 이관·최종 판정은 code `228db2f278b52bc73fe2c5b5e0bb9a09b2ef4ff7`의 CI 성공 뒤 아래 archive에 기록했습니다. 실제 runtime은 `3cb5a4c290663343123074be1e2fc0dda18d3db4`, 새 회귀 등록은 `e25dbd0f5d47bc32686016c08054d2bf718be6a7`입니다.
 
 | 원 PR | 조회 상태 | 원 head | 원 기능 tip | 현재 기능 통합 commit | source merge의 별도 기능 보정 |
 | --- | --- | --- | --- | --- | --- |
@@ -35,3 +35,37 @@
 | [#8063](https://github.com/edwardkim/rhwp/pull/8063) | OPEN | `6efafb91aa51c720803fb22ca8bc612d7e7d7f8b` | `9e3388e8d775db4139e8af715a511af647963e2d` | [`e26cfeebc7`](https://github.com/edwardkim/rhwp/commit/e26cfeebc7291b6ad1a083af299cb286404fd1b7) | — |
 | [#8068](https://github.com/edwardkim/rhwp/pull/8068) | OPEN | `b7505e0ac6850acd1108368d9843c806b65ccf27` | `b7505e0ac6850acd1108368d9843c806b65ccf27` | [`7ebfa0e1e0`](https://github.com/edwardkim/rhwp/commit/7ebfa0e1e03efd815a5d37b45d603a5da72cc1b2) | — |
 | [#8082](https://github.com/edwardkim/rhwp/pull/8082) | OPEN | `a44f2432b1d207fd05227eb3258970eecc7292c5` | `a44f2432b1d207fd05227eb3258970eecc7292c5` | [`cf426f02c9`](https://github.com/edwardkim/rhwp/commit/cf426f02c9ead028f3d2d32a2d71ec5ce93ca31e) | — |
+
+## 원 PR별 최종 archive 기록
+
+| 원 PR | 검토 | 구현·통합 |
+| --- | --- | --- |
+| #7934 | [최종 검토](../../../archives/pr_7934_review.md) | [구현·통합](../../../archives/pr_7934_review_impl.md) |
+| #7956 | [최종 검토](../../../archives/pr_7956_review.md) | [구현·통합](../../../archives/pr_7956_review_impl.md) |
+| #7965 | [최종 검토](../../../archives/pr_7965_review.md) | [구현·통합](../../../archives/pr_7965_review_impl.md) |
+| #7967 | [최종 검토](../../../archives/pr_7967_review.md) | [구현·통합](../../../archives/pr_7967_review_impl.md) |
+| #7968 | [최종 검토](../../../archives/pr_7968_review.md) | [구현·통합](../../../archives/pr_7968_review_impl.md) |
+| #7973 | [최종 검토](../../../archives/pr_7973_review.md) | [구현·통합](../../../archives/pr_7973_review_impl.md) |
+| #7975 | [최종 검토](../../../archives/pr_7975_review.md) | [구현·통합](../../../archives/pr_7975_review_impl.md) |
+| #7976 | [최종 검토](../../../archives/pr_7976_review.md) | [구현·통합](../../../archives/pr_7976_review_impl.md) |
+| #7979 | [최종 검토](../../../archives/pr_7979_review.md) | [구현·통합](../../../archives/pr_7979_review_impl.md) |
+| #7982 | [최종 검토](../../../archives/pr_7982_review.md) | [구현·통합](../../../archives/pr_7982_review_impl.md) |
+| #7987 | [최종 검토](../../../archives/pr_7987_review.md) | [구현·통합](../../../archives/pr_7987_review_impl.md) |
+| #8005 | [최종 검토](../../../archives/pr_8005_review.md) | [구현·통합](../../../archives/pr_8005_review_impl.md) |
+| #8006 | [최종 검토](../../../archives/pr_8006_review.md) | [구현·통합](../../../archives/pr_8006_review_impl.md) |
+| #8007 | [최종 검토](../../../archives/pr_8007_review.md) | [구현·통합](../../../archives/pr_8007_review_impl.md) |
+| #8009 | [최종 검토](../../../archives/pr_8009_review.md) | [구현·통합](../../../archives/pr_8009_review_impl.md) |
+| #8010 | [최종 검토](../../../archives/pr_8010_review.md) | [구현·통합](../../../archives/pr_8010_review_impl.md) |
+| #8011 | [최종 검토](../../../archives/pr_8011_review.md) | [구현·통합](../../../archives/pr_8011_review_impl.md) |
+| #8012 | [최종 검토](../../../archives/pr_8012_review.md) | [구현·통합](../../../archives/pr_8012_review_impl.md) |
+| #8013 | [최종 검토](../../../archives/pr_8013_review.md) | [구현·통합](../../../archives/pr_8013_review_impl.md) |
+| #8015 | [최종 검토](../../../archives/pr_8015_review.md) | [구현·통합](../../../archives/pr_8015_review_impl.md) |
+| #8026 | [최종 검토](../../../archives/pr_8026_review.md) | [구현·통합](../../../archives/pr_8026_review_impl.md) |
+| #8028 | [최종 검토](../../../archives/pr_8028_review.md) | [구현·통합](../../../archives/pr_8028_review_impl.md) |
+| #8034 | [최종 검토](../../../archives/pr_8034_review.md) | [구현·통합](../../../archives/pr_8034_review_impl.md) |
+| #8059 | [최종 검토](../../../archives/pr_8059_review.md) | [구현·통합](../../../archives/pr_8059_review_impl.md) |
+| #8063 | [최종 검토](../../../archives/pr_8063_review.md) | [구현·통합](../../../archives/pr_8063_review_impl.md) |
+| #8068 | [최종 검토](../../../archives/pr_8068_review.md) | [구현·통합](../../../archives/pr_8068_review_impl.md) |
+| #8082 | [최종 검토](../../../archives/pr_8082_review.md) | [구현·통합](../../../archives/pr_8082_review_impl.md) |
+
+[code head까지의 실제 커밋 순서](integration_commit_order.md)
