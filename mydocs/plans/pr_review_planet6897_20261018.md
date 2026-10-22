@@ -9233,3 +9233,39 @@ Native Skia 게이트는 이 보강을 커밋한 head에서 실행하며, 앞서
 #5782/#5885 및 현재 보정 경계의 대조 → fresh WASM과 영향 범위 전쪽 TSV →
 필수 전체 검증이다. 이 절은 후보의 근거이며 성공·PR 제출 완료 판정이 아니다.
 추적: `output/pr-review/planet6897-20261018/issue7114-wrapper-boundary-trace-20261022/`.
+
+### 최종 runtime 검증과 완료 수식 문서의 핵심 회귀 보강
+
+위 후보를 `3cb5a4c290663343123074be1e2fc0dda18d3db4`로 고정하고 필수 Rust
+16단계의 실제 종료를 확인했다. 전체 nextest는 11,353건 통과·45건 skipped였고,
+기존 #7114 검사 5건도 모두 통과했다. release lib 3,984건, Native Skia lib
+4,041건, placeholder 2건과 직접 PDF 14건이 통과했다. Studio 2,356건과
+Native FFI·Qt 25건, 새 base의 Native 소비 38건·실측 12개, WASM 대조 4종도
+같은 runtime에서 통과했다. Qt는 offscreen·합성 IME 범위다.
+
+동일 source의 Native/fresh WASM 전 72개 입력·각 1,529쪽을 다시 측정했다.
+최저 raw는 92.49647%/91.66667%이고 후보의 쪽수 불일치·90% 미만은 없다.
+내용이 대응되는 devel 대비 0.1%p 이상 하락도 없다. 직전 후보와 3,058개
+현재 raster의 RGB가 같고, 대표 review·overlay·확대 자료는 새 PNG로 재생성했다.
+이미 이관한 원본을 수용 대상에 다시 넣거나 그 이슈를 닫는 근거로 사용하지 않는다.
+
+완료 수식 문서 5종에는 `equation_completed_document_boundaries`를 추가했다.
+정체 단위·분수·±/∓·대문자 그리스 문자와 첨자·정체 상태의 마지막 글줄을 보호한다.
+같은 핵심 동작의 다른 쪽이 없는 전 1쪽 문서이며, 양쪽 raw 100%인 3종을 우선
+선정하고 나머지 2종은 양쪽 99%대의 분수와 누적 줄 예약을 보호한다. 각 문서의
+전체 수식 수·문단/컨트롤 소유·내용 순서·누락·중복·본문 포함 관계도 유지한다.
+독립 Print의 글리프 원점을 96dpi로 환산한 좌표에만 ±2px를 사용했다.
+
+같은 초안 5건을 후보 frozen Native에서 실행해 모두 통과했다. 고정 devel에서
+같은 검사를 실행하면 3건 통과·2건 실패다. 분수 첫 기준선은 Print 124.16px에
+대해 131.72667px, 정체 상태의 마지막 줄은 Print 692.32px에 대해
+634.54375px라 실패한다. 앞서 직접 읽은 전후 출력의 분수·누적 줄 높이 차이와
+같은 원인이다. 나머지 3건은 devel에서도 통과한 기존 동작의 보호이며 모두가
+새 devel 결함을 검출했다고 표현하지 않는다. 수동 변형한 ±/∓ 입력의 이웃 본문
+겹침은 독립 Print에도 있으므로 겹침 없는 실물 문서로 설명하지 않는다.
+
+[문서별 raw·독립 Print 원점·전후 실행·확대 PNG](../pr/assets/planet6897_completed_equation_pages_20261022/README.md)를
+보존했다. 이 단계에서 등록한 정식 원본은 `tests/cases/`의 407줄 파일이며
+생성 suite·manifest나 `ci.yml` 개별 호출을 추가하지 않는다. 정식 등록 commit의
+별도 검증 checkout에서 Rust lint 묶음과 자동 수집된 focused 5건을 실행한 뒤
+제출 완료를 판단한다. 이 추가 테스트·문서 단계는 위 runtime 소스를 바꾸지 않는다.
