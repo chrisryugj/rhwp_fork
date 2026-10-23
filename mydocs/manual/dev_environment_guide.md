@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/dev_environment_guide.md
-last_verified: 2026-10-18
+last_verified: 2026-10-20
 ---
 
 # 개발 환경 가이드
@@ -344,6 +344,22 @@ package로 브라우저 동작과 필요한 Visual Sweep을 완료한다. 이전
 CARGO_TARGET_DIR="${rhwp_review_target_dir:?기본 작업공간에서 공용 target 경로를 먼저 고정하세요}" \
   scripts/wasm-pack-locked.sh --target web --out-dir pkg --no-opt
 ```
+
+WASM release의 산출물 선택을 비교하는 선택 경로는 다음과 같습니다. 기본 동작은 바뀌지 않습니다.
+
+```bash
+RHWP_WASM_CDYLIB_ONLY=1 CARGO_TARGET_DIR=target/pr-review \
+  scripts/wasm-pack-locked.sh --target web --out-dir pkg --release
+```
+
+이 POSIX wrapper 옵션은 `rhwp`의 WASM `cdylib`만 생성합니다. Rust/Cargo 1.93.1에서 기존
+`rlib+cdylib` 빌드는 `lto=true`여도 cross-crate LTO를 실행하지 않으므로, 이 경로는 명령 범위의
+`profile.release.lto=false`로 그 실효 조건을 유지합니다. manifest의 release 설정 문구를 그대로
+적용하는 경로와는 구분합니다. wasm-pack의 wasm-bindgen·wasm-opt·패키징·Studio 동기화는 유지하며,
+Native/Rust 소비자를 위한 rlib 설정은 바꾸지 않습니다. 별도 profile/config/package 인자를 함께
+넘기지 않습니다. CI에서 채택할 때는 기존 release 캐시와 산출물 선택·프로필 키를 구분해야 합니다.
+PowerShell wrapper의 옵션은 아닙니다. 근거와 검증 범위는
+[빌드 비용 조사](https://github.com/edwardkim/rhwp/blob/7aa36953478812711e671d55c16b5daa11cd7a7a/mydocs/report/task_m100_7473_rust_phases.md)를 참고합니다.
 
 반복·무한 최적화가 발생하면 실행 중인 wasm-pack·wasm-opt와 `pkg/*-opt.wasm` 잔재를 먼저 확인한다.
 실행 중인 파일을 지우거나 공유 cache 전체를 초기화하지 않는다. 종료된 실행의 정확한 임시 잔재와
