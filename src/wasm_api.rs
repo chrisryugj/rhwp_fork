@@ -42,6 +42,8 @@ use crate::renderer::style_resolver::{
 use crate::renderer::svg::SvgRenderer;
 use crate::renderer::DEFAULT_DPI;
 
+#[cfg(target_arch = "wasm32")]
+mod bitmap_raster;
 mod canvas_metrics;
 mod hyperlink;
 mod layout_generation;
@@ -1199,7 +1201,24 @@ impl HwpDocument {
         self.core.rebuild_derived_state();
     }
 
-    /// Set an explicit layout/paint font environment. None restores the default.
+    /// 문서가 선언한 실제 프로그램 후보와 현재 환경을 호스트에 전달한다.
+    #[wasm_bindgen(js_name = getDocumentFontSelectionPlan)]
+    pub fn get_document_font_selection_plan(&self) -> String {
+        self.core.get_document_font_selection_plan()
+    }
+
+    /// 실제 공급된 프로그램으로 측정·표시의 공통 환경을 계산한다.
+    #[wasm_bindgen(js_name = buildFontEnvironmentFromAvailablePrograms)]
+    pub fn build_font_environment_from_available_programs(
+        &self,
+        json: &str,
+    ) -> Result<String, JsValue> {
+        self.core
+            .build_font_environment_from_available_programs(json)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// 명시적인 조판·표시 글꼴 환경을 설정한다. None이면 기본 환경으로 돌아간다.
     #[wasm_bindgen(js_name = setFontEnvironment)]
     pub fn set_font_environment_json(&mut self, json: Option<String>) -> Result<bool, JsValue> {
         let environment = json
