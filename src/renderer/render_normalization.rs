@@ -81,6 +81,8 @@ pub struct RenderNormalizationOverlay {
     nested_table_widths_by_path: HashMap<RenderPath, Arc<NestedTableWidthProjection>>,
     nested_table_widths_by_pointer: HashMap<usize, Arc<NestedTableWidthProjection>>,
     text_reflowed_tables_by_pointer: HashSet<usize>,
+    rendered_cell_frame_changes: HashMap<usize, HashSet<(u16, u16)>>,
+    rebased_table_frames_by_pointer: HashSet<usize>,
     nested_tables_with_reflowed_hosts: HashSet<usize>,
     stored_nested_text_frames_by_pointer: HashMap<usize, Arc<StoredNestedTextFrames>>,
 }
@@ -297,14 +299,232 @@ impl RenderNormalizationOverlay {
     /// Logical-path validation happens in DocumentCore before this hot-path
     /// pointer is published.
     pub(crate) fn register_text_reflowed_table(&mut self, table: &Table) {
+        // 편집 명령이 표 전체를 다시 조판한 경우에는 셀별 render-only 범위로
+        // 축소하지 않는다. 이 명시적 등록은 아래의 관측 결과보다 우선한다.
+        self.rendered_cell_frame_changes
+            .remove(&(table as *const Table as usize));
         self.text_reflowed_tables_by_pointer
             .insert(table as *const Table as usize);
+    }
+
+    /// render-only 재조판으로 문자 줄 소속이 달라진 표는 원본 물리 컷의
+    /// 캐시를 다시 인증할 수 없다. 같은 결과를 쓰는 원본·파생 포인터와
+    /// 그 조각을 포함한 조상 표를 함께 갱신한다. 편집 IR은 변경하지 않는다.
+    pub(crate) fn register_rendered_text_partitions(
+        &mut self,
+        source: &[crate::model::paragraph::Paragraph],
+        rendered: &[crate::model::paragraph::Paragraph],
+        styles: &crate::renderer::style_resolver::ResolvedStyleSet,
+    ) -> (bool, bool) {
+        let mut changed = source.len() != rendered.len();
+        let mut flow_changed = changed;
+        let mut upstream_flow_changed = false;
+        for (original, current) in source.iter().zip(rendered) {
+            if original.column_type != crate::model::paragraph::ColumnBreakType::None
+                || styles
+                    .para_styles
+                    .get(original.para_shape_id as usize)
+                    .is_some_and(|style| style.page_break_before)
+            {
+                upstream_flow_changed = false;
+            }
+            changed |= original.line_segs.len() != current.line_segs.len()
+                || (0..original.line_segs.len()).any(|index| {
+                    original.line_seg_text_start(index) != current.line_seg_text_start(index)
+                });
+            let extent = |paragraph: &crate::model::paragraph::Paragraph| {
+                paragraph
+                    .line_segs
+                    .first()
+                    .zip(paragraph.line_segs.last())
+                    .map(|(first, last)| {
+                        i64::from(last.vertical_pos)
+                            + i64::from(last.line_height)
+                            + i64::from(last.line_spacing)
+                            - i64::from(first.vertical_pos)
+                    })
+            };
+            let mut paragraph_flow_changed = extent(original) != extent(current)
+                || original.line_segs.len() != current.line_segs.len()
+                || original
+                    .line_segs
+                    .iter()
+                    .zip(&current.line_segs)
+                    .any(|(a, b)| {
+                        a.line_height != b.line_height || a.line_spacing != b.line_spacing
+                    });
+            for (old, new) in original.controls.iter().zip(&current.controls) {
+                let (Control::Table(old), Control::Table(new)) = (old, new) else {
+                    continue;
+                };
+                let old_pointer = old.as_ref() as *const Table as usize;
+                let new_pointer = new.as_ref() as *const Table as usize;
+                self.rendered_cell_frame_changes
+                    .entry(old_pointer)
+                    .or_default();
+                self.rendered_cell_frame_changes
+                    .entry(new_pointer)
+                    .or_default();
+                let mut table_changed = old.cells.len() != new.cells.len();
+                let mut table_flow_changed = table_changed;
+                for (old_cell, new_cell) in old.cells.iter().zip(&new.cells) {
+                    let (text, flow) = self.register_rendered_text_partitions(
+                        &old_cell.paragraphs,
+                        &new_cell.paragraphs,
+                        styles,
+                    );
+                    if text || flow {
+                        self.rendered_cell_frame_changes
+                            .entry(old_pointer)
+                            .or_default()
+                            .insert((old_cell.row, old_cell.col));
+                        self.rendered_cell_frame_changes
+                            .entry(new_pointer)
+                            .or_default()
+                            .insert((new_cell.row, new_cell.col));
+                    }
+                    table_changed |= text;
+                    table_flow_changed |= flow;
+                }
+                if table_changed {
+                    self.text_reflowed_tables_by_pointer.insert(old_pointer);
+                    self.text_reflowed_tables_by_pointer.insert(new_pointer);
+                }
+                if upstream_flow_changed {
+                    self.register_rebased_source_frames(old, new);
+                }
+                changed |= table_changed;
+                paragraph_flow_changed |= table_flow_changed;
+            }
+            flow_changed |= paragraph_flow_changed;
+            upstream_flow_changed |= paragraph_flow_changed;
+        }
+        (changed, flow_changed)
+    }
+
+    /// 앞 문단의 점유가 바뀌면 후속 block 표의 저장 쪽 컷도 같은 흐름의
+    /// 결과가 아니다. 명시적 쪽/단 경계까지 그 의존성을 전달한다.
+    /// 인라인 표의 내부 상자와 쪽 컷이 없는 표의 독립 기하는 유지한다.
+    fn register_rebased_source_frames(&mut self, source: &Table, rendered: &Table) -> bool {
+        if source.common.treat_as_char
+            || source.common.text_wrap != crate::model::shape::TextWrap::TopAndBottom
+            || source.page_break != crate::model::table::TablePageBreak::RowBreak
+        {
+            return false;
+        }
+        let mut frames = source.cells.iter().any(|cell| {
+            let mut previous = None;
+            cell.paragraphs
+                .iter()
+                .flat_map(|paragraph| &paragraph.line_segs)
+                .any(|line| {
+                    let boundary = previous.is_some_and(|vpos| {
+                        line.is_first_line_of_page()
+                            || line.is_first_line_of_column()
+                            || line.vertical_pos < vpos
+                    });
+                    previous = Some(line.vertical_pos);
+                    boundary
+                })
+        });
+        for (old_cell, new_cell) in source.cells.iter().zip(&rendered.cells) {
+            for (old_para, new_para) in old_cell.paragraphs.iter().zip(&new_cell.paragraphs) {
+                for (old, new) in old_para.controls.iter().zip(&new_para.controls) {
+                    if let (Control::Table(old), Control::Table(new)) = (old, new) {
+                        frames |= self.register_rebased_source_frames(old, new);
+                    }
+                }
+            }
+        }
+        if frames {
+            // 앞 흐름의 변화는 표의 절대 쪽 프레임에 전파된다. 실제로 바뀐
+            // 셀의 집합은 유지하여 이웃 셀의 상대 줄 원점·정렬을 보존한다.
+            for table in [source, rendered] {
+                let pointer = table as *const Table as usize;
+                self.text_reflowed_tables_by_pointer.insert(pointer);
+                self.rebased_table_frames_by_pointer.insert(pointer);
+            }
+        }
+        frames
     }
 
     #[inline]
     pub(crate) fn table_text_reflowed(&self, table: &Table) -> bool {
         self.text_reflowed_tables_by_pointer
             .contains(&(table as *const Table as usize))
+    }
+
+    /// 셀 범위가 확인되지 않은 전체 재조판은 원본 개체 프레임도 무효화한다.
+    /// 셀별 읽기 전용 정규화는 글줄 출처만 바꾸므로 호스트 앵커가 증명하는
+    /// 본문 종료선과 구분한다. 명시적 편집 등록은 셀 범위를 지워 우선한다.
+    pub(crate) fn table_frame_reflowed_without_cell_scope(&self, table: &Table) -> bool {
+        self.rebased_table_frames_by_pointer
+            .contains(&(table as *const Table as usize))
+            || (self.table_text_reflowed(table)
+                && !self
+                    .rendered_cell_frame_changes
+                    .contains_key(&(table as *const Table as usize)))
+    }
+
+    /// 앞 흐름에서 이월된 표의 저장 쪽 프레임은 셀 글줄이 같아도 무효다.
+    /// 상대 글줄 프로그램이 같은지는 별도 질의로 보존한다.
+    pub(crate) fn cell_frame_reflowed(
+        &self,
+        table: &Table,
+        cell: &crate::model::table::Cell,
+    ) -> bool {
+        self.rebased_table_frames_by_pointer
+            .contains(&(table as *const Table as usize))
+            || self.cell_text_partition_reflowed(table, cell)
+    }
+
+    /// 상대 글줄 소속의 변경만 확인한다. 앞 흐름의 쪽 원점 이동을 이웃 셀의
+    /// 문자 재조판으로 취급하지 않는다. 명시적 전체 편집은 기존 fallback을 쓴다.
+    pub(crate) fn cell_text_partition_reflowed(&self, table: &Table, cell: &Cell) -> bool {
+        self.rendered_cell_frame_changes
+            .get(&(table as *const Table as usize))
+            .map_or_else(
+                || self.table_text_reflowed(table),
+                |cells| cells.contains(&(cell.row, cell.col)),
+            )
+    }
+
+    /// 실제 render-only 줄 구성 변경의 양성 출처다. 편집·출처 미확정
+    /// 전체 재조판은 이 집합에 없으므로 현재 프로그램의 셀 프레임으로 승격하지 않는다.
+    pub(crate) fn cell_has_current_render_partition(&self, table: &Table, cell: &Cell) -> bool {
+        self.rendered_cell_frame_changes
+            .get(&(table as *const Table as usize))
+            .is_some_and(|cells| cells.contains(&(cell.row, cell.col)))
+    }
+
+    /// 물리 행을 덮는 셀만 그 행의 저장 프레임을 무효화할 수 있다.
+    pub(crate) fn row_frame_reflowed(&self, table: &Table, row: usize) -> bool {
+        table.cells.iter().any(|cell| {
+            usize::from(cell.row) <= row
+                && row < usize::from(cell.row) + usize::from(cell.row_span)
+                && self.cell_frame_reflowed(table, cell)
+        })
+    }
+
+    /// 인증할 첫 물리 상자에 실제로 들어가는 행의 출처만 확인한다.
+    pub(crate) fn frame_prefix_reflowed(
+        &self,
+        table: &Table,
+        rows: &[f64],
+        spacing: f64,
+        height: f64,
+    ) -> bool {
+        let mut top = 0.0;
+        for (row, row_height) in rows.iter().enumerate() {
+            if top >= height {
+                break;
+            }
+            if self.row_frame_reflowed(table, row) {
+                return true;
+            }
+            top += row_height + spacing;
+        }
+        false
     }
 
     /// 글자 재조판 여부와 별개인 부모 호스트 프레임의 무효화 출처다.

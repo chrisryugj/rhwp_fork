@@ -694,9 +694,18 @@ impl TypesetEngine {
                 fragment_outer_bottom,
             )
         };
+        let first_frag_origin = super::super::first_fragment_flow_origin(
+            para,
+            table,
+            budget_para_start_height,
+            st.current_height,
+            st.current_items
+                .iter()
+                .any(|item| item.para_index() == para_idx),
+        );
         let remaining_with = |released: f64| {
             fragment_host_placement.map_or_else(
-                || (table_available + released - st.current_height - first_frag_overhead).max(0.0),
+                || (table_available + released - first_frag_origin - first_frag_overhead).max(0.0),
                 |p| {
                     (table_available + released
                         - p.table_top
@@ -1205,6 +1214,7 @@ impl TypesetEngine {
         let continuation_fragment_budget = usize::MAX;
         let terminal_host_spacing = native_terminal_child_host_line_spacing(
             self.profile.get().hwp5_stored_pagination_layout(),
+            self.render_normalization.table_text_reflowed(table),
             table,
             self.dpi,
         ) + layout_engine
@@ -1412,7 +1422,12 @@ impl TypesetEngine {
                     || (st.profile.hwp5_stored_pagination_layout()
                         && source_text_frame_top.is_some())
                     || empty_opening_row_frame.is_some()
-                    || source_single_cell_first_placement.is_some())
+                    || source_single_cell_first_placement.is_some()
+                    // [#8105] 한/글 실측(사다리 D): 쪽 끝 경계는 이미 놓인 각주 영역의 위(구분선 위
+                    // 여백 포함)다 — 보수 안전띠는 없다(1130000 50쪽 표 pi=532 행 0 이 각주 위까지
+                    // 통째로 든다). 각주가 없는 쪽은 띠도 없어 그대로 두고, 표 자신의 각주는 따로
+                    // 수용을 판정하므로 제외한다.
+                    || (st.current_footnote_height > 0.0 && ft.table_footnotes.is_empty()))
                 .then(|| {
                     st.base_available_height()
                         - st.current_footnote_height

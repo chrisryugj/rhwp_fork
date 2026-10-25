@@ -48,6 +48,11 @@ impl LayoutEngine {
             return 0.0;
         }
         if crate::renderer::para_has_no_stored_line_segs(paragraph) {
+            // 빈 문단에는 composer의 실제 글줄이 없을 수 있다. 유닛 생산자가
+            // 측정과 같은 메트릭에서 분리한 뒤 간격을 우선 소비한다.
+            if unit.following_line_advance > 0.0 {
+                return unit.following_line_advance.min(unit.height.max(0.0));
+            }
             // 빈 문단의 합성 줄도 원본 저장 줄로 오인하지 않는다. 비어 있지 않은
             // 재조판 문단과 같은 측정 결과에서 줄 상자와 뒤 간격을 구분한다.
             let (left, right, _, _) = self.resolve_cell_padding(cell, table);
@@ -92,10 +97,6 @@ impl LayoutEngine {
         let profile = self.profile.get();
         if !profile.hwp5_stored_pagination_layout()
             || profile.session_edited()
-            || self
-                .render_normalization
-                .borrow()
-                .table_text_reflowed(table)
             || !start.is_empty()
             || end != [1]
             || table.common.treat_as_char
@@ -109,7 +110,11 @@ impl LayoutEngine {
             return false;
         };
         let cell = &table.cells[*index];
-        if usize::from(cell.row) != row
+        if self
+            .render_normalization
+            .borrow()
+            .cell_frame_reflowed(table, cell)
+            || usize::from(cell.row) != row
             || cell.row_span != 1
             || cell.col_span != table.col_count
             || cell.dirty_flag
@@ -219,7 +224,7 @@ impl LayoutEngine {
             || self
                 .render_normalization
                 .borrow()
-                .table_text_reflowed(table)
+                .cell_frame_reflowed(table, cell)
             || table.common.treat_as_char
             || table.page_break != TablePageBreak::RowBreak
             || cell.row_span != 1

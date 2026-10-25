@@ -150,8 +150,24 @@ pub(crate) fn resolve_styles_with_environment(
                     // TrueType 폭을 사용한다. 선언만으로 임의 face의 표를 신뢰하지 않는다.
                     let target = primary_font_name(&style.font_families[lang]);
                     let original = lookup_font_name_decision(&lookup, lang, shape.font_ids[lang]);
+                    // 같은 이름의 실제 주 TrueType 프로그램은 표시용 대체가 아니다.
+                    // 검증된 폭과 실제 선택을 확인한 경우 그 프로그램이 전진을 소유한다.
+                    // 원 HFT 프로그램 출처가 있거나 치환 경계를 건넌 대체 face는 보존한다.
+                    let source_font = document
+                        .doc_info
+                        .font_faces
+                        .get(lang)
+                        .and_then(|faces| faces.get(shape.font_ids[lang] as usize));
+                    let primary_true_type_program = environment
+                        .is_some_and(|env| env.selects_true_type(target))
+                        && original.substitution_boundary.is_none()
+                        && original.normalized_face.as_deref() == Some(target)
+                        && source_font.is_some_and(|face| face.native_program.is_none())
+                        && (metric_widths_verified_face(target)
+                            || matches!(target, "휴먼명조" | "HumanMyeongJo"));
                     // 자동 표시용 선택은 저장된 원본 HFT 메트릭의 변경이 아니다.
-                    let keep_source_metrics = environment.is_some_and(|env| env.preserves_source_metrics())
+                    let keep_source_metrics = !primary_true_type_program
+                        && environment.is_some_and(|env| env.preserves_source_metrics())
                         && original.alt_type == Some(2)
                         && original.embedded != Some(true)
                         && original.requested_face.as_deref().is_some_and(|face| {
@@ -159,7 +175,11 @@ pub(crate) fn resolve_styles_with_environment(
                                 || has_own_metric_table(&face, style.bold, style.italic)
                                 || crate::renderer::font_metrics_data::has_declared_original_glyph_metrics(face)
                         });
-                    if keep_source_metrics {
+                    // 원 프로그램 선택이 이미 지정한 메트릭 face는 같은 표시
+                    // family의 다른 슬롯이 공급한 TTF 인증으로 다시 추측하지 않는다.
+                    if keep_source_metrics
+                        && source_font.is_none_or(|face| face.native_program.is_none())
+                    {
                         style.font_families_metric_face[lang] = original
                             .requested_face
                             .as_deref()
@@ -191,7 +211,14 @@ pub(crate) fn resolve_styles_with_environment(
                         style.font_families_hft_hangul[lang] = false;
                         style.font_families_hft_fullwidth_dot[lang] = false;
                         style.font_families_metric_face[lang] = None;
-                        style.font_families_hft_print_frame[lang] = false;
+                        // 같은 주 프로그램의 가용성 인증은 저장 HFT의 물리 Print
+                        // 종이 프레임을 바꾸는 요청이 아니다. 전진 프로그램과
+                        // source가 소유한 paint 프레임을 별개로 보존한다.
+                        if !primary_true_type_program
+                            || !environment.is_some_and(|env| env.preserves_source_metrics())
+                        {
+                            style.font_families_hft_print_frame[lang] = false;
+                        }
                         style.font_families_original_glyph_metric_face[lang] = None;
                     }
                 }
@@ -208,6 +235,7 @@ pub(crate) fn resolve_styles_with_environment(
             }
         }
     }
+    refresh_source_program_projection_slots(&document.doc_info, &mut styles);
     styles
 }
 
@@ -227,7 +255,8 @@ pub fn resolve_styles_with_variant(
     let (page_number_char_style_id, page_number_font_is_hft) =
         page_number::resolve(doc_info, false);
 
-    ResolvedStyleSet {
+    let mut styles = ResolvedStyleSet {
+        source_program_projection_slots: Default::default(),
         native_pua_fonts: Default::default(),
         resolved_dpi: Some(dpi),
         page_number_char_style_id,
@@ -242,6 +271,74 @@ pub fn resolve_styles_with_variant(
         kerning_measurement_context: None,
         horizontal_shaping_context: None,
         supplemental_metrics: None,
+    };
+    refresh_source_program_projection_slots(doc_info, &mut styles);
+    styles
+}
+
+/// 대체 선언과 실제 선택을 구분한다. HFT의 원본 전진, 내장 프로그램,
+/// 실제 대체 face 및 폭을 추정하는 face를 원본 TTF의 캐시 갱신 근거로 쓰지 않는다.
+fn refresh_source_program_projection_slots(doc_info: &DocInfo, styles: &mut ResolvedStyleSet) {
+    styles.source_program_projection_slots.clear();
+    let dpi = styles.resolved_dpi.unwrap_or(96.0);
+    let fallback_char_styles = std::cell::LazyCell::new(|| {
+        let mut fallback_info = doc_info.clone();
+        for fonts in &mut fallback_info.font_faces {
+            for font in fonts {
+                if let Some(substitute) = font.subst_font.take() {
+                    if substitute.font_type == 1 && !substitute.face.trim().is_empty() {
+                        font.name = substitute.face;
+                    }
+                }
+            }
+        }
+        resolve_char_styles(&fallback_info, dpi)
+    });
+    for (shape_id, shape) in doc_info.char_shapes.iter().enumerate() {
+        let Some(style) = styles.char_styles.get(shape_id) else {
+            continue;
+        };
+        for language in 0..LANG_COUNT {
+            let Some(font) = doc_info
+                .font_faces
+                .get(language)
+                .and_then(|fonts| fonts.get(shape.font_ids[language] as usize))
+            else {
+                continue;
+            };
+            let primary = primary_font_name(style.font_family_for_lang(language));
+            if font.alt_type != 1
+                || font.is_embedded
+                || font.native_program.is_some()
+                || primary != font.name.trim()
+                || !font.subst_font.as_ref().is_some_and(|substitute| {
+                    substitute.font_type == 1
+                        && !substitute.face.trim().is_empty()
+                        && substitute.face.trim() != primary
+                })
+                || style.metric_face_for_lang(language).is_some()
+                || style
+                    .original_glyph_metric_face_for_lang(language)
+                    .is_some()
+            {
+                continue;
+            }
+            let own_metric = style.font_metric_trusted_for_lang(language)
+                || super::font_metrics_data::layout_metric_face_name(
+                    primary,
+                    style.bold,
+                    style.italic,
+                )
+                .as_deref()
+                    == Some(primary);
+            if own_metric {
+                if let Some(fallback) = fallback_char_styles.get(shape_id) {
+                    styles
+                        .source_program_projection_slots
+                        .insert((shape_id as u32, language), fallback.clone());
+                }
+            }
+        }
     }
 }
 
@@ -251,12 +348,13 @@ pub fn resolve_styles_with_variant(
 /// 치환 대상의 표와 다를 바 없어서 되돌릴 근거가 못 된다.
 /// [#7702] rhwp 의 폭 표가 한/글 **HFT 글리프**를 잰 값인 face.
 ///
-/// 한/글은 이 face 를 HFT 로 선언한 문서(`alt_type == 2`)에서만 자기 HFT 글리프로 그린다.
-/// TTF 로 선언하면(`alt_type == 1`) 그런 TrueType 글꼴이 없어 문서가 적은 대체 글꼴로 그린다.
+/// 전체 HFT 표는 HFT 선언에서 사용한다. type1에서도 독립 Print가 확인한 원본
+/// 글리프는 개별 폭 경로로 보존하며, 그 증거를 전체 ASCII 표의 승격으로 넓히지 않는다.
 ///
 /// ```text
 ///   HCI Poppy  alt_type=2  k-water-rfp 등 50여 문서   정본 `·` = Type3 0.38 em
-///              alt_type=1  76076·80168 (대체 Palatino Linotype)   정본 `·` = Palatino 0.25 em
+///              alt_type=1  76076·80168 HWP (대체 Palatino Linotype)   정본 `·` = Palatino 0.25 em
+///              alt_type=1  80168 구판 HWPX (대체 TTF 없음)   정본 Type3 `·` = 0.384 em
 /// ```
 fn hft_program_metric_face(face: &&str) -> bool {
     *face == "HCI Poppy"
@@ -484,6 +582,8 @@ fn resolve_single_char_style(cs: &CharShape, doc_info: &DocInfo, dpi: f64) -> Re
                         .as_deref()
                         .filter(|face| has_own_metric_table(face, cs.bold, cs.italic))
                         .filter(|face| {
+                            // type1에서 확인한 원본 글리프는 아래의 개별 폭 경로가
+                            // 소유한다. 전체 HFT 표의 승격은 미측정 ASCII도 바꾼다.
                             decision.alt_type == Some(2) || !hft_program_metric_face(face)
                         })
                 })
@@ -705,6 +805,14 @@ pub fn detect_lang_category(ch: char) -> usize {
         0x2460..=0x24FF |
         // CJK 기호/구두점 (한자 구두점이 아닌 기호 영역)
         0x3000..=0x303F => 5,
+
+        // 수학 기호 보충 블록도 한/글은 **기호 슬롯** 글꼴로 재고 그린다. 슬롯마다 다른 설치
+        // 글꼴을 준 합성 입력(`samples/lang_slot/gen_lang_slot_probe.py`, 한/글 2020·2024
+        // Print)에서 앞뒤가 한글이어도 ⦁(U+2981)·⟨(U+27E8)·⤀(U+2900)·⨀(U+2A00) 등은 기호
+        // 슬롯 글꼴(함초롬바탕)로 그려지고, 기호 슬롯 글꼴에 글리프가 없을 때만 대체 글꼴로
+        // 간다. 한글 슬롯으로 재면 한글 글꼴에 없는 글자라 반각 대체 폭을 받는다. 기호 슬롯
+        // 글꼴의 폭은 확인한 hmtx 표(`font_metric_math_symbol_blocks.rs`)가 보충한다.
+        0x27C0..=0x27FF | 0x2900..=0x2BFF => 5,
 
         // 공백/ASCII 구두점/제어문자 → 한국어(기본값)로 반환
         // 호출부에서 "이전 문자의 언어를 따르는" 로직으로 처리
@@ -938,8 +1046,11 @@ pub(crate) fn lookup_font_name_in_environment(
                 .and_then(|face| env.replacement_for(face, lang_index, font_id))
                 .map(|target| (env, target))
         }) {
-            decision.normalized_face = Some(target.to_string());
-            decision.css_family_chain = vec![target.to_string()];
+            // 같은 주 프로그램의 신원 인증은 준비된 glyph fallback 체인을 바꾸지 않는다.
+            if decision.normalized_face.as_deref() != Some(target) {
+                decision.normalized_face = Some(target.to_string());
+                decision.css_family_chain = vec![target.to_string()];
+            }
             let canonical_rule = decision.requested_face.as_deref().and_then(|source| {
                 environment.canonical_selection_rule_for(source, lang_index, font_id)
             });

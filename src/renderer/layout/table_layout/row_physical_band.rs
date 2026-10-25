@@ -28,6 +28,53 @@ impl<'a> RowCutCapacity<'a> {
 }
 
 impl LayoutEngine {
+    /// 독립 선언 최소 안의 마지막 저장 슬롯은 완결 수용량에 포함한다.
+    /// 받아들인 컷의 잉크·안여백은 기존 Occupied 경로가 그대로 측정한다.
+    /// 원본 유닛 높이를 늘려 이어받기 쪽에 종료 전진을 다시 더하지 않는다.
+    pub(super) fn stored_complete_cell_slot_capacity(
+        &self,
+        cell: &Cell,
+        table: &Table,
+        units: &[CellUnit],
+        start: usize,
+        end: usize,
+    ) -> Option<f64> {
+        if start != 0
+            || end != units.len()
+            || cell.row_span != 1
+            || cell.vertical_align != crate::model::table::VerticalAlign::Top
+            || cell.height > i32::MAX as u32
+            || !self.stored_plain_fragment_table(table)
+        {
+            return None;
+        }
+        // 셀 전체의 연속 저장 좌표가 마지막 줄 상자를 증명하면 뒤 줄간격은
+        // 다음 소유자의 전진이다. 선언 높이에 남은 빈 밴드는 내용 컷과
+        // 독립적으로 나눌 수 있으므로 그 간격으로 마지막 줄을 밀지 않는다.
+        // 문단별 좌표가 재시작해 전체 종점이 없는 경우에만 슬롯을 예약한다.
+        if crate::renderer::float_placement::stored_plain_cell_ink_height(cell).is_some() {
+            return None;
+        }
+        let last = units.last()?;
+        let para = cell.paragraphs.get(last.para_idx)?;
+        if last.empty_spacer
+            || last.para_idx + 1 != cell.paragraphs.len()
+            || last.vis_end != para.line_segs.len()
+            || last.vis_start >= last.vis_end
+            || last.following_line_advance != 0.0
+        {
+            return None;
+        }
+        let line = para.line_segs.last()?;
+        let gap = crate::renderer::hwpunit_to_px(line.line_spacing, self.dpi);
+        let (_, _, top, bottom) = self.resolve_cell_padding(cell, table);
+        let complete = units.iter().map(|unit| unit.height).sum::<f64>() + gap + top + bottom;
+        (gap > 0.0
+            && crate::renderer::hwpunit_to_px(cell.height as i32, self.dpi)
+                > complete + crate::renderer::hwpunit_to_px(2, self.dpi))
+        .then_some(complete)
+    }
+
     /// 앞 쪽 꼬리의 무료 spacer는 바로 뒤 저장 프레임이 재시작함을 확인한다.
     /// 새 조각의 빈 줄은 양의 높이를 가진 상태로 같은 컷의 예약과 paint에 남긴다.
     pub(super) fn physical_start_after_leading_spacers(

@@ -502,6 +502,11 @@ impl Default for ResolvedBorderStyle {
 /// 해소된 스타일 세트 (DocInfo에서 변환)
 #[derive(Debug, Default, Clone)]
 pub struct ResolvedStyleSet {
+    /// 문서 지정 대체가 있어도 현재 선택은 자기 메트릭을 가진 원본 TTF인 슬롯.
+    /// 값은 문서가 선언한 대체 프로그램의 해소 결과다. 저장 줄 전체가 이 대체
+    /// 프로그램의 채움과 일치하고 현재 원본 프로그램과 다른 경우에만 사용한다.
+    pub(crate) source_program_projection_slots:
+        std::collections::HashMap<(u32, usize), ResolvedCharStyle>,
     pub(crate) native_pua_fonts: std::sync::Arc<crate::renderer::native_pua_fonts::NativePuaFonts>,
     /// px 형태의 해소된 스타일을 원본 HWPUNIT으로 환산할 때의 배율.
     pub(crate) resolved_dpi: Option<f64>,
@@ -544,6 +549,29 @@ pub struct ResolvedStyleSet {
 }
 
 impl ResolvedStyleSet {
+    pub(crate) fn literal_figure_space_em(
+        &self,
+        char_style_id: u32,
+        lang_index: usize,
+    ) -> Option<f64> {
+        self.kerning_measurement_context
+            .as_ref()
+            .and_then(|context| {
+                context.literal_figure_space_em(crate::renderer::kerning::ExactFontSlot::new(
+                    char_style_id,
+                    lang_index,
+                ))
+            })
+            .or_else(|| {
+                let style = self.char_styles.get(char_style_id as usize)?;
+                self.native_pua_fonts.literal_space_em(
+                    style.font_family_for_lang(lang_index),
+                    style.bold,
+                    style.italic,
+                )
+            })
+    }
+
     /// 명시/내장 슬롯의 실제 프로그램을 외부 family 캐시로 대체하지 않는다.
     pub(crate) fn has_exact_font_source(&self, char_style_id: u32, lang_index: usize) -> bool {
         self.kerning_measurement_context

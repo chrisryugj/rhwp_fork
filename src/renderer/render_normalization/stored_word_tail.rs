@@ -5,7 +5,11 @@ use crate::model::{
     paragraph::{ColumnBreakType, LineSeg, Paragraph},
 };
 use crate::renderer::{
-    composer::{project_stored_soft_wraps, projects_current_marker_geometry, ParagraphBox},
+    composer::{
+        project_current_body_box_rows, project_current_marker_height_rows,
+        project_current_source_program_rows, project_stored_soft_wraps,
+        projects_current_marker_geometry, ParagraphBox,
+    },
     page_layout::PageLayoutInfo,
     px_to_hwpunit,
     style_resolver::ResolvedStyleSet,
@@ -29,6 +33,43 @@ fn frame_advance(lines: &[LineSeg]) -> Option<i32> {
         .checked_add(last.line_height)?
         .checked_add(last.line_spacing)?
         .checked_sub(first.vertical_pos)
+}
+
+/// 겹쳐 그리는 개체는 보이더라도 문단 글줄의 간격을 대신 소비하지 않는다.
+fn paragraph_owns_line_spacing(paragraph: &Paragraph) -> bool {
+    use crate::model::shape::TextWrap;
+    paragraph
+        .controls
+        .iter()
+        .enumerate()
+        .all(|(index, control)| {
+            if crate::renderer::cell_control_is_single_column_metadata(control) {
+                return true;
+            }
+            if let Control::Picture(picture) = control {
+                if picture.common.treat_as_char {
+                    let (_, height) =
+                        crate::renderer::composer::inline_picture_occupied_size_hu(picture);
+                    // 인라인 그림은 줄 안에서 이미 점유한다. 소유 줄이 그 높이를
+                    // 담고 있으면 다음 문단의 간격을 대신 소비하는 block이 아니다.
+                    return height > 0
+                        && crate::renderer::layout::control_line_seg_index(paragraph, index)
+                            .and_then(|line| paragraph.line_segs.get(line))
+                            .is_some_and(|line| line.line_height >= height);
+                }
+            }
+            let common = match control {
+                Control::Shape(shape) => shape.common(),
+                Control::Picture(picture) => &picture.common,
+                Control::Table(table) => &table.common,
+                _ => return false,
+            };
+            !common.treat_as_char
+                && matches!(
+                    common.text_wrap,
+                    TextWrap::InFrontOfText | TextWrap::BehindText
+                )
+        })
 }
 
 /// 셀 선언보다 긴 정상 저장 줄들도 표 전체의 선언 상자를 정확히 닫을 수 있다.
@@ -74,6 +115,7 @@ pub(crate) fn normalize(
     page: &PageDef,
     initial_columns: &ColumnDef,
     dpi: f64,
+    previous_margin_styles: Option<&ResolvedStyleSet>,
 ) -> Option<Vec<Paragraph>> {
     normalize_flow(
         original,
@@ -82,6 +124,7 @@ pub(crate) fn normalize(
         Some(page),
         true,
         dpi,
+        previous_margin_styles,
     )
 }
 
@@ -94,12 +137,29 @@ fn normalize_flow(
     body_page: Option<&PageDef>,
     refresh_text: bool,
     dpi: f64,
+    previous_margin_styles: Option<&ResolvedStyleSet>,
 ) -> Option<Vec<Paragraph>> {
+    // 본문 상자의 모순과 실제 문자 경계 이동이 함께 확인된 흐름만 현재
+    // 문단 간격 축을 발행한다. 유효한 저장 상자는 더 적게 채워져도 유지한다.
+    let mut probe_width = width;
+    let rebuild_body_spacing = body_page.is_some()
+        && original.iter().any(|paragraph| {
+            for control in &paragraph.controls {
+                if let (Some(page), Control::ColumnDef(columns)) = (body_page, control) {
+                    probe_width = uniform_column_width(page, columns, dpi);
+                }
+            }
+            probe_width.is_some_and(|width| {
+                let style = styles.para_styles.get(paragraph.para_shape_id as usize);
+                let box_ = ParagraphBox::body_for_style(width, style, dpi);
+                project_current_body_box_rows(paragraph, &box_, styles, dpi).is_some()
+            })
+        });
     let mut shift = 0_i32;
     let mut previous_source_vpos = None;
     let mut result = Vec::with_capacity(original.len());
     let mut changed = false;
-    for source in original {
+    for (source_index, source) in original.iter().enumerate() {
         if source.column_type != ColumnBreakType::None
             || styles
                 .para_styles
@@ -112,6 +172,51 @@ fn normalize_flow(
             if let (Some(page), Control::ColumnDef(columns)) = (body_page, control) {
                 width = uniform_column_width(page, columns, dpi);
                 shift = 0;
+            }
+        }
+        if rebuild_body_spacing
+            && source.column_type == ColumnBreakType::None
+            && !styles
+                .para_styles
+                .get(source.para_shape_id as usize)
+                .is_some_and(|style| style.page_break_before)
+        {
+            if let Some(previous) = source_index.checked_sub(1).and_then(|i| original.get(i)) {
+                // 실제 개체가 소유한 간격은 이 문자 사다리로 추측하지 않는다.
+                if paragraph_owns_line_spacing(previous)
+                    && paragraph_owns_line_spacing(source)
+                    && !previous.stored_text_partition_is_dirty()
+                    && !source.stored_text_partition_is_dirty()
+                {
+                    if let Some((last, first)) =
+                        previous.line_segs.last().zip(source.line_segs.first())
+                    {
+                        let gap = i64::from(first.vertical_pos)
+                            - i64::from(last.vertical_pos)
+                            - i64::from(last.line_height)
+                            - i64::from(last.line_spacing);
+                        let after = styles
+                            .para_styles
+                            .get(previous.para_shape_id as usize)
+                            .map_or(0, |style| px_to_hwpunit(style.spacing_after, dpi));
+                        let before = styles
+                            .para_styles
+                            .get(source.para_shape_id as usize)
+                            .map_or(0, |style| px_to_hwpunit(style.spacing_before, dpi));
+                        let declared = i64::from(after) + i64::from(before);
+                        if after >= 0
+                            && before >= 0
+                            && gap < declared
+                            && (gap == 0 || gap == i64::from(after) || gap == i64::from(before))
+                            && !first.is_first_line_of_page()
+                            && !first.is_first_line_of_column()
+                            && first.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+                            && last.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+                        {
+                            shift = shift.checked_add(i32::try_from(declared - gap).ok()?)?;
+                        }
+                    }
+                }
             }
         }
         let mut paragraph = source.clone();
@@ -157,10 +262,31 @@ fn normalize_flow(
                 } else {
                     cell.height
                 };
+                if let Some(previous) = previous_margin_styles {
+                    if let Some(projected) =
+                        crate::renderer::composer::stored_margin_context::project_cell(
+                            &cell.paragraphs,
+                            inner,
+                            styles,
+                            previous,
+                            dpi,
+                        )
+                    {
+                        cell.paragraphs = projected;
+                        changed = true;
+                        continue;
+                    }
+                }
                 let stale = stored_text_exceeds_frame(cell, frame, &padding);
-                if let Some(projected) =
-                    normalize_flow(&cell.paragraphs, styles, Some(inner), None, stale, dpi)
-                {
+                if let Some(projected) = normalize_flow(
+                    &cell.paragraphs,
+                    styles,
+                    Some(inner),
+                    None,
+                    stale,
+                    dpi,
+                    previous_margin_styles,
+                ) {
                     cell.paragraphs = projected;
                     changed = true;
                 }
@@ -186,6 +312,19 @@ fn normalize_flow(
             paragraph.source_line_seg_vertical_pos = None;
         }
         if let Some(width) = width {
+            if let Some(previous) = previous_margin_styles.filter(|_| body_page.is_some()) {
+                if let Some(projected) =
+                    crate::renderer::composer::stored_margin_context::project_body(
+                        &paragraph, width, styles, previous, dpi,
+                    )
+                {
+                    let old_advance = frame_advance(&paragraph.line_segs)?;
+                    let new_advance = frame_advance(&projected.line_segs)?;
+                    shift = shift.checked_add(new_advance.checked_sub(old_advance)?)?;
+                    paragraph = projected;
+                    changed = true;
+                }
+            }
             let style = styles.para_styles.get(paragraph.para_shape_id as usize);
             let box_ = if body_page.is_some() {
                 ParagraphBox::body_for_style(width, style, dpi)
@@ -197,20 +336,25 @@ fn normalize_flow(
             // 해소한 실제 기하를 갱신해야 하며, 같은 결과가 채움·높이에 참여한다.
             let spans_physical_frames =
                 crate::renderer::composer::stored_rows_cross_physical_frame(&paragraph);
-            if (refresh_text || spans_physical_frames)
-                && projects_current_marker_geometry(&paragraph, &box_, styles)
-            {
-                let first = paragraph.line_segs[0].vertical_pos;
-                let frame = box_.frame(first);
-                if let Some((lines, spaces)) =
-                    project_stored_soft_wraps(&paragraph, &frame, styles, dpi, false)
-                {
-                    let old_advance = frame_advance(&paragraph.line_segs)?;
-                    let new_advance = frame_advance(&lines)?;
-                    shift = shift.checked_add(new_advance.checked_sub(old_advance)?)?;
-                    paragraph.replace_line_segs_with_space_metrics(lines, spaces);
-                    changed = true;
-                }
+            let current_rows = body_page
+                .and_then(|_| project_current_body_box_rows(&paragraph, &box_, styles, dpi))
+                .or_else(|| project_current_source_program_rows(&paragraph, &box_, styles, dpi))
+                .or_else(|| project_current_marker_height_rows(&paragraph, &box_, styles, dpi));
+            let marker_rows = || {
+                ((refresh_text || spans_physical_frames)
+                    && projects_current_marker_geometry(&paragraph, &box_, styles))
+                .then(|| {
+                    let first = paragraph.line_segs[0].vertical_pos;
+                    project_stored_soft_wraps(&paragraph, &box_.frame(first), styles, dpi, false)
+                })
+                .flatten()
+            };
+            if let Some((lines, spaces)) = current_rows.or_else(marker_rows) {
+                let old_advance = frame_advance(&paragraph.line_segs)?;
+                let new_advance = frame_advance(&lines)?;
+                shift = shift.checked_add(new_advance.checked_sub(old_advance)?)?;
+                paragraph.replace_line_segs_with_space_metrics(lines, spaces);
+                changed = true;
             }
         }
         result.push(paragraph);

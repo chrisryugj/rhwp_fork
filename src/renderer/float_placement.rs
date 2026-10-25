@@ -1196,15 +1196,14 @@ pub(crate) fn partial_table_opening_host_owns_lead(
         && para.text.chars().any(|c| c > '\u{001f}' && c != '\u{fffc}')
 }
 
-/// On reflow, an adjustable multi-row table is constrained by its physical
-/// row declarations and content, rather than by scaling every row to a cached
-/// object bounding height. A single row can consume the object-height minimum
-/// directly; protected/noAdjust and stored-line tables retain their frame.
+/// 조정 가능한 재조판 표는 셀의 선언 최소 높이와 현재 내용으로 행을 구성한다.
+/// 단일 행도 개체의 이전 바깥 높이를 최소값으로 다시 받으면 줄 수가 줄어든 뒤
+/// 빈 공간과 Center 이동이 남는다. 보호·noAdjust·저장 줄 표는 원래 프레임을 쓴다.
 pub(crate) fn reflow_table_uses_row_height_constraints(table: &Table) -> bool {
     !table.common.treat_as_char
         && !table.common.size_protect
         && table.raw_table_record_attr & 0x08 == 0
-        && table.row_count > 1
+        && table.row_count > 0
         && !table.cells.is_empty()
         && table.cells.iter().all(|cell| {
             !cell.paragraphs.is_empty()
@@ -1213,6 +1212,19 @@ pub(crate) fn reflow_table_uses_row_height_constraints(table: &Table) -> bool {
                     .iter()
                     .all(crate::renderer::para_has_no_stored_line_segs)
         })
+}
+
+/// 부모의 중첩 표 예약도 자식 행 배치와 같은 최소 높이 소유자를 사용한다.
+/// 재조판 행이 이미 셀 선언과 내용을 담았다면 옛 개체 상자로 다시 늘리지 않는다.
+pub(crate) fn table_body_height_with_declared_floor(table: &Table, measured: f64, dpi: f64) -> f64 {
+    if reflow_table_uses_row_height_constraints(table) {
+        measured
+    } else {
+        measured.max(crate::renderer::hwpunit_to_px(
+            table.common.height as i32,
+            dpi,
+        ))
+    }
 }
 
 /// 자리차지 개체가 흐름에 추가하는 문단 기준 앞 공간.
@@ -5966,6 +5978,28 @@ impl ParagraphFloatPlacement {
         )
     }
 
+    /// 저장 사다리의 로컬 간격 계약을 인증하고 본체만 현재 재조판 높이로 갱신한다.
+    /// 호출자는 해당 자식 표의 물리 프레임을 갱신했다는 출처를 확인한다.
+    pub(crate) fn from_reflowed_empty_ladder_host(
+        para: &Paragraph,
+        next: &Paragraph,
+        table: &Table,
+        origin: f64,
+        spacing_before: f64,
+        measured_table_height: f64,
+        dpi: f64,
+    ) -> Option<Self> {
+        stored_empty_host_frame::from_reflowed_ladder(
+            para,
+            next,
+            table,
+            origin,
+            spacing_before,
+            measured_table_height,
+            dpi,
+        )
+    }
+
     /// 저장 LineSeg 대신 현재 frame에서 계산된 줄로 앵커를 결정한다.
     /// 모든 호스트 줄이 표보다 앞서는 계약만 소유하며, 혼합 배치를 임의로
     /// 본문 뒤 배치로 바꾸지 않는다. source의 UTF-16 위치/높이는 읽지 않는다.
@@ -8010,15 +8044,27 @@ fn para_has_non_whitespace_text(para: &Paragraph) -> bool {
 
 /// A saved empty line that ends before a paragraph-relative table offset
 /// does not own the table's outer frame. Continuations reopen that frame too.
+///
+/// 저장 줄이 같은 문단의 글자처럼 표를 싣는 경우도 같다 — 그 표는 줄 안에 있고 오프셋 표의
+/// 바깥 틀을 소유하지 않는다(#4599, 1790387 21쪽: 이어받기 조각 괘선 = 본문 상단 + 위 여백).
 pub(crate) fn stored_empty_offset_rowbreak_fragment_repeats_outer_margin(
     stored_layout: bool,
     para: &Paragraph,
     table: &Table,
 ) -> bool {
+    let float_then_inline_tables =
+        match para.controls.split_first() {
+            Some((Control::Table(first), rest)) => rest.is_empty()
+                || (std::ptr::eq(first.as_ref(), table)
+                    && rest.iter().all(
+                        |control| matches!(control, Control::Table(t) if t.common.treat_as_char),
+                    )),
+            _ => false,
+        };
     stored_layout
         && table.page_break == TablePageBreak::RowBreak
         && !para_has_non_whitespace_text(para)
-        && matches!(para.controls.as_slice(), [Control::Table(_)])
+        && float_then_inline_tables
         && !para.cell_format_vpos_dirty
         && para
             .line_segs

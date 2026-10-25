@@ -450,7 +450,15 @@ impl TypesetEngine {
         // paragraph-relative float anchor. Both capacity boundaries below must
         // consume this same origin, as partial paint's paragraph anchor does.
         let fragment_flow_origin = if is_empty_host_column_float {
-            budget_para_start_height.min(st.current_height)
+            super::super::super::first_fragment_flow_origin(
+                para,
+                table,
+                budget_para_start_height,
+                st.current_height,
+                st.current_items
+                    .iter()
+                    .any(|item| item.para_index() == para_idx),
+            )
         } else {
             st.current_height
         };
@@ -905,6 +913,50 @@ impl TypesetEngine {
                 }
             })
         });
+        // 빈 호스트의 문단 기준 오프셋 표(#1860)는 첫 조각 예산을 `문단 시작 + 앞 여백 +
+        // 오프셋` 아래로 잡는다. paint 도 같은 원점에서 그려야 컷과 괘선이 어긋나지 않는다 —
+        // 전달하지 않으면 앞 여백(바깥 위 여백)만큼 위에 그려진다(#4599, 1790387 20쪽).
+        // 호스트 프레임을 떠나 이월된 조각은 문단 원점이 그 쪽에 없으므로 대상이 아니다.
+        // 예산의 계산 원점은 호스트 첫 저장 줄을 이 단의 저장 원점으로 옮긴 위치와 같을 때만
+        // 문단 원점으로 인증한다. 앞 내용의 누적 오차로 둘이 다르거나 저장 원점이 없으면 전달하지
+        // 않는다(148751598 1쪽: 저장 원점 없음, 계산 163.5 / 저장 줄 155.5 — 전달하면 괘선이
+        // 정본보다 7.5px 아래).
+        let on_host_frame = prepared.host_frame
+            == (
+                st.pages.len(),
+                st.current_column,
+                st.current_zone_y_offset.to_bits(),
+            );
+        let flow_origin_matches_stored_line = para.line_segs.first().is_some_and(|line| {
+            st.vpos_page_base
+                .map(|base| (base, st.vpos_col_anchor))
+                .or(st.vpos_stored_column_origin)
+                .and_then(|(base, column_origin)| {
+                    line.vertical_pos.checked_sub(base).map(|position| {
+                        column_origin + crate::renderer::hwpunit_to_px(position, self.dpi)
+                    })
+                })
+                .is_some_and(|origin| (origin - fragment_flow_origin).abs() <= self.dpi / 7200.0)
+        });
+        fragment_placement = fragment_placement.or_else(|| {
+            (is_empty_host_column_float
+                && on_host_frame
+                && flow_origin_matches_stored_line
+                && cursor_row == 0
+                && start_cut.is_empty())
+            .then(|| {
+                let top = fragment_flow_origin + host_before_overhead + vert_offset_overhead;
+                crate::renderer::float_placement::ParagraphFloatPlacement {
+                    flow: crate::renderer::float_placement::ParagraphFloatFlow::NextLine,
+                    anchor_y: fragment_flow_origin,
+                    stored_host_origin: None,
+                    stored_successor_line_origin: None,
+                    table_left: None,
+                    table_top: top,
+                    occupied_bottom: top,
+                }
+            })
+        });
         // 저장 줄 없는 표 전용 호스트는 계산 흐름 원점을 소유한다.
         // 각 조각 예산이 예약한 앞 여백과 오프셋을 paint에도 같은 원점으로 전달한다.
         // 그렇지 않으면 컷은 여백을 빼고 정해지지만 괘선은 여백만큼 위에 그려진다.
@@ -1095,11 +1147,6 @@ impl TypesetEngine {
         let saved_first_fragment_source_frame = if !is_continuation
             && cursor_row == 0
             && start_cut.is_empty()
-            // 셀 편집의 재조판은 저장 첫 조각을 이미 무효화했다.
-            // 원본 host 좌표가 우연히 현재 원점과 같아도 그 옛 프레임으로
-            // 내용 예산을 초과 수용하지 않는다. 다른 source-frame 소비자와
-            // 같은 정규화 overlay의 유효성 결과를 사용한다.
-            && !self.render_normalization.table_text_reflowed(table)
             && first_fragment_painted_row_footer_guard <= 0.0
             && !table.common.treat_as_char
             && crate::renderer::typeset::is_para_topbottom_float(&table.common)
@@ -1153,7 +1200,15 @@ impl TypesetEngine {
                     }
                     ((anchor_px - actual_anchor).abs() <= 0.5
                         && flow_bottom_px <= source_first_fragment_flow_bottom + 0.5
-                        && placed_frame_fits)
+                        && placed_frame_fits
+                        // 뒤쪽 셀의 변경은 첫 상자의 빈 물리 띠를 지우지 않는다.
+                        // 실제 첫 조각 소유 행의 변경만 이 생산 결과를 무효화한다.
+                        && !self.render_normalization.frame_prefix_reflowed(
+                            table,
+                            cut_row_h,
+                            cs,
+                            frame_height,
+                        ))
                         .then_some((frame_height, flow_bottom_px))
                 })
         } else {

@@ -32,6 +32,13 @@ use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
 use crate::model::paragraph::{LineSeg, MarkerHead, NumberingMarker, Paragraph};
 
+/// 전체 조판 결과와 확정된 부분 컷은 서로 다른 소유 범위다.
+#[derive(Clone, Copy)]
+pub(crate) enum ParagraphLineRange {
+    Whole,
+    Partial { start: usize, end: usize },
+}
+
 mod justification_spacing;
 mod leading_justification;
 mod leading_spaces;
@@ -1296,7 +1303,7 @@ struct RunEmitVars<'a> {
     alignment: crate::model::style::Alignment,
     auto_tab_right: bool,
     available_width: f64,
-    effective_margin_left: f64,
+    text_start_offset: f64,
     end: usize,
     extra_char_sp: f64,
     extra_dash_sp: f64,
@@ -4697,11 +4704,7 @@ impl LayoutEngine {
         wrap_anchor: Option<&crate::renderer::pagination::WrapAnchorRef>,
         measured: Option<&ComposedParagraph>,
     ) -> f64 {
-        let end_line = measured
-            .or(composed)
-            .map(|c| c.lines.len())
-            .unwrap_or(para.line_segs.len());
-        self.layout_partial_paragraph(
+        self.layout_partial_paragraph_with_spacing_before(
             tree,
             col_node,
             para,
@@ -4710,13 +4713,13 @@ impl LayoutEngine {
             styles.hwp3_variant && self.endnote_para_source_for(para_index).is_none(),
             col_area,
             y_start,
-            0,
-            end_line,
+            ParagraphLineRange::Whole,
             section_index,
             para_index,
             multi_col_width_hu,
             bin_data_content,
             wrap_anchor,
+            None,
             measured,
         )
     }
@@ -4814,8 +4817,10 @@ impl LayoutEngine {
             hwp3_body_reflow,
             col_area,
             y_start,
-            start_line,
-            end_line,
+            ParagraphLineRange::Partial {
+                start: start_line,
+                end: end_line,
+            },
             section_index,
             para_index,
             multi_col_width_hu,
@@ -4840,8 +4845,7 @@ impl LayoutEngine {
         hwp3_body_reflow: bool,
         col_area: &LayoutRect,
         y_start: f64,
-        start_line: usize,
-        end_line: usize,
+        line_range: ParagraphLineRange,
         section_index: usize,
         para_index: usize,
         multi_col_width_hu: Option<i32>,
@@ -4850,6 +4854,12 @@ impl LayoutEngine {
         confirmed_spacing_before: Option<f64>,
         measured: Option<&ComposedParagraph>,
     ) -> f64 {
+        let (start_line, end_line) = match line_range {
+            ParagraphLineRange::Whole => {
+                (0, composed.map_or(para.line_segs.len(), |c| c.lines.len()))
+            }
+            ParagraphLineRange::Partial { start, end } => (start, end),
+        };
         if let Some(comp) = composed {
             // [Task #1042 Stage 6b] 본문 paragraph 의 line_segs.empty case 의 wrap 정합 —
             // compose_lines fallback (CHARS_PER_LINE=45 heuristic) 결과를 column inner width
@@ -4927,15 +4937,13 @@ impl LayoutEngine {
                     .para_styles
                     .get(comp.para_style_id as usize)
                     .is_some_and(|style| style.spacing_before > 0.0);
-            // [#2279] 전체-문단 요청(start=0, end=원본 줄수 이상)은 재래핑 후 줄수로
-            // 확장한다. 종전에는 재래핑이 줄수를 늘린 문단(45자 폴백 3줄 → 실폭 4줄,
-            // 86712 pi=22)에서 원본 줄수로 클램프되어 마지막 줄이 렌더에서 소실됐다
-            // (측정 4줄 fit vs 렌더 3줄 — maintainer PR #2284 리뷰 p10 픽셀 하락과
-            // 정합). 분할(partial) 요청의 라인 범위는 종전 클램프 유지.
-            let end_line_adjusted = if start_line == 0 && end_line >= comp.lines.len() {
-                comp_ref.lines.len()
-            } else {
-                end_line.min(comp_ref.lines.len()).max(start_line)
+            // 전체 요청은 재조판 꼬리까지 소비한다(#2284). 부분 요청은 조판이
+            // 발행한 컷을 보존한다. 초기 폴백 줄 수로 두 소유 범위를 추측하지 않는다.
+            let end_line_adjusted = match line_range {
+                ParagraphLineRange::Whole => comp_ref.lines.len(),
+                ParagraphLineRange::Partial { end, .. } => {
+                    end.min(comp_ref.lines.len()).max(start_line)
+                }
             };
             let vertical_spacing =
                 confirmed_spacing_before
@@ -7036,6 +7044,10 @@ impl LayoutEngine {
                         - inline_offset
                         - num_offset,
                 );
+            // 번호·인라인 선행 요소는 줄 앞을 소비하지만 탭 정지는 단 기준이다.
+            // 남은 폭과 같은 실제 줄 원점을 측정·방출에 함께 전달해야 오른쪽
+            // 정지에서 마커 폭을 다시 빼거나 이미 지난 정지로 오인하지 않는다.
+            let text_start_offset = line_node.bbox.x - col_area.x + inline_offset + num_offset;
             // 측정·가용폭·실제 원점은 이미 해소한 같은 들여쓰기를 한 번 소비한다.
             let equation_first_effective_margin_left =
                 crate::renderer::equation_tac_flow::paragraph_effective_margin_left(
@@ -7170,7 +7182,7 @@ impl LayoutEngine {
             // treat_as_char 이미지 폭도 포함하여 정확한 폭 산출
             // [Task #604 Stage 2] wrap_anchor 가 있는 줄: line_cs_offset 을 est_x 기준점에
             // 포함 (line_x_offset 은 col_area.x 기준 상대좌표).
-            let est_x_start = effective_margin_left + line_cs_offset + inline_offset;
+            let est_x_start = text_start_offset;
             let line_width_est = self.estimate_line_run_widths(
                 comp_line,
                 composed,
@@ -7180,7 +7192,7 @@ impl LayoutEngine {
                 tab_width,
                 auto_tab_right,
                 &line_tac_offsets_for_width,
-                effective_margin_left,
+                text_start_offset,
                 available_width,
                 start_line,
                 line_idx,
@@ -7453,7 +7465,7 @@ impl LayoutEngine {
                         ts.tab_stops = tab_stops.clone();
                         ts.auto_tab_right = auto_tab_right;
                         ts.available_width = available_width;
-                        ts.text_start_offset = effective_margin_left;
+                        ts.text_start_offset = text_start_offset;
                         ts.inline_tabs = composed.tab_extended.clone();
                         ts.extra_char_spacing = extra_char_sp;
                         if r.char_overlap.is_some() {
@@ -7784,7 +7796,7 @@ impl LayoutEngine {
                     alignment,
                     auto_tab_right,
                     available_width,
-                    effective_margin_left,
+                    text_start_offset,
                     end,
                     extra_char_sp,
                     extra_dash_sp,
@@ -8520,7 +8532,7 @@ impl LayoutEngine {
             alignment,
             auto_tab_right,
             available_width,
-            effective_margin_left,
+            text_start_offset,
             end,
             extra_char_sp,
             extra_dash_sp,
@@ -8658,7 +8670,7 @@ impl LayoutEngine {
                 .filter(|style| style.auto_tab_left && style.indent < 0.0)
                 .map(|style| style.margin_left - style.indent);
             text_style.available_width = available_width;
-            text_style.text_start_offset = effective_margin_left;
+            text_style.text_start_offset = text_start_offset;
             // 저장 탭의 순번은 런과 글자 모양 경계를 넘어 이어진다.
             text_style.inline_tabs = tab_frame::geometry_inline_tabs(
                 &composed.tab_extended,
@@ -8681,7 +8693,7 @@ impl LayoutEngine {
                                 + right_leader_number_origin(
                                     tab,
                                     !composed.tab_extended.is_empty(),
-                                    effective_margin_left,
+                                    text_start_offset,
                                     available_width,
                                     digit_w,
                                 );
@@ -10634,7 +10646,7 @@ impl LayoutEngine {
         tab_width: f64,
         auto_tab_right: bool,
         line_tac_offsets_for_width: &[(usize, f64, usize)],
-        effective_margin_left: f64,
+        text_start_offset: f64,
         available_width: f64,
         start_line: usize,
         line_idx: usize,
@@ -10662,7 +10674,7 @@ impl LayoutEngine {
             ts.tab_stops = tab_stops.to_vec();
             ts.auto_tab_right = auto_tab_right;
             ts.available_width = available_width;
-            ts.text_start_offset = effective_margin_left;
+            ts.text_start_offset = text_start_offset;
             ts.inline_tabs = tab_frame::geometry_inline_tabs(
                 &composed.tab_extended,
                 inline_tab_cursor_est,
@@ -10682,7 +10694,7 @@ impl LayoutEngine {
                             est_x = right_leader_number_origin(
                                 tab,
                                 !composed.tab_extended.is_empty(),
-                                effective_margin_left,
+                                text_start_offset,
                                 available_width,
                                 digit_w,
                             );

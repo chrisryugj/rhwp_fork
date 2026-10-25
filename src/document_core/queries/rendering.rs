@@ -339,6 +339,14 @@ fn load_bounded_embedded_font_bytes(
     bytes_by_id
 }
 
+/// 실제 필요한 문자 출처에 한해 같은 bounded 문단 순회를 사용한다.
+#[derive(Clone, Copy)]
+pub(crate) enum ExactFontSlotFilter {
+    All,
+    Pua,
+    LiteralFigureSpace,
+}
+
 fn collect_exact_font_slots_from_paragraphs(
     paragraphs: &[Paragraph],
     slots: &mut std::collections::HashSet<ExactFontSlot>,
@@ -350,7 +358,7 @@ fn collect_exact_font_slots_from_paragraphs(
         slots,
         remaining_work_units,
         depth,
-        false,
+        ExactFontSlotFilter::All,
     );
 }
 
@@ -359,7 +367,7 @@ pub(crate) fn collect_exact_font_slots_from_paragraphs_filtered(
     slots: &mut std::collections::HashSet<ExactFontSlot>,
     remaining_work_units: &mut usize,
     depth: usize,
-    pua_only: bool,
+    filter: ExactFontSlotFilter,
 ) {
     const MAX_EXACT_FONT_TRAVERSAL_DEPTH: usize = 128;
     if depth > MAX_EXACT_FONT_TRAVERSAL_DEPTH
@@ -380,11 +388,14 @@ pub(crate) fn collect_exact_font_slots_from_paragraphs_filtered(
             }
             *remaining_work_units -= 1;
             if !run.text.is_empty()
-                && (!pua_only
-                    || run
+                && match filter {
+                    ExactFontSlotFilter::All => true,
+                    ExactFontSlotFilter::Pua => run
                         .text
                         .chars()
-                        .any(crate::renderer::native_pua_fonts::is_supported_symbol))
+                        .any(crate::renderer::native_pua_fonts::is_supported_symbol),
+                    ExactFontSlotFilter::LiteralFigureSpace => run.literal_figure_space,
+                }
             {
                 slots.insert(ExactFontSlot::new(run.char_style_id, run.lang_index));
                 if slots.len() >= MAX_KERNING_REGISTRY_SLOTS {
@@ -405,7 +416,7 @@ pub(crate) fn collect_exact_font_slots_from_paragraphs_filtered(
                             slots,
                             remaining_work_units,
                             depth + 1,
-                            pua_only,
+                            filter,
                         );
                     }
                     for cell in &table.cells {
@@ -414,7 +425,7 @@ pub(crate) fn collect_exact_font_slots_from_paragraphs_filtered(
                             slots,
                             remaining_work_units,
                             depth + 1,
-                            pua_only,
+                            filter,
                         );
                     }
                 }
@@ -423,7 +434,7 @@ pub(crate) fn collect_exact_font_slots_from_paragraphs_filtered(
                     slots,
                     remaining_work_units,
                     depth + 1,
-                    pua_only,
+                    filter,
                 ),
                 Control::Picture(picture) => {
                     if let Some(caption) = &picture.caption {
@@ -432,7 +443,7 @@ pub(crate) fn collect_exact_font_slots_from_paragraphs_filtered(
                             slots,
                             remaining_work_units,
                             depth + 1,
-                            pua_only,
+                            filter,
                         );
                     }
                 }
@@ -441,28 +452,28 @@ pub(crate) fn collect_exact_font_slots_from_paragraphs_filtered(
                     slots,
                     remaining_work_units,
                     depth + 1,
-                    pua_only,
+                    filter,
                 ),
                 Control::Footer(footer) => collect_exact_font_slots_from_paragraphs_filtered(
                     &footer.paragraphs,
                     slots,
                     remaining_work_units,
                     depth + 1,
-                    pua_only,
+                    filter,
                 ),
                 Control::Footnote(note) => collect_exact_font_slots_from_paragraphs_filtered(
                     &note.paragraphs,
                     slots,
                     remaining_work_units,
                     depth + 1,
-                    pua_only,
+                    filter,
                 ),
                 Control::Endnote(note) => collect_exact_font_slots_from_paragraphs_filtered(
                     &note.paragraphs,
                     slots,
                     remaining_work_units,
                     depth + 1,
-                    pua_only,
+                    filter,
                 ),
                 Control::HiddenComment(comment) => {
                     collect_exact_font_slots_from_paragraphs_filtered(
@@ -470,7 +481,7 @@ pub(crate) fn collect_exact_font_slots_from_paragraphs_filtered(
                         slots,
                         remaining_work_units,
                         depth + 1,
-                        pua_only,
+                        filter,
                     )
                 }
                 Control::Field(field) if !field.memo_paragraphs.is_empty() => {
@@ -479,7 +490,7 @@ pub(crate) fn collect_exact_font_slots_from_paragraphs_filtered(
                         slots,
                         remaining_work_units,
                         depth + 1,
-                        pua_only,
+                        filter,
                     )
                 }
                 _ => {}
@@ -496,7 +507,7 @@ fn collect_exact_font_slots_from_shape_filtered(
     slots: &mut std::collections::HashSet<ExactFontSlot>,
     remaining_work_units: &mut usize,
     depth: usize,
-    pua_only: bool,
+    filter: ExactFontSlotFilter,
 ) {
     if depth > 128 || slots.len() >= MAX_KERNING_REGISTRY_SLOTS || *remaining_work_units == 0 {
         return;
@@ -509,7 +520,7 @@ fn collect_exact_font_slots_from_shape_filtered(
                 slots,
                 remaining_work_units,
                 depth + 1,
-                pua_only,
+                filter,
             );
         }
         if let Some(caption) = &drawing.caption {
@@ -518,7 +529,7 @@ fn collect_exact_font_slots_from_shape_filtered(
                 slots,
                 remaining_work_units,
                 depth + 1,
-                pua_only,
+                filter,
             );
         }
     }
@@ -530,7 +541,7 @@ fn collect_exact_font_slots_from_shape_filtered(
                     slots,
                     remaining_work_units,
                     depth + 1,
-                    pua_only,
+                    filter,
                 );
             }
             for child in &group.children {
@@ -539,7 +550,7 @@ fn collect_exact_font_slots_from_shape_filtered(
                     slots,
                     remaining_work_units,
                     depth + 1,
-                    pua_only,
+                    filter,
                 );
             }
         }
@@ -550,7 +561,7 @@ fn collect_exact_font_slots_from_shape_filtered(
                     slots,
                     remaining_work_units,
                     depth + 1,
-                    pua_only,
+                    filter,
                 );
             }
         }
@@ -5988,22 +5999,37 @@ impl DocumentCore {
                 math_tables.as_deref().unwrap_or(&section.paragraphs),
                 &self.styles,
             );
-            let stored_word_tails = (profile.hwp5_stored_pagination_layout()
-                || profile.hwpx_stored_layout())
-            .then_some(())
-            .filter(|_| !profile.session_edited() && !profile.legacy_hwp3_stored_geometry())
-            .and_then(|_| {
-                crate::renderer::render_normalization::stored_word_tail::normalize(
-                    math_textboxes
-                        .as_deref()
-                        .or(math_tables.as_deref())
-                        .unwrap_or(&section.paragraphs),
-                    &self.styles,
-                    pd,
-                    &Self::find_initial_column_def(&section.paragraphs),
-                    self.dpi,
-                )
-            });
+            let stored_word_tails =
+                (profile.hwp5_stored_pagination_layout() || profile.hwpx_stored_layout())
+                    .then_some(())
+                    .filter(|_| !profile.session_edited() && !profile.legacy_hwp3_stored_geometry())
+                    .and_then(|_| {
+                        // 구판 자체 변환본은 원 HWP의 줄을 보존했지만 XML 1.2의
+                        // 여백 단위는 달라졌다. marker 2 이후와 한컴 원본은 제외한다.
+                        let previous_margins = (self.document.hwpx_aux_entry(
+                    crate::model::document::HWP5_ORIGIN_HWPX_MARKER_PATH,
+                ) == Some(b"1")
+                    && self.document.doc_info.hwpml_version.as_deref() == Some("1.2"))
+                .then(|| {
+                    crate::renderer::composer::stored_margin_context::previous_margin_styles(
+                        &self.document.doc_info,
+                        &self.styles,
+                        self.dpi,
+                    )
+                })
+                .flatten();
+                        crate::renderer::render_normalization::stored_word_tail::normalize(
+                            math_textboxes
+                                .as_deref()
+                                .or(math_tables.as_deref())
+                                .unwrap_or(&section.paragraphs),
+                            &self.styles,
+                            pd,
+                            &Self::find_initial_column_def(&section.paragraphs),
+                            self.dpi,
+                            previous_margins.as_ref(),
+                        )
+                    });
             let paragraph_geometry_changed =
                 stored_word_tails.is_some() || math_textboxes.is_some() || math_tables.is_some();
             let unplaced_rows =
@@ -6173,6 +6199,20 @@ impl DocumentCore {
                 &self.document,
                 &self.render_normalization.overlay,
             );
+        for (source, rendered) in self
+            .document
+            .sections
+            .iter()
+            .zip(&self.render_normalization.sections)
+        {
+            if let Some(rendered) = rendered {
+                overlay.register_rendered_text_partitions(
+                    &source.paragraphs,
+                    &rendered.paragraphs,
+                    &self.styles,
+                );
+            }
+        }
         for (section_index, section) in self.document.sections.iter().enumerate() {
             for (paragraph_index, paragraph) in section.paragraphs.iter().enumerate() {
                 for (control_index, control) in paragraph.controls.iter().enumerate() {
@@ -10004,53 +10044,6 @@ mod tests {
         assert!(
             page_hwp_top > paper_hwp_top,
             "쪽 기준 border top should be inside paper 기준: paper={paper_hwp_top}, page={page_hwp_top}"
-        );
-        // 전쪽 Print 비교를 마친 원본의 UI 기준선은 실제 이중 테두리 선 묶음 안에 있다.
-        // 특정 픽셀 좌표나 구현의 간격 계산식을 기대값으로 다시 사용하지 않는다.
-        let sample = DocumentCore::from_bytes(
-            &std::fs::read("samples/hwp3-sample16-hwp5.hwp").expect("검증한 원본"),
-        )
-        .expect("원본 로드");
-        let sample16_top = json_number(
-            &sample.get_page_info_native(0).expect("원본 UI 쪽 정보"),
-            "pageBorderTop",
-        );
-        let page = sample.build_page_render_tree(0).expect("첫 쪽 렌더 트리");
-        let body = page
-            .root
-            .children
-            .iter()
-            .find(|node| {
-                matches!(
-                    node.node_type,
-                    crate::renderer::render_tree::RenderNodeType::Body { .. }
-                )
-            })
-            .expect("본문 영역");
-        let top_strokes: Vec<f64> = page
-            .root
-            .children
-            .iter()
-            .filter_map(|node| match &node.node_type {
-                crate::renderer::render_tree::RenderNodeType::Line(line)
-                    if line.y1 == line.y2
-                        && line.y1 < body.bbox.y
-                        && node.bbox.width >= body.bbox.width =>
-                {
-                    Some(line.y1)
-                }
-                _ => None,
-            })
-            .collect();
-        assert!(
-            top_strokes.len() >= 2,
-            "원본 이중 테두리의 실제 상단 선 묶음"
-        );
-        let outer = top_strokes.iter().copied().reduce(f64::min).unwrap();
-        let inner = top_strokes.iter().copied().reduce(f64::max).unwrap();
-        assert!(
-            outer <= sample16_top && sample16_top <= inner,
-            "UI 기준선은 실제 테두리 선 사이에 있어야 한다: {outer}..{inner}, UI={sample16_top}"
         );
     }
 

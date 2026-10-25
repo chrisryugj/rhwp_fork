@@ -1418,7 +1418,7 @@ impl LayoutEngine {
                                 // 이 프레임에서는 남은 내용 전체를 정렬한다. 실제 내용 컷이 있으면 위쪽 원점을 유지해야 한다.
                                 // 저장 행 잔여 프레임도 완전한 남은 내용의 정렬 공간을 소유한다.
                                 end >= units.len()
-                                    && (self.stored_row_frame_owns_complete_tail(table)
+                                    && (self.stored_row_frame_owns_complete_tail(table, cell)
                                         || self.row_uses_reflow_physical_frame(table, cell_row)
                                         || (self.profile.get().hwp5_stored_pagination_layout()
                                             && !self.profile.get().session_edited()
@@ -1489,8 +1489,6 @@ impl LayoutEngine {
             let closing_source_frame_owns_alignment = end_row_owns_stored_frame
                 && cell.row_span == 1
                 && cell_row + 1 == end_row
-                && !is_block_split
-                && !start_cut_is_block
                 && end_row_height_override.is_some();
             let accepted_block_frame_owns_alignment = measured_table.is_some_and(|measured| {
                 measured.fragment_block_frames.iter().any(|&(first, end)| {
@@ -1548,6 +1546,8 @@ impl LayoutEngine {
                     && cell.vertical_align != crate::model::table::VerticalAlign::Top
                     && straddle_cut_units.is_some_and(|(start, end)| {
                         self.stored_span_cut_owns_alignment(cell, table, styles, start, end)
+                            || (start < end
+                                && self.current_program_span_owns_alignment(table, cell))
                             || self.stored_plain_spanning_frame_owns_alignment(
                                 cell, table, start, end, end_row, styles,
                             )
@@ -1576,18 +1576,17 @@ impl LayoutEngine {
                         styles,
                     )
                     .is_some();
-            let complete_plain_suffix_frame = is_continuation
+            let complete_suffix_frame = is_continuation
                 && start_row_height_override.is_none()
                 && is_split_start_row
                 && cell.row_span == 1
                 && cell.text_direction == 0
-                && cell
-                    .paragraphs
-                    .iter()
-                    .all(|paragraph| paragraph.controls.is_empty())
                 && {
                     // 남은 내용 전체의 정렬 소유는 컷의 표현 형식과 무관하다.
                     // 실제 줄 선택과 같은 Query로 행/블록 서수를 함께 해석한다.
+                    // 이미 소비한 개체나 완결된 현재 개체가 있다는 이유로
+                    // 현재 꼬리까지 Top으로 바꾸지 않는다. 부분 유닛 컷과
+                    // 하위 행의 닫는 띠 소유는 각각의 기존 계약이 처리한다.
                     let units = self.cell_units(cell, table, styles);
                     let (start, end) = cell_cut_window(
                         table,
@@ -1609,7 +1608,7 @@ impl LayoutEngine {
             let frame_owns_alignment = !descendant_owns_closing_band
                 && (ordinary_source_frame_owns_alignment
                     || closing_source_frame_owns_alignment
-                    || complete_plain_suffix_frame
+                    || complete_suffix_frame
                     || heading_frame_owns_alignment
                     || self
                         .stored_nested_text_frame_for_cut(
@@ -2155,7 +2154,7 @@ impl LayoutEngine {
                     || self
                         .render_normalization
                         .borrow()
-                        .table_text_reflowed(table)
+                        .cell_frame_reflowed(table, cell)
                     || !para.line_segs.first().is_some_and(|line| {
                         line.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
                             == 0
@@ -5091,7 +5090,15 @@ impl LayoutEngine {
                                             if matches!(frame.flow, crate::renderer::float_placement::ParagraphFloatFlow::NextLine) {
                                                 frame.paragraph_end(para_y, 0.0)
                                             } else {
-                                                frame.occupied_bottom
+                                                // 프레임 끝은 다음 글줄 원점이다. 문단 시작으로
+                                                // 환산해 다음 문단이 앞 간격을 한 번만 적용한다.
+                                                let successor_before = (self.render_normalization.borrow().cell_frame_reflowed(table, cell)
+                                                    && frame.stored_successor_line_origin.is_some())
+                                                    .then(|| cell.paragraphs.get(cp_idx + 1))
+                                                    .flatten()
+                                                    .and_then(|next| styles.para_styles.get(next.para_shape_id as usize))
+                                                    .map_or(0.0, |style| style.spacing_before);
+                                                frame.occupied_bottom - successor_before
                                             }
                                         });
                                     has_preceding_text = true;
@@ -5146,7 +5153,7 @@ impl LayoutEngine {
                             && !self
                                 .render_normalization
                                 .borrow()
-                                .table_text_reflowed(table)
+                                .cell_frame_reflowed(table, cell)
                         {
                             if let Some(advance) = cell.paragraphs.get(cp_idx + 1).and_then(|next| {
                                 crate::renderer::float_placement::stored_inline_table_successor_advance(
@@ -5176,7 +5183,7 @@ impl LayoutEngine {
                     // 흐름을 밀지 않으면 다음 문단(캡션)이 그림 위에 겹쳐 그려진다.
                     if let Some(bottom) = wrapped_tac_flow_bottom {
                         let stored_advance = (!self.profile.get().session_edited()
-                            && !self.render_normalization.borrow().table_text_reflowed(table)
+                            && !self.render_normalization.borrow().cell_frame_reflowed(table, cell)
                             && next_para_in_fragment)
                             .then(|| cell.paragraphs.get(cp_idx + 1).and_then(|next|
                                 crate::renderer::float_placement::stored_inline_picture_successor_advance(
@@ -5195,7 +5202,7 @@ impl LayoutEngine {
                     && !self
                         .render_normalization
                         .borrow()
-                        .table_text_reflowed(table))
+                        .cell_frame_reflowed(table, cell))
                 .then(|| {
                     crate::renderer::float_placement::stored_empty_successor_advance(
                         &cell.paragraphs,
@@ -5223,7 +5230,13 @@ impl LayoutEngine {
                             ranges.get(idx).is_some_and(|&(start, end)| start < end)
                         })
                     });
-                if has_table_ctrl && (mixed_nested_split.is_none() || wrap_successor.is_some()) {
+                if has_table_ctrl
+                    && (mixed_nested_split.is_none() || wrap_successor.is_some())
+                    && !self
+                        .render_normalization
+                        .borrow()
+                        .cell_frame_reflowed(table, cell)
+                {
                     // LINE_SEG vpos 기반으로 para_y 보정.
                     let is_last_para = cp_idx + 1 == cell.paragraphs.len();
                     if !is_last_para {
@@ -5258,7 +5271,7 @@ impl LayoutEngine {
                                 let next_spacing_before = if preserve_linear_single_cell_vpos
                                     || wrap_successor.is_some()
                                     || (!self.profile.get().session_edited()
-                                        && !self.render_normalization.borrow().table_text_reflowed(table)
+                                        && !self.render_normalization.borrow().cell_frame_reflowed(table, cell)
                                         && crate::renderer::float_placement::stored_column_top_spacing_before(
                                             &cell.paragraphs,
                                             wrap_successor.unwrap_or(cp_idx + 1),
@@ -5854,6 +5867,28 @@ impl LayoutEngine {
             None
         };
         let recursive_overlay_frame = self.reflow_recursive_overlay_frame(table, styles);
+        // [#8105] 쪽 위에서 시작하는 첫 조각이 문단 기준 양수 오프셋을 그대로 쓰면, 표 위끝은 문단
+        // 윗변 + 오프셋 + 바깥 위 여백이다. 예산은 첫 조각 host_before 로 그 여백을 이미 예약한다
+        // (`host_spacing.rs` 자리차지 표 before = outer_top). 표 여럿을 담은 빈 앵커(1342000 48쪽
+        // 문단 1.3 ci=0: 정본 146 = 본문 위 132.3 + 752HU + 283HU, 1480000-201900698 11쪽)는 아래
+        // 형상 규칙들이 열지 않는다. 칸 단위로 나누는(CellBreak) 표는 이 원점에 여백을 넣지 않는다
+        // (1480000-201900698 156쪽 정본 표 위 135.5 = 여백 없는 원점).
+        let page_top_offset_first_fragment_outer_top = !is_continuation
+            && start_cut.is_empty()
+            && is_para_flow_table
+            && matches!(
+                table.page_break,
+                crate::model::table::TablePageBreak::RowBreak
+            )
+            && effective_vertical_offset > 0.0
+            && pre_emitted_host_height <= 0.0
+            && resolved_table_top.is_none()
+            && enclosing_cell_ctx.is_none()
+            && col_node.children.is_empty()
+            && (y_start - col_area.y).abs() <= 0.5
+            && paragraphs
+                .get(para_index)
+                .is_some_and(|host| !super::para_has_visible_text(host));
         // 아래 흐름 갈래가 이 조각의 바깥 위 여백을 이미 열었는가. 같은 여백을 다시 여는
         // 조각 형상 규칙(single_cell_page_fragment 등)이 한 번 더 더하지 않게 한다.
         let mut flow_branch_opened_outer_top = false;
@@ -6092,6 +6127,7 @@ impl LayoutEngine {
             && col_node.children.is_empty()
             && (y_start - col_area.y).abs() <= 0.5;
         let y_start = if (single_cell_page_fragment
+            || page_top_offset_first_fragment_outer_top
             || generic_continuation_outer_top
             || consumed_offset_first_fragment_outer_top
             || multirow_reopens_outer_top
@@ -7537,6 +7573,9 @@ impl LayoutEngine {
                 && end_cut.is_empty()
                 && native_terminal_child_host_line_spacing(
                     self.profile.get().hwp5_stored_pagination_layout(),
+                    self.render_normalization
+                        .borrow()
+                        .table_text_reflowed(table),
                     table,
                     self.dpi,
                 ) > 0.5;

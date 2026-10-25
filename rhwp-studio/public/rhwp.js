@@ -5599,7 +5599,10 @@ export class HwpDocument {
     /**
      * 특정 페이지의 텍스트 레이아웃 정보를 JSON 문자열로 반환한다.
      *
-     * 각 TextRun의 위치, 텍스트, 글자별 X 좌표 경계값을 포함한다.
+     * 각 TextRun의 위치, 모델 `text`, 모델 경계 `charX`와 `charStart`를 포함한다.
+     * 표시 치환이 있는 런에는 `displayText`와 `displayCharX`가 추가된다.
+     * 두 X 배열은 런 원점 기준 Unicode scalar 경계(N+1개)이며,
+     * 표시 인덱스는 선택·커서·편집 오프셋으로 사용할 수 없다 (#7909).
      * @param {number} page_num
      * @returns {string}
      */
@@ -9096,6 +9099,25 @@ export class HwpDocument {
         const ptr1 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
         const len1 = WASM_VECTOR_LEN;
         const ret = wasm.hwpdocument_registerHftOutlineFont(this.__wbg_ptr, ptr0, len0, ptr1, len1, face_index);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
+    }
+    /**
+     * @param {string} family
+     * @param {boolean} bold
+     * @param {boolean} italic
+     * @param {Uint8Array} bytes
+     * @param {number} face_index
+     * @returns {boolean}
+     */
+    registerLiteralFigureSpaceFont(family, bold, italic, bytes, face_index) {
+        const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.hwpdocument_registerLiteralFigureSpaceFont(this.__wbg_ptr, ptr0, len0, bold, italic, ptr1, len1, face_index);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }

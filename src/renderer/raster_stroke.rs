@@ -1,21 +1,22 @@
-//! 인쇄 래스터의 가는 직교 실선을 한 장치 픽셀 안에서 적분한다.
+//! 인쇄 래스터의 가는 직교 실선에 최소 한 장치 픽셀의 점유 폭을 적용한다.
 //!
-//! 원본 선폭·색·줄/표 좌표는 바꾸지 않는다. 1px보다 가는 선을 두 픽셀에
-//! 나누면 각 coverage가 절반이 되어 연한 표 선이 끊겨 보인다. 실제 raster
-//! transform에서 법선 방향만 최대 반 픽셀 옮기고 같은 폭으로 칠한다.
+//! PDFium RasterizeStroke의 최소 장치 폭과 독립 Print의 실제 coverage를 따른다.
+//! 원본 줄/표 좌표·색·선폭 속성은 그대로 두고 현재 raster transform의
+//! 법선 배율로 paint 폭을 계산하고 가는 선의 coverage를 장치 픽셀 중심에
+//! 모은다. 레이아웃 좌표와 SVG/PDF 속성은 수정하지 않는다.
 
 use crate::paint::RenderProfile;
 
 use super::render_tree::LineNode;
 use super::{ArrowStyle, LineRenderType, StrokeDash};
 
-pub(crate) fn raster_line_endpoints(
+pub(crate) fn raster_line_geometry(
     line: &LineNode,
     matrix: [f64; 6],
     profile: RenderProfile,
     paint_width: f64,
-) -> (f64, f64, f64, f64) {
-    let original = (line.x1, line.y1, line.x2, line.y2);
+) -> (f64, f64, f64, f64, f64) {
+    let original = (line.x1, line.y1, line.x2, line.y2, paint_width);
     let style = &line.style;
     if !matches!(profile, RenderProfile::Print | RenderProfile::HighQuality)
         || style.line_type != LineRenderType::Single
@@ -53,8 +54,13 @@ pub(crate) fn raster_line_endpoints(
     } else {
         return original;
     };
-    let device_width = paint_width * (a * nx + c * ny).hypot(b * nx + d * ny);
+    let normal_scale = (a * nx + c * ny).hypot(b * nx + d * ny);
+    let device_width = paint_width * normal_scale;
     if !(0.0..1.0).contains(&device_width) || device_width == 0.0 {
+        return original;
+    }
+    let raster_width = 1.0 / normal_scale;
+    if !raster_width.is_finite() || raster_width <= 0.0 {
         return original;
     }
     let (px, py) = (a * line.x1 + c * line.y1 + e, b * line.x1 + d * line.y1 + f);
@@ -76,6 +82,7 @@ pub(crate) fn raster_line_endpoints(
         line.y1 + local_y,
         line.x2 + local_x,
         line.y2 + local_y,
+        raster_width,
     );
     if [adjusted.0, adjusted.1, adjusted.2, adjusted.3]
         .into_iter()

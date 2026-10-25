@@ -26,6 +26,7 @@ pub(crate) use nested_table_frames::{
 mod inline_frame_admission;
 mod inline_picture_metrics;
 mod resolved_fields;
+pub(crate) mod stored_margin_context;
 mod stored_marker_frames;
 mod stored_tac_host_frame;
 mod stored_word_tail;
@@ -33,7 +34,11 @@ pub(crate) use inline_picture_metrics::{
     inline_picture_ascent_ratio, inline_picture_occupied_size_hu, inline_picture_size_hu,
 };
 pub(crate) use stored_tac_host_frame::stored_tac_host_frame;
-pub(crate) use stored_word_tail::{project_stored_soft_wraps, projects_current_marker_geometry};
+pub(crate) use stored_word_tail::{
+    project_current_body_box_rows, project_current_marker_height_rows,
+    project_current_source_program_rows, project_stored_soft_wraps,
+    projects_current_marker_geometry,
+};
 mod punctuation_slots;
 
 /// 글자겹침(CharOverlap) 렌더링 정보
@@ -48,6 +53,8 @@ pub struct CharOverlapInfo {
 /// 구성된 텍스트 런 (줄 내 동일 스타일 + 동일 언어 구간)
 #[derive(Debug, Clone, Default)]
 pub struct ComposedTextRun {
+    /// 원문 U+2007 리터럴의 숫자 폭 공백 계약이다.
+    pub literal_figure_space: bool,
     /// 텍스트 조각
     pub text: String,
     /// 글자 스타일 ID (ResolvedStyleSet.char_styles 인덱스)
@@ -102,6 +109,11 @@ impl ComposedTextRun {
         }
         self.space_metric.apply_to_style(&mut style);
         style.regenerated_font_metrics = self.regenerated_font_metrics;
+        style.literal_figure_space = self.literal_figure_space;
+        if self.literal_figure_space {
+            style.literal_figure_space_em =
+                styles.literal_figure_space_em(self.char_style_id, self.lang_index);
+        }
         style
     }
 

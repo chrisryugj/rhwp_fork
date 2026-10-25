@@ -101,7 +101,6 @@ const DEFERRED_BODY_OVERFLOW_FIXTURES: &[&str] = &[
     // 사용자 요청: 아래 세 HWPX의 조판 보정은 다른 브랜치에서 진행한다.
     "table_giant_cell_overfill.hwpx",
     "issue5792/2700727_animal_facility_standards.hwpx",
-    "2025 행정업무운영 편람(최종).hwpx",
     // #7445: CGMP 48쪽은 다른 작업이 보정한다. 사용자 요청으로 이 입력의 회귀를 제거한다.
     "issue6035/cgmp_evaluation_table.hwpx",
     // #7445: PDF49쪽/Native47쪽, 공통47쪽 최저0.22%로 렌더링 회귀 보류.
@@ -117,9 +116,6 @@ const DEFERRED_BODY_OVERFLOW_FIXTURES: &[&str] = &[
     // #7445: 전52쪽 최저39.97%로 캡션·쪽수·본문 넘침 회귀를 함께 보류한다.
     // deferred_caption1853_validation.json의 전체 비교 근거를 따른다.
     "issue1853_caption_precedes_body_split.hwpx",
-    "hwp3-sample16-hwp5.hwp",
-    "hwp3-sample16-hwp5-2010.hwp",
-    "hwp3-sample16-hwp5-2022.hwp",
     "issue3637/press_release_split_cell_nested_table.hwpx",
     "issue6031/3249937_asset_management_rules.hwpx",
     "hwpctl_API_v2.4.hwp",
